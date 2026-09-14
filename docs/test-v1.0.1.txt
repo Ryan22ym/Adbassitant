@@ -129,19 +129,38 @@
   scripts/e2e-v1-device.cjs         真机只读功能        9/9（含新增收藏项）
 
 
-六、生产包验收（out-v1.0.1b）
+六、生产包验收与安装交付（out-v1.0.1c）
 ----------------------------------------------------------------
-  Stage 1 启动与环境    12/12
-  Stage 2 核心功能       9/9（需真机）
-  Stage 3 portable 便携版 7/7
-  合计 28/28
+  打包：python scripts/build.py --out out-v1.0.1c
+        （out-v1.0.1 / out-v1.0.1b 的 win-unpacked/resources/app.asar 被
+         已退出进程泄漏的内核句柄占用，删除报 ERROR_SHARING_VIOLATION，
+         用户态无解 → 只能换输出目录名重建）
 
-  产物：out-v1.0.1b/
-    ADB桌面助手-v1.0.1-x64.exe        安装版 84.1 MB
-    ADB桌面助手-v1.0.1-portable.exe   便携版 83.8 MB
+  产物：out-v1.0.1c/
+    ADB桌面助手-v1.0.1-x64.exe        安装版  84.1 MB
+    ADB桌面助手-v1.0.1-portable.exe   便携版  83.8 MB
     win-unpacked/ADB桌面助手.exe      主程序 180.1 MB
-  侧栏版本号已从写死的 v1.0 改为构建时注入（vite define __APP_VERSION__），
-  生产包快照里读到 v1.0.1。
+
+  六段验收（Stage 4~6 跑的是**真实安装版**，不是打包目录）：
+    Stage 1 启动与环境         12/12
+    Stage 2 核心功能（真机）    9/9
+    Stage 3 portable 便携版     7/7
+    Stage 4 NSIS 安装版        13/13
+    Stage 5 投屏端到端（真机）  12/12   ← scrcpy 窗口 3s 内真实可见
+    Stage 6 投屏窗口图标       14/14   ← SCRCPY_ICON_PATH 指向 scrcpy-icon.png
+    合计 67/67
+
+  重新安装（覆盖升级 v1.0.0 → v1.0.1）
+  ----------------------------------------------------------------
+    · 安装包先复制到 ASCII 临时路径 %TEMP%\adb-setup.exe
+    · 用 ASCII 路径 .bat + cmd /c 静默安装：`/S /D=<target>`
+      （/D= 必须是最后一个参数且不加引号；.bat 与安装包都不能放在中文路径下）
+    · FileVersion：旧 1.0.0|1.0.0.0 → 新 **1.0.1|1.0.1.0**
+    · resources/bin 14 个文件与打包产物逐文件 md5 比对，**零差异**
+      （预删旧目录时 resources\bin 曾被残留句柄占用，故特意做了逐字节核对）
+    · 安装版 asar 内实测侧栏版本号 `["v","1.0.1"]`，package.json version=1.0.1
+      （侧栏版本已从写死的 v1.0 改为构建时注入：vite define __APP_VERSION__）
+    · 安装目录 %LOCALAPPDATA%\Programs\ADBAssistant 共 20 个文件
 
 
 七、本轮踩到并写进 README 的坑
@@ -171,5 +190,7 @@
         · 免 Root 弱网：真机 37/37，延迟/带宽/丢包全部量化生效，
           真实浏览器经系统全局代理访问成功；受限 ROM 走手动代理
           路径也已单独验证。
-        生产包 28/28，可交付。
+        生产包六段 67/67，并已把 v1.0.1 **重新安装到本机**
+        （覆盖 v1.0.0）。安装后 Stage 4/5/6 全绿 —— 投屏、应用管理、
+        弱网、logcat 在安装版上均验证可用，可交付。
 ================================================================
