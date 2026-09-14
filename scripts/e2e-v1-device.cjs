@@ -126,6 +126,31 @@ app.whenReady().then(async () => {
     bad('Logcat 级别过滤', e.message);
   }
 
+  /* ---- 9. 常用应用收藏（需求①：换设备 / 重进页面 / 重启后依然记得包名） ---- */
+  try {
+    const fav = require('../dist-electron/electron/services/favorites.js');
+    const PKG = '__e2e.favorite.probe__';
+    fav.removeFavorite(PKG); // 清掉可能的历史残留
+    const before = fav.listFavorites().length;
+
+    const added = fav.toggleFavorite(PKG, 'E2E 探针');
+    const on = added.some((f) => f.packageName === PKG);
+
+    // 关键一步：再从磁盘读一次。favorites.listFavorites() 每次都是 readFileSync，
+    // 所以这一步等于「模拟重启后重新加载」，能证明收藏确实落盘了。
+    const reread = fav.listFavorites().some((f) => f.packageName === PKG);
+
+    fav.toggleFavorite(PKG); // 再点一次 = 取消
+    const cleaned = !fav.listFavorites().some((f) => f.packageName === PKG);
+
+    if (!on || !reread || !cleaned) {
+      throw new Error(`固定=${on} 磁盘重读=${reread} 取消后清理=${cleaned}`);
+    }
+    ok('常用应用收藏', `原有 ${before} 个 → 固定后 ${added.length} 个，磁盘重读一致，取消后已清理`);
+  } catch (e) {
+    bad('常用应用收藏', e.message);
+  }
+
   log('=== v1.0 DEVICE E2E (device=' + serial + ') ===');
   for (const r of rows) log(r);
   log(`\n${rows.filter((r) => r.startsWith('PASS')).length}/${rows.length} 通过`);

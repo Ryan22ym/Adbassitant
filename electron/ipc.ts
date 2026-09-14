@@ -66,8 +66,10 @@ import {
   savePreset,
   deletePreset,
   probeDevice,
+  cleanupStaleProxy,
   setWeakNetStatusSink,
 } from './services/weaknet';
+import { listFavorites, toggleFavorite, removeFavorite } from './services/favorites';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog } from './services/logger';
 import { getSettings, saveSettings, resolveDir } from './services/settings';
 import { checkEnv } from './env-check';
@@ -483,6 +485,17 @@ export function registerIpc() {
     return extractApk(serial, pkg, dir);
   }));
 
+  /* ---------------- 常用应用（v1.0.1） ---------------- */
+
+  ipcMain.handle(IPC.APP_FAVORITE_LIST, wrap(() => listFavorites()));
+
+  ipcMain.handle(
+    IPC.APP_FAVORITE_TOGGLE,
+    wrap((_e, pkg: string, label?: string) => toggleFavorite(pkg, label)),
+  );
+
+  ipcMain.handle(IPC.APP_FAVORITE_REMOVE, wrap((_e, pkg: string) => removeFavorite(pkg)));
+
   /* ---------------- 实时 Logcat（v1.0） ---------------- */
 
   ipcMain.handle(
@@ -548,6 +561,12 @@ export function registerIpc() {
   ipcMain.handle(
     IPC.WEAKNET_PROBE,
     wrap((_e, serial?: string) => probeDevice(serial)),
+  );
+
+  // 清理设备上可能残留的代理设置（上一次异常退出没恢复干净时用）
+  ipcMain.handle(
+    IPC.WEAKNET_CLEANUP,
+    wrap((_e, serial?: string) => cleanupStaleProxy(serial)),
   );
 
   /* ---------------- 设置 ---------------- */

@@ -12,15 +12,32 @@ import {
 import { useApp, useCurrentDevice } from '@/store/app';
 import { call } from '@/lib/ipc';
 import { formatBytes, formatTime } from '@/lib/format';
-import type { AppDetail, AppInfo } from '@shared/types';
+import type { AppDetail, AppInfo, FavoriteApp } from '@shared/types';
 
-type FilterKey = 'all' | 'user' | 'system' | 'running';
+type FilterKey = 'fav' | 'user' | 'system' | 'all' | 'running';
+
+/**
+ * 列表行：把「设备上装了的应用」和「收藏里但当前设备没装的包名」统一成一种形状，
+ * 这样收藏项在换设备 / 卸载后依然留在列表里，不会凭空消失。
+ */
+interface Row {
+  packageName: string;
+  label: string;
+  system: boolean;
+  disabled?: boolean;
+  versionName?: string;
+  running?: boolean;
+  sizeBytes?: number;
+  /** 当前设备上是否存在 */
+  installed: boolean;
+}
 
 export default function AppsPage() {
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
 
   const [apps, setApps] = useState<AppInfo[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteApp[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<FilterKey>('user');
   const [keyword, setKeyword] = useState('');
@@ -28,9 +45,40 @@ export default function AppsPage() {
   const [detail, setDetail] = useState<AppDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [showSystem, setShowSystem] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
+
+  /* ---------- 常用应用（本机持久化，与设备无关） ---------- */
+  const loadFavorites = async () => {
+    try {
+      const list = await call<FavoriteApp[]>(() => window.adbApi.favoriteApps(), {
+        silent: true,
+      });
+      setFavorites(list || []);
+    } catch {
+      /* 读取失败不打扰用户，收藏功能降级为不可用 */
+    }
+  };
+
+  const favMap = useMemo(() => {
+    const m = new Map<string, FavoriteApp>();
+    favorites.forEach((f) => m.set(f.packageName, f));
+    return m;
+  }, [favorites]);
+
+  const toggleFav = async (pkg: string, label?: string) => {
+    try {
+      const list = await call<FavoriteApp[]>(
+        () => window.adbApi.toggleFavorite(pkg, label),
+        { silent: true },
+      );
+      setFavorites(list || []);
+      const nowFav = (list || []).some((f) => f.packageName === pkg);
+      toast(nowFav ? 'success' : 'info', nowFav ? '已固定为常用' : '已取消固定', pkg);
+    } catch (e) {
+      toast('error', '操作失败', (e as Error).message);
+    }
+  };
 
   /* ---------- 读取列表 ---------- */
   const load = async () => {
@@ -49,6 +97,11 @@ export default function AppsPage() {
       setLoading(false);
     }
   };
+
+  /* 进页面读一次收藏 */
+  useEffect(() => {
+    void loadFavorites();
+  }, []);
 
   /* 换设备自动重载 */
   useEffect(() => {
@@ -148,23 +201,53 @@ export default function AppsPage() {
     }
   };
 
-  /* ---------- 列表过滤 ---------- */
+  /* ---------- 统一行数据 ---------- */
+  const rows: Row[] = useMemo(() => {
+    const out: Row[] = apps.map((a) => ({
+      packageName: a.packageName,
+      label: a.label || a.packageName,
+      system: a.system,
+      disabled: a.disabled,
+      versionName: a.versionName,
+      running: a.running,
+      sizeBytes: a.sizeBytes,
+      installed: true,
+    }));
+    // 收藏里当前设备没装的包，也补一行，方便清理或换设备后回来看
+    favorites.forEach((f) => {
+      if (!apps.some((a) => a.packageName === f.packageName)) {
+        out.push({
+          packageName: f.packageName,
+          label: f.label || f.packageName,
+          system: false,
+          installed: false,
+        });
+      }
+    });
+    return out;
+  }, [apps, favorites]);
+
+  /* ---------- 列表过滤 + 收藏置顶 ---------- */
   const filtered = useMemo(() => {
-    let list = apps;
-    if (filter === 'user') list = list.filter((a) => !a.system);
-    else if (filter === 'system') list = list.filter((a) => a.system);
-    else if (filter === 'running') list = list.filter((a) => a.running);
+    let list = rows;
+    if (filter === 'user') list = list.filter((r) => r.installed && !r.system);
+    else if (filter === 'system') list = list.filter((r) => r.installed && r.system);
+    else if (filter === 'running') list = list.filter((r) => r.running);
+    else if (filter === 'fav') list = list.filter((r) => favMap.has(r.packageName));
 
     const k = keyword.trim().toLowerCase();
     if (k) {
       list = list.filter(
-        (a) =>
-          a.packageName.toLowerCase().includes(k) ||
-          (a.label || '').toLowerCase().includes(k),
+        (r) => r.packageName.toLowerCase().includes(k) || r.label.toLowerCase().includes(k),
       );
     }
-    return list;
-  }, [apps, filter, keyword]);
+
+    // 「常用」页签本身已经全是收藏；其他页签把收藏顶到最前面
+    if (filter === 'fav') return list;
+    const fav = list.filter((r) => favMap.has(r.packageName));
+    const rest = list.filter((r) => !favMap.has(r.packageName));
+    return [...fav, ...rest];
+  }, [rows, filter, keyword, favMap]);
 
   const counts = useMemo(() => {
     const user = apps.filter((a) => !a.system).length;
@@ -173,10 +256,14 @@ export default function AppsPage() {
       user,
       system: apps.length - user,
       running: apps.filter((a) => a.running).length,
+      fav: favorites.length,
     };
-  }, [apps]);
+  }, [apps, favorites]);
 
   const currentApp = apps.find((a) => a.packageName === selected);
+  const currentRow = rows.find((r) => r.packageName === selected);
+  const selectedIsFav = !!selected && favMap.has(selected);
+  const selectedLabel = currentApp?.label || currentRow?.label || selected || '';
 
   return (
     <>
@@ -190,7 +277,11 @@ export default function AppsPage() {
         {/* ---------------- 左：应用列表 ---------------- */}
         <Card
           title="应用列表"
-          subtitle={loading ? '正在读取…' : `共 ${counts.user} 个第三方应用 · ${counts.system} 个系统应用`}
+          subtitle={
+            loading
+              ? '正在读取…'
+              : `共 ${counts.user} 个第三方应用 · ${counts.system} 个系统应用 · 已固定 ${counts.fav} 个常用`
+          }
           extra={
             <Button size="sm" variant="ghost" onClick={load} loading={loading} disabled={!current}>
               刷新
@@ -205,8 +296,10 @@ export default function AppsPage() {
               value={filter}
               onChange={setFilter}
               options={[
+                { value: 'fav', label: `★ 常用 ${counts.fav}` },
                 { value: 'user', label: `用户 ${counts.user}` },
                 { value: 'system', label: `系统 ${counts.system}` },
+                { value: 'running', label: `运行中 ${counts.running}` },
                 { value: 'all', label: `全部 ${counts.all}` },
               ]}
             />
@@ -226,34 +319,71 @@ export default function AppsPage() {
               </div>
             ) : filtered.length === 0 ? (
               <Empty
-                title={apps.length === 0 ? '还没有应用数据' : '没有匹配的应用'}
+                title={
+                  filter === 'fav'
+                    ? '还没有固定的常用应用'
+                    : apps.length === 0
+                      ? '还没有应用数据'
+                      : '没有匹配的应用'
+                }
                 desc={
-                  apps.length === 0
-                    ? '点击右上角「刷新」读取设备上的应用'
-                    : '换个筛选条件或清空搜索关键字试试'
+                  filter === 'fav'
+                    ? '点击任意应用右侧的 ☆ 把它固定到常用，下次进来直接点'
+                    : apps.length === 0
+                      ? '点击右上角「刷新」读取设备上的应用'
+                      : '换个筛选条件或清空搜索关键字试试'
                 }
               />
             ) : (
-              filtered.map((a) => (
-                <button
-                  key={a.packageName}
-                  className={`app-row ${selected === a.packageName ? 'selected' : ''}`}
-                  onClick={() => openDetail(a.packageName)}
-                >
-                  <div className={`app-avatar ${a.system ? 'sys' : ''}`}>
-                    {(a.label || a.packageName).replace(/^com\./, '').charAt(0).toUpperCase()}
+              filtered.map((r) => {
+                const isFav = favMap.has(r.packageName);
+                return (
+                  <div
+                    key={r.packageName}
+                    className={`app-row ${selected === r.packageName ? 'selected' : ''} ${
+                      isFav ? 'is-fav' : ''
+                    } ${r.installed ? '' : 'not-installed'}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (!r.installed) {
+                        toast('warn', '该应用未安装在当前设备', r.packageName);
+                        return;
+                      }
+                      void openDetail(r.packageName);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && r.installed) void openDetail(r.packageName);
+                    }}
+                  >
+                    <div className={`app-avatar ${r.system ? 'sys' : ''}`}>
+                      {(r.label || r.packageName).replace(/^com\./, '').charAt(0).toUpperCase()}
+                    </div>
+                    <div className="app-main">
+                      <span className="app-name">{r.label}</span>
+                      <span className="app-pkg mono">{r.packageName}</span>
+                    </div>
+                    <div className="app-tags">
+                      {isFav && <Badge tone="accent">常用</Badge>}
+                      {!r.installed && <Badge tone="warn">未安装</Badge>}
+                      {r.system && <Badge tone="default">系统</Badge>}
+                      {r.disabled && <Badge tone="warn">已停用</Badge>}
+                      {r.versionName && <span className="text-dim">v{r.versionName}</span>}
+                      <button
+                        className={`app-star ${isFav ? 'on' : ''}`}
+                        title={isFav ? '取消固定' : '固定为常用'}
+                        aria-label={isFav ? '取消固定' : '固定为常用'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void toggleFav(r.packageName, r.label);
+                        }}
+                      >
+                        {isFav ? '★' : '☆'}
+                      </button>
+                    </div>
                   </div>
-                  <div className="app-main">
-                    <span className="app-name">{a.label || a.packageName}</span>
-                    <span className="app-pkg mono">{a.packageName}</span>
-                  </div>
-                  <div className="app-tags">
-                    {a.system && <Badge tone="default">系统</Badge>}
-                    {a.disabled && <Badge tone="warn">已停用</Badge>}
-                    {a.versionName && <span className="text-dim">v{a.versionName}</span>}
-                  </div>
-                </button>
-              ))
+                );
+              })
             )}
           </div>
         </Card>
@@ -266,7 +396,46 @@ export default function AppsPage() {
           className="apps-detail-card"
         >
           {!selected ? (
-            <Empty title="未选择应用" desc="点击左侧任意应用，查看版本、大小、权限并执行操作" />
+            favorites.length > 0 ? (
+              <div className="fav-quick">
+                <div className="fav-quick-head">
+                  <strong>常用应用</strong>
+                  <span className="text-dim">一键启动，不用再重新找包名</span>
+                </div>
+                <div className="fav-quick-list">
+                  {rows
+                    .filter((r) => favMap.has(r.packageName))
+                    .map((r) => (
+                      <div key={r.packageName} className="fav-quick-item">
+                        <div className={`app-avatar ${r.system ? 'sys' : ''}`}>
+                          {(r.label || r.packageName).replace(/^com\./, '').charAt(0).toUpperCase()}
+                        </div>
+                        <div className="app-main" onClick={() => r.installed && openDetail(r.packageName)}>
+                          <span className="app-name">{r.label}</span>
+                          <span className="app-pkg mono">{r.packageName}</span>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          disabled={!current || !r.installed}
+                          loading={busy === `${r.packageName}:launch`}
+                          onClick={() => doAction(r.packageName, 'launch')}
+                        >
+                          启动
+                        </Button>
+                      </div>
+                    ))}
+                </div>
+                {!current && (
+                  <Notice tone="warn">连接设备后即可直接从这里启动常用应用。</Notice>
+                )}
+              </div>
+            ) : (
+              <Empty
+                title="未选择应用"
+                desc="点击左侧任意应用，查看版本、大小、权限并执行操作；点 ☆ 可固定到常用"
+              />
+            )
           ) : detailLoading ? (
             <div className="apps-loading">
               <Spinner size={18} />
@@ -276,12 +445,20 @@ export default function AppsPage() {
             <div className="app-detail">
               <div className="app-detail-head">
                 <div className={`app-avatar lg ${detail?.system ? 'sys' : ''}`}>
-                  {(currentApp?.label || selected).replace(/^com\./, '').charAt(0).toUpperCase()}
+                  {(selectedLabel || selected).replace(/^com\./, '').charAt(0).toUpperCase()}
                 </div>
                 <div className="app-detail-title">
-                  <h4>{currentApp?.label || selected}</h4>
+                  <h4>{selectedLabel || selected}</h4>
                   <span className="mono text-dim">{selected}</span>
                 </div>
+                <button
+                  className={`app-star lg ${selectedIsFav ? 'on' : ''}`}
+                  style={{ marginLeft: 'auto' }}
+                  title={selectedIsFav ? '取消固定' : '固定为常用'}
+                  onClick={() => void toggleFav(selected, selectedLabel)}
+                >
+                  {selectedIsFav ? '★ 已固定' : '☆ 固定为常用'}
+                </button>
               </div>
 
               <div className="app-info-grid">

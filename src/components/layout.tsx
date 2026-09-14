@@ -115,7 +115,7 @@ export function Sidebar() {
         <div className="brand-mark">A</div>
         <div className="brand-text">
           <strong>ADB 助手</strong>
-          <span>v1.0</span>
+          <span>v{__APP_VERSION__}</span>
         </div>
       </div>
 

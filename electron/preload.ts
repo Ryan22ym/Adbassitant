@@ -44,6 +44,11 @@ const IPC = {
   APP_EXTRACT_APK: 'app:extractApk',
   APP_SET_ENABLED: 'app:setEnabled',
 
+  /* 常用应用（v1.0.1） */
+  APP_FAVORITE_LIST: 'app:favoriteList',
+  APP_FAVORITE_TOGGLE: 'app:favoriteToggle',
+  APP_FAVORITE_REMOVE: 'app:favoriteRemove',
+
   /* 实时 Logcat（v1.0） */
   LOGCAT_START: 'logcat:start',
   LOGCAT_STOP: 'logcat:stop',
@@ -60,6 +65,7 @@ const IPC = {
   WEAKNET_PRESET_SAVE: 'weaknet:presetSave',
   WEAKNET_PRESET_DELETE: 'weaknet:presetDelete',
   WEAKNET_PROBE: 'weaknet:probe',
+  WEAKNET_CLEANUP: 'weaknet:cleanup',
 
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
@@ -158,6 +164,11 @@ const api = {
   setAppEnabled: (serial: string | undefined, pkg: string, enabled: boolean) =>
     invoke(IPC.APP_SET_ENABLED, serial, pkg, enabled),
 
+  /* 常用应用（v1.0.1） */
+  favoriteApps: () => invoke(IPC.APP_FAVORITE_LIST),
+  toggleFavorite: (pkg: string, label?: string) => invoke(IPC.APP_FAVORITE_TOGGLE, pkg, label),
+  removeFavorite: (pkg: string) => invoke(IPC.APP_FAVORITE_REMOVE, pkg),
+
   /* 实时 Logcat（v1.0） */
   startLogcat: (serial: string | undefined, filter?: any) =>
     invoke(IPC.LOGCAT_START, serial, filter),
@@ -177,6 +188,7 @@ const api = {
     invoke(IPC.WEAKNET_PRESET_SAVE, name, params),
   weaknetDeletePreset: (id: string) => invoke(IPC.WEAKNET_PRESET_DELETE, id),
   weaknetProbe: (serial?: string) => invoke(IPC.WEAKNET_PROBE, serial),
+  weaknetCleanup: (serial?: string) => invoke(IPC.WEAKNET_CLEANUP, serial),
 
   /* 日志 */
   getAllLogs: () => invoke(IPC.LOG_LIST_ALL),

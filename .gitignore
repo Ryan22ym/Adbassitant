@@ -34,3 +34,7 @@ _procs.txt
 Thumbs.db
 .vscode/
 .idea/
+
+# Python 辅助脚本产物
+__pycache__/
+*.pyc

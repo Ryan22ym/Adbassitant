@@ -3,6 +3,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { registerIpc } from './ipc';
 import { listDevices, log, binDir } from './services/adb';
+import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
 import { IPC } from '../shared/types';
 
 const isDev = !app.isPackaged;
@@ -80,6 +81,15 @@ app.whenReady().then(() => {
       } catch (e) {
         log('warn', '设备', `设备扫描失败：${(e as Error).message}`);
       }
+
+      // 弱网模拟会改动设备状态（全局代理 / 网络开关），若上次进程被强杀，
+      // 这里按落盘的标记把设备恢复干净，避免用户遇到「手机莫名上不了网」。
+      try {
+        const msg = await recoverStaleSession();
+        if (msg) log('warn', '弱网', msg);
+      } catch (e) {
+        log('warn', '弱网', `残留会话恢复失败：${(e as Error).message}`);
+      }
     }, 300);
   });
 
@@ -101,6 +111,21 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+/**
+ * 退出前先把弱网模拟恢复掉。
+ * 代理模式和断网模式都会改变设备状态，直接退出会把设备留在「改了代理 / 断网」的状态，
+ * 用户下次可能一脸茫然。这里阻塞一次退出，等清理完成再真正退出。
+ */
+let quitting = false;
+app.on('will-quit', (e) => {
+  if (quitting || !hasActiveWeakNetSession()) return;
+  e.preventDefault();
+  quitting = true;
+  void stopWeakNet()
+    .catch(() => undefined)
+    .finally(() => app.quit());
 });
 
 /* 确保用户数据目录存在 */

@@ -193,6 +193,17 @@ export interface AppDetail {
   permissions?: string[];
 }
 
+/**
+ * 常用应用（收藏）
+ * 按包名持久化到本机，与设备列表解耦 —— 换设备、重插线、重启应用后依然记得。
+ */
+export interface FavoriteApp {
+  packageName: string;
+  /** 收藏时的显示名，仅用于列表展示 */
+  label?: string;
+  addedAt: number;
+}
+
 /* ------------------------------------------------------------------ */
 /* 实时 Logcat                                                         */
 /* ------------------------------------------------------------------ */
@@ -256,7 +267,17 @@ export interface LogcatStatus {
 /* 弱网模拟                                                            */
 /* ------------------------------------------------------------------ */
 
-export type WeakNetMode = 'tc' | 'svc' | 'none';
+/** 实际生效方式 */
+export type WeakNetMode = 'tc' | 'svc' | 'proxy' | 'none';
+
+/**
+ * 实现引擎：
+ *   auto  —— 有 Root 且内核支持 tc 时走 tc/netem，否则自动改用本地代理（默认）
+ *   proxy —— 强制走本地代理（免 Root，通过 adb reverse + 全局 HTTP 代理）
+ *   tc    —— 强制走内核 netem（需 Root）
+ *   svc   —— 开关网络（仅能做「整体断网」）
+ */
+export type WeakNetEngine = 'auto' | 'proxy' | 'tc' | 'svc';
 
 /** 单个方向的参数（上行 = 设备出口，下行 = 入向） */
 export interface WeakNetDirectionParams {
@@ -287,8 +308,10 @@ export interface WeakNetParams {
   packageName?: string;
   /** 是否同时关闭 WiFi / 移动数据（模拟断网） */
   blockNetwork?: boolean;
-  /** 网络接口名，留空自动探测 */
+  /** 网络接口名，留空自动探测（仅 tc 模式使用） */
   iface?: string;
+  /** 实现引擎，默认 auto */
+  engine?: WeakNetEngine;
 }
 
 export interface WeakNetPreset {
@@ -299,6 +322,52 @@ export interface WeakNetPreset {
   createdAt: number;
 }
 
+/** 代理模式下的实时统计 */
+export interface WeakNetStats {
+  /** 累计接入连接数 */
+  connections: number;
+  /** 当前活跃连接数 */
+  active: number;
+  /** 上行字节（设备发出） */
+  upBytes: number;
+  /** 下行字节（设备接收） */
+  downBytes: number;
+  /** 上行丢包（重传近似）命中次数 */
+  upRetrans: number;
+  downRetrans: number;
+  /** 上行乱序命中次数 */
+  upReorder: number;
+  downReorder: number;
+  /** 上行错报命中次数 */
+  upCorrupt: number;
+  downCorrupt: number;
+}
+
+/** 代理模式下设备需要配置的地址 */
+export interface WeakNetProxyInfo {
+  /** 设备侧代理主机，固定 127.0.0.1（经 adb reverse 打回电脑） */
+  host: string;
+  /** 端口（电脑与设备一致） */
+  port: number;
+  /** adb reverse 通道是否已建立 */
+  reversed: boolean;
+  /**
+   * 代理是否已经真正在设备上生效。
+   *
+   * 有些 ROM（ColorOS / 部分定制 Android 13）禁止 adb shell 写 global settings，
+   * `settings put global http_proxy` 会抛 SecurityException。这时我们会退化为
+   * 「手动向导」：代理服务和 reverse 通道都就绪，但需要用户到 WLAN 设置里手填地址。
+   * 该字段为 false 表示还在等用户操作。
+   */
+  active: boolean;
+  /** true = ROM 拦住了自动写入，需要用户手动设置代理 */
+  manual: boolean;
+  /** 手动模式下要填的完整地址，便于直接复制 */
+  manualAddress?: string;
+  /** 设备上当前读到（或用户手动填好）的代理值 */
+  current?: string | null;
+}
+
 export interface WeakNetStatus {
   running: boolean;
   serial?: string;
@@ -306,11 +375,21 @@ export interface WeakNetStatus {
   /** 剩余秒数，-1 表示不限时 */
   remainSec: number;
   params?: WeakNetParams;
-  /** 生效方式：tc=内核 netem（需 root），svc=开关网络（免 root），none=未生效 */
+  /**
+   * 实际生效方式：
+   *   tc    = 内核 netem（需 Root，保真度最高）
+   *   proxy = 本地代理（免 Root，覆盖 HTTP/HTTPS，参数做等效近似）
+   *   svc   = 开关网络（仅整体断网）
+   *   none  = 未生效
+   */
   mode: WeakNetMode;
   /** 是否具备 root */
   rooted?: boolean;
   iface?: string;
+  /** 代理模式：设备侧连接信息 */
+  proxy?: WeakNetProxyInfo;
+  /** 代理模式：实时统计 */
+  stats?: WeakNetStats;
   /** 上一次的提示信息 */
   note?: string;
 }
@@ -393,6 +472,11 @@ export const IPC = {
   APP_EXTRACT_APK: 'app:extractApk',
   APP_SET_ENABLED: 'app:setEnabled',
 
+  /* 常用应用（v1.0.1） */
+  APP_FAVORITE_LIST: 'app:favoriteList',
+  APP_FAVORITE_TOGGLE: 'app:favoriteToggle',
+  APP_FAVORITE_REMOVE: 'app:favoriteRemove',
+
   /* 实时 Logcat（v1.0） */
   LOGCAT_START: 'logcat:start',
   LOGCAT_STOP: 'logcat:stop',
@@ -409,6 +493,7 @@ export const IPC = {
   WEAKNET_PRESET_SAVE: 'weaknet:presetSave',
   WEAKNET_PRESET_DELETE: 'weaknet:presetDelete',
   WEAKNET_PROBE: 'weaknet:probe',
+  WEAKNET_CLEANUP: 'weaknet:cleanup',
 
   /* 日志 */
   LOG_EXPORT: 'log:export',

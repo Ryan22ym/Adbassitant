@@ -1,7 +1,14 @@
-# ADB 桌面助手 v1.0
+# ADB 桌面助手 v1.0.1
 
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
+
+> **v1.0.1 更新**
+> - 应用管理新增**常用应用收藏**：星标固定包名，换设备/重进页面/重启后依然记得，不用每次重新搜；
+> - 弱网模拟换成**免 Root 的代理式方案**（对标 clumsy）：`adb reverse` + 本地代理，不再依赖 Root 与 `tc/netem`；
+> - 修复「弱网页面找不到启动键」：以前没配参数时按钮是灰的，现在有设备就能点，未配置会自动套用默认弱网档；
+> - 新增弱网**代理引擎端到端测试** `scripts/e2e-weaknet-proxy.cjs`（引擎级 19 项 + 真机链路 18 项，真机实测 37/37）；
+>   另加 `scripts/run-electron.py`，解决 Electron 测试脚本跑完不退出、挂住 shell 的老问题。
 
 ---
 
@@ -17,26 +24,58 @@
 | **Monkey** | 图形化稳定性测试，可选目标应用、事件数、节流、seed，实时输出日志 |
 | **安装 APK** | 选择本地 APK 安装，支持覆盖安装与自动授权 |
 | **文件传输** | 批量 push 到设备、批量 pull 到电脑 |
-| **应用管理** 🆕 | 用户/系统/全部三态筛选 + 关键字搜索；详情（版本号/占用/安装时间/Activity 数/权限）；启动、强制停止、清除数据、提取 APK、启用停用、卸载 |
+| **应用管理** 🆕 | 用户/系统/全部三态筛选 + 关键字搜索；详情（版本号/占用/安装时间/Activity 数/权限）；启动、强制停止、清除数据、提取 APK、启用停用、卸载；**常用应用收藏**（星标固定，跨设备/跨重启保留，一键启动） |
 | **实时 Logcat** 🆕 | 流式抓取（120ms 批量推送 + 20000 行环形缓冲）；级别/TAG 通配/关键字/进程/缓冲区多路过滤；快捷过滤（只看错误 / 闪退 ANR / Activity 启动）；暂停刷新、一键保存 |
-| **弱网模拟** 🆕 | 对标 clumsy，上行/下行独立配置 7 个参数（带宽/延迟/抖动/丢包/错报/乱序/重复包）；6 个内置档位 + 自定义预设持久化；持续时长与倒计时；设备能力探测（Root/tc/ifb）；未 Root 可走整体断网保底 |
+| **弱网模拟** 🆕 | 对标 clumsy，上行/下行独立配置 7 个参数（带宽/延迟/抖动/丢包/错报/乱序/重复包）；**免 Root：本地代理 + `adb reverse`**（详见下方）；6 个内置档位 + 自定义预设持久化；持续时长与倒计时；设备能力探测（Root/tc/ifb/代理/写设置权限）；已 Root 可切 `tc/netem` 内核级 |
 | **命令终端** | 执行任意 adb 命令，16 个常用命令快捷入口，↑/↓ 翻阅历史 |
 | **运行日志** | 实时记录全部命令与结果，按级别筛选、关键字搜索、一键导出 txt |
 | **设置** | 主题切换、默认保存目录、环境自检 |
 
 ### 弱网模拟说明
 
-| 方向 | 含义 | 实现 |
-| --- | --- | --- |
-| **上行** | 设备发出的流量（上传、请求） | `tc qdisc add dev <iface> root netem …` |
-| **下行** | 设备收到的流量（下载、响应） | 先挂 `ifb` 网卡 + `ingress` 重定向，再在 ifb 上挂 netem |
+四种实现方式，UI 上可选（默认「自动」）：
 
-- 带宽限制用 `tbf` 而非 netem 的 `rate`（更准）；其余参数走 netem。
-- 两向可独立配置，模拟真实网络的不对称性。
-- **前置条件**：上行 netem 需要 Root（`su`）；下行需要内核 `ifb` 模块。
-  两者都不具备时，可用「整体断网」开关（`svc wifi/data disable`，免 Root）。
+| 方式 | 原理 | 前置条件 |
+| --- | --- | --- |
+| **本地代理**（默认，免 Root） | 设备流量 → 设备 `127.0.0.1:17890` → `adb reverse` → 电脑代理进程注入弱网 → 真实服务器 | 只需 USB 调试；**能自动设系统代理的 ROM** 体验最好 |
+| **tc/netem** | `tc qdisc … netem`（上行 `root`，下行 `ifb` + `ingress`） | 需 Root + 内核 `ifb` |
+| **整体断网** | `svc wifi/data disable` | 免 Root，但只能全断，不能精细控制 |
+| **手动代理向导** | 同上「本地代理」，但代理地址由用户去设备 WLAN 设置里手填 | ROM 禁止 `adb` 写系统设置时自动切到此模式 |
+
+**免 Root 代理方案原理**
+
+```
+手机 App ──► 手机 127.0.0.1:17890 ──adb reverse──► 电脑代理（注入弱网）──► 真实服务器
+                     ▲
+         settings put global http_proxy 127.0.0.1:17890   （免 Root，adb shell 自带写权限）
+```
+
+- **上行/下行独立**：代理双向各挂一个整形器，请求方向算上行、响应方向算下行。
+- **参数语义**（重要，和 `tc/netem` 一致但实现不同）：
+  - 延迟 / 抖动 / 带宽 —— 精确。定时投递 + 令牌桶（带宽用令牌桶而非 `netem` 的 `rate`，更准）。
+  - **丢包 —— 队头阻塞等效**：命中后该块延迟一个 RTO 并拖住后续所有块。
+    这是真实 TCP 丢包的可观测效果，**但绝不丢字节**（TCP 给应用层的就是完整字节流）。
+  - **乱序 —— 附加抖动等效**：投递时间单调不减，**绝不打乱字节顺序**（真乱序=篡改内容，会让 HTTPS 全部失败）。
+  - **错报** —— 真篡改字节（用于验证客户端容错）。
+  - **重复包** —— 按 `1+dup` 折算进有效带宽。
+- 大块数据按 16KB 切片计费（否则一个几百 KB 的 `data` 事件会整块免费放过，限速形同虚设）；
+  限速时对来源 socket 做背压（1MB 高水位 / 256KB 低水位），避免内存爆掉。
+- 停止时**先把队列投递完再 `end()`**（`destroy()` 会丢发送缓冲，表现为响应被截断）。
+- **崩溃恢复**：会话标记落盘 `userData/weaknet-session.json`；程序异常退出后下次启动自动恢复设备
+  （清代理 + 恢复网络）；正常退出走 `will-quit` 拦截清理。
 - 预设持久化在 `userData/weaknet-presets.json`，与内置档位分开管理。
-- 启动前会先 `probeDevice()` 探测设备能力，UI 如实展示三行能力卡片。
+
+**⚠️ ROM 差异（决定能不能全自动）**
+
+`settings put global http_proxy` 需要 `com.android.shell` 持有 `WRITE_SECURE_SETTINGS`：
+
+- AOSP / 多数机型 / 模拟器 —— **可以自动写**，启动即生效；
+- **ColorOS 等定制 ROM 会剥夺该权限**，任何 global 写入都抛 `SecurityException`。
+  此时 UI 自动切到**手动代理向导**：`adb reverse` 与代理服务照常建立（已在真机实测通道可用），
+  界面给出 4 步操作指引，并每秒轮询 `settings get global http_proxy`，用户填好后自动识别并开始注入；
+  停止后会提示用户把代理改回「无」（同样因为该 ROM 不允许我们自动清除）。
+
+启动前 `probeDevice()` 会实测这些能力（Root / tc / ifb / 接口 / SDK / 能否写设置），UI 如实展示。
 
 ---
 
@@ -357,6 +396,77 @@ ifb 则在有 Root 时直接 `modprobe ifb numifbs=1 && echo IFB_OK` 验证。
 截图里出现"页面已经是弱网，侧栏高亮还停在 Logcat"。这不是 router 的 bug。
 正确做法是用 `loadFile(file, { hash })` 逐页重新加载，见 `scripts/check-nav.cjs`。
 
+### ⚠️ 测试脚本里 `spawnSync` 会把被代理的服务一起卡死
+
+写弱网代理的端到端测试时踩得很深：代理**跑在测试进程自己身上**，
+而 `child_process.spawnSync` 会**阻塞整个 Node 事件循环**。
+于是调 `spawnSync(adb, ['shell','curl',…])` 的那几十秒里，
+代理根本没机会 `accept()` 连接，设备侧只会看到「TCP 连上了，但 60s 无任何响应」的超时。
+
+现象极具误导性：`curl` 报 `RC=28` 且 `time_total=60001ms`，
+看起来像"连不通/被防火墙拦了"，实际是本进程自己把事件循环堵死了。
+
+**规律：只要测试进程同时还是服务端，adb / curl 一律用异步 `execFile`（promisify），不要用 `spawnSync`。**
+同一份脚本里 `spawnSync` 的那几项全挂、纯异步的那几项全过，就是这个坑的典型指纹。
+
+顺带一个排查用的判别法：同进程内异步连接正常、而"别人的进程"全部超时，
+先怀疑事件循环被阻塞，别急着怀疑防火墙（本机实测 Python 监听正常、Node 监听不可达，
+纯粹因为 Python 的 HTTPServer 跑在独立线程，而 Node 是单线程）。
+
+### ⚠️ adb shell 传参必须整体加引号，否则 `-w` 格式串会被拆开
+
+`adb shell` 会把参数数组**用空格拼接**再交给设备 shell 解析。
+所以 `['shell','curl','-w','%{time_total} %{http_code}', url]` 到了设备上会变成
+`curl -w %{time_total} %{http_code} url` —— 后两段被当成 URL 去解析，
+结果是空输出、甚至卡在解析伪域名上。
+
+正确写法：把设备侧命令**拼成一个字符串**再交给 adb：
+
+```js
+await adb(['-s', serial, 'shell',
+  `curl -s -o /dev/null -w '%{time_total} %{size_download} %{http_code}' --max-time 60 --proxy http://127.0.0.1:17890 http://127.0.0.1:18765/small`]);
+```
+
+### ⚠️ 设备上的 shell `curl` 不读 Android 全局代理设置
+
+`settings put global http_proxy 127.0.0.1:PORT` 只对**走 Android 网络栈的应用**（WebView / OkHttp /
+HttpURLConnection）生效。`/system/bin/curl` 完全不读这个设置 ——
+实测全局代理已设好，不带 `--proxy` 的 curl 仍然直连、返回 `RC=7`。
+
+所以验证「全局代理对 App 生效」**只能用真实应用**（我们用的是系统浏览器 + 源站命中计数），
+见 `scripts/e2e-weaknet-proxy.cjs` Stage B 第 6 段。
+另外注意：**要测延迟必须注入在上行** —— 请求走的是上行，
+只给下行加延迟的话，请求照样瞬间到达源站，指标测不出来（这个坑也踩过）。
+
+### ⚠️ Electron 测试脚本跑完不退出，会挂住父 shell
+
+`electron.exe scripts/check-nav.cjs` 这类脚本里已经调了 `app.exit(code)`，
+但在本机上**主进程退出后句柄不释放**：脚本早就把结果写进 `ui-shots/_navcheck.log` 了，
+调用它的 shell 却一直等 stdout 管道 EOF，命令**永远不返回**。
+杀 shell 又会留下 `electron.exe` 僵尸进程（`taskkill` 报「没有此任务的实例在运行」，只有重启能清）。
+
+连带后果更麻烦：僵尸进程占着**默认 userData 目录**，
+之后的 Electron 脚本启动时会卡在初始化，看起来像「脚本自己坏了」。
+
+两个规避手段（`scripts/run-electron.py` 都做了）：
+
+1. **子进程输出重定向到文件**，不继承父 shell 的管道；
+2. **独立 `--user-data-dir`**（临时目录），避开僵尸进程抢 profile；
+3. 外面套超时强杀，超时返回 124，绝不无限等；
+4. `--watch <日志> --until <完成标记正则>`：**看到日志里出现完成标记就主动结束子进程**，
+   不用干等超时（否则每次都白等 150~240s）；并顺带按新增日志里有没有 `FAIL/ERRORS`
+   判定通过与否，直接给退出码。
+
+```bash
+python scripts/run-electron.py scripts/check-nav.cjs \
+    --watch ui-shots/_navcheck.log --until "渲染层无错误|=== ERRORS ==="
+python scripts/run-electron.py scripts/e2e-v1-device.cjs \
+    --watch ui-shots/_device.log --until "[0-9]+/[0-9]+ 通过"
+```
+
+判别法：如果命令「没有任何输出、但脚本自己的日志文件已经写完了」，
+就是这个问题，不是脚本逻辑错了。
+
 ---
 
 ## 环境要求
@@ -384,13 +494,26 @@ node_modules/electron/dist/electron.exe scripts/capture-ui.cjs
 node scripts/e2e-v1-smoke.cjs
 
 # 三个新页面截图 + 标题/侧栏/卡片/api 校验（3 项）
-node_modules/electron/dist/electron.exe scripts/capture-v1-pages.cjs
+python scripts/run-electron.py scripts/capture-v1-pages.cjs \
+    --watch ui-shots/_capture.log --until "渲染层无错误|RENDERER ERRORS"
 
 # 9 条路由逐个加载，校验标题与侧栏高亮（9 项）
-node_modules/electron/dist/electron.exe scripts/check-nav.cjs
+python scripts/run-electron.py scripts/check-nav.cjs \
+    --watch ui-shots/_navcheck.log --until "渲染层无错误|=== ERRORS ==="
 
-# 真机只读功能验证：应用列表/详情、弱网探测、预设读写、进程、logcat（8 项）
-node_modules/electron/dist/electron.exe scripts/e2e-v1-device.cjs
+# 真机只读功能验证：应用列表/详情、弱网探测、预设读写、常用应用收藏、进程、logcat（9 项）
+python scripts/run-electron.py scripts/e2e-v1-device.cjs \
+    --watch ui-shots/_device.log --until "[0-9]+/[0-9]+ 通过"
+
+# ---- v1.0.1 新增 ----
+
+# 弱网代理引擎端到端（Stage A 引擎级 19 项，纯 Node，不起设备）
+node scripts/e2e-weaknet-proxy.cjs
+
+# 加上设备链路（Stage B：adb reverse + 全局代理 + 真实浏览器 + 手动代理路径）
+# 真机 18 项；指定设备用 ADB_SERIAL，不加则自动挑在线真机
+ADB_SERIAL=aaab4f58 node scripts/e2e-weaknet-proxy.cjs --device
+ADB_SERIAL=emulator-5556 node scripts/e2e-weaknet-proxy.cjs --device
 
 # 检查 node_modules 是否被镜像截断
 python scripts/check-modules.py
@@ -410,28 +533,37 @@ python scripts/verify-scrcpy-env.py
 >
 > 现成包装器：`scripts/run-capture-v1.bat`（清变量后启动截图脚本）。
 > 这些脚本里 `spawn` electron 之前都做了 `delete env.ELECTRON_RUN_AS_NODE`。
+>
+> **建议统一用 `python scripts/run-electron.py <脚本>` 起 Electron 测试脚本**：
+> 它清掉 `ELECTRON_RUN_AS_NODE`、给独立 `--user-data-dir`、把子进程输出重定向到文件，
+> 并带超时强杀。直接 `electron.exe scripts/xxx.cjs` 常常会「结果早就写进日志了，命令却一直卡着」——
+> 原因见下方「Electron 测试脚本跑完不退出，会挂住父 shell」。
 
 ## 打包产物验收
 
 上面那套脚本跑的是**开发环境**，验证不了交付物。打包完成后必须再跑一遍生产包验收——
-它直接启动 `out-v1/win-unpacked/ADB桌面助手.exe`，用 CDP 远程调试驱动真实生产进程。
+它直接启动 `<out>/win-unpacked/ADB桌面助手.exe`，用 CDP 远程调试驱动真实生产进程。
 
 ```bash
+python scripts/build.py --out out-v1.0.1     # 打包（自动起本地 mirror）
+export ADB_OUT_DIR=out-v1.0.1                # 产物目录不是默认 out-v1 时必须指定
+
 node scripts/e2e-packaged.cjs            # Stage 1：启动与骨架（12 项）
 node scripts/e2e-packaged-features.cjs   # Stage 2：核心功能实测（9 项，需真机）
 node scripts/e2e-packaged-portable.cjs   # Stage 3：portable 便携版（7 项）
 node scripts/e2e-installed.cjs           # Stage 4：NSIS 安装版（13 项，需先装一次）
 node scripts/e2e-mirror-installed.cjs    # Stage 5：安装版投屏端到端（12 项，需真机）
 node scripts/e2e-mirror-icon.cjs         # Stage 6：投屏窗口图标区分（14 项，需真机）
-
-# 产物目录不是默认的 out-v1 时，用 ADB_OUT_DIR 指定
-ADB_OUT_DIR=out-v1.1 node scripts/e2e-packaged.cjs
 ```
 
 > 跑之前先 `unset ELECTRON_RUN_AS_NODE`（脚本内部也会 delete，但父子都干净更稳）。
 > Stage 1/2/3 可直接用 `node` 跑；**Stage 5/6 需要真机**，还要
 > `export PYTHON=<托管 python 的绝对路径>` —— 它们靠 python 枚举窗口来断言窗口真实可见，
 > 而系统里的 `python` 可能不是托管版本。
+>
+> ⚠️ **验收跑完后不要再往同一个输出目录打包**：验收会直接启动 `win-unpacked` 里的 exe，
+> 退出后可能残留 `resources/app.asar` 的内核句柄（`remove … EBUSY / used by another process`），
+> 该目录就再也覆盖不了了。要重新打包就**换个 `--out` 目录名**（见下方「输出目录被僵尸句柄锁住」）。
 
 | 阶段 | 结果 | 覆盖内容 |
 |---|---|---|
