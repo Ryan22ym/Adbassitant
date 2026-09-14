@@ -31,7 +31,11 @@ function enumScrcpy(visibleOnly) {
   try {
     const env = { ...process.env };
     if (!visibleOnly) env.ENUM_ALL = '1';
-    const out = execFileSync(PY, [path.join(ROOT, 'scripts', 'enum-windows.py'), 'scrcpy.exe'], {
+    // 注意：必须用 enum-windows2.py。旧版 enum-windows.py 早已删除（从未入库），
+    // 且 v2 不接受位置参数 —— 它默认按 '\resources\bin\scrcpy.exe' 结尾精确匹配，
+    // 这正好覆盖安装版的 %LOCALAPPDATA%\Programs\ADBAssistant\resources\bin\scrcpy.exe，
+    // 同时排除同名的 QtScrcpy.exe。
+    const out = execFileSync(PY, [path.join(ROOT, 'scripts', 'enum-windows2.py')], {
       encoding: 'utf8',
       timeout: 15000,
       env,

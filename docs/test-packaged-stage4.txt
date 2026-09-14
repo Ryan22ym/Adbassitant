@@ -1,16 +1,16 @@
-生产包验收 Stage 4（NSIS 安装版）· 2026-09-14T04:01:03.761Z
+生产包验收 Stage 4（NSIS 安装版）· 2026-09-14T07:13:37.115Z
 install: C:\Users\yangming\AppData\Local\Programs\ADBAssistant
 
 [PASS] 安装目录存在 :: C:\Users\yangming\AppData\Local\Programs\ADBAssistant
 [PASS] 主程序已安装 :: 180.07 MB
 [PASS] 卸载程序已生成 :: 222 KB
-[PASS] 随包二进制经 extraResources 就位 :: 12 个文件
+[PASS] 随包二进制经 extraResources 就位 :: 14 个文件
 [PASS] 图标资源就位
 [PASS] 安装版可启动并开调试端点 :: 端口已响应
 [PASS] 页面从安装目录 asar 加载 :: file:///C:/Users/yangming/AppData/Local/Programs/ADBAssistant/resources/app.asar/dist/index.html
 [PASS] React 已挂载 :: root 子节点 1
-[PASS] preload 桥接就绪 :: 34 个方法
-[PASS] 随包 adb 可用并枚举到设备 :: 4 台（就绪 4）: aaab4f58, emulator-5556, emulator-5558, emulator-5560
+[PASS] preload 桥接就绪 :: 54 个方法
+[PASS] 随包 adb 可用并枚举到设备 :: 3 台（就绪 3）: aaab4f58, emulator-5556, emulator-5558
 [PASS] 安装版环境自检通过 :: 5 项 allOk=true
 [PASS] 安装版可执行真实 adb 功能（读分辨率） :: 720x1600 / 320dpi
 [PASS] 安装版可正常退出 :: 已退出

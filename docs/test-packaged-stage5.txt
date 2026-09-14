@@ -10,20 +10,30 @@ scrcpy 投屏窗口必须真实可见（IsWindowVisible === true），而不是�
 
 脚本：scripts/e2e-mirror-installed.cjs   （npm run test:mirror:installed）
 
+脚本缺陷修复（v1.0 验收时发现）：
+  原实现调用 scripts/enum-windows.py —— 该文件从未入库，仓库里只有
+  enum-windows2.py，而且 v2 用 --exe 传参、不接受位置参数。
+  结果窗口枚举恒返回空数组，本段最后两项必然 FAIL（假阴性，非产品问题）。
+  已改为调用 enum-windows2.py：它默认按 \resources\bin\scrcpy.exe 结尾精确匹配，
+  正好覆盖安装版路径，同时排除同名的 QtScrcpy.exe。
+  运行前置：export PYTHON=<托管 python 绝对路径>（本机 shim 下的 python 非托管版本）
+
 ────────────────────────────────────────────
 
-=== Stage 5 · 安装版投屏最终验收 ===
+=== Stage 5 · 安装版投屏最终验收（v1.0.0 / 2026-09-14）===
+
+安装：%LOCALAPPDATA%\Programs\ADBAssistant   （NSIS 静默覆盖安装，RC=0）
 
 [PASS] exe 存在于安装目录 :: C:\Users\yangming\AppData\Local\Programs\ADBAssistant\ADB桌面助手.exe
 [PASS] resources/bin 随包二进制齐全
 [PASS] 调试端点就绪
 [PASS] 页面从安装目录加载 :: file:///C:/Users/yangming/AppData/Local/Programs/ADBAssistant/resources/app.asar/dist/index.html
 [PASS] 首屏渲染完成
-[PASS] 检测到在线设备 :: 4 台
+[PASS] 检测到在线设备 :: 3 台
 [PASS] 投屏页存在「启动投屏」按钮 :: {"found":true,"disabled":false}
 [PASS] 按钮可点击
 [PASS] 按钮点击成功 :: {"ok":true}
-   2s ✓ 可见窗口: ["ADB助手 - aaab4f58"]
+   3s ✓ 可见窗口: ["ADB助手 - aaab4f58"]
 [PASS] 接口报告投屏运行中
 [PASS] scrcpy 窗口被创建 :: ADB助手 - aaab4f58
 [PASS] ★ scrcpy 窗口真实可见 :: ADB助手 - aaab4f58

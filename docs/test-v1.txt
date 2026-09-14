@@ -197,10 +197,78 @@ Stage 3 · portable 便携版（7/7）
   [PASS] preload 桥接就绪         :: 54 个方法
   [PASS] 便携版环境自检通过       :: 5 项 allOk=true
 
-生产包验收合计 28/28
+Stage 4 · NSIS 安装版（13/13）
 ----------------------------------------------------------------
-  Stage 4（NSIS 安装版 13 项）/ Stage 5（安装版投屏 12 项）/
-  Stage 6（投屏图标 14 项）需先真实安装一次，本轮未执行。
+  安装方式：静默覆盖安装 out-v1.0/ADB桌面助手-v1.0.0-x64.exe
+            /S /D=%LOCALAPPDATA%\Programs\ADBAssistant      RC=0
+  旧版 v0.9.0 被完整覆盖：注册表 DisplayVersion 0.9.0 -> 1.0.0，
+  旧版遗留的 debug.log 已清除，安装目录 90 -> 88 文件，
+  开始菜单与桌面快捷方式均指向新版。
+
+  [PASS] 安装目录存在
+  [PASS] 主程序已安装             :: 180.07 MB
+  [PASS] 卸载程序已生成           :: 222 KB
+  [PASS] 随包二进制经 extraResources 就位 :: 14 个文件
+  [PASS] 图标资源就位
+  [PASS] 安装版可启动并开调试端点
+  [PASS] 页面从安装目录 asar 加载
+  [PASS] React 已挂载             :: root 子节点 1
+  [PASS] preload 桥接就绪         :: 54 个方法
+  [PASS] 随包 adb 可用并枚举到设备 :: 3 台（就绪 3）
+  [PASS] 安装版环境自检通过       :: 5 项 allOk=true
+  [PASS] 安装版可执行真实 adb 功能（读分辨率） :: 720x1600 / 320dpi
+  [PASS] 安装版可正常退出
+
+Stage 5 · 安装版投屏端到端（12/12，真机）
+----------------------------------------------------------------
+  走真实用户路径：启动安装版 → 切投屏页 → 真实点击「启动投屏」，
+  断言 scrcpy 窗口 IsWindowVisible === true（不只看进程存活）。
+
+  [PASS] exe 存在于安装目录
+  [PASS] resources/bin 随包二进制齐全
+  [PASS] 调试端点就绪
+  [PASS] 页面从安装目录加载
+  [PASS] 首屏渲染完成
+  [PASS] 检测到在线设备           :: 3 台
+  [PASS] 投屏页存在「启动投屏」按钮
+  [PASS] 按钮可点击 / 点击成功
+  [PASS] 接口报告投屏运行中
+  [PASS] scrcpy 窗口被创建        :: ADB助手 - aaab4f58
+  [PASS] ★ scrcpy 窗口真实可见    :: ADB助手 - aaab4f58（3 秒内出现）
+
+Stage 6 · 投屏窗口图标区分（14/14，真机）
+----------------------------------------------------------------
+  [PASS] 应用图标 bin/icon.png 存在        :: 847785 B
+  [PASS] 投屏图标 bin/scrcpy-icon.png 存在 :: 8818 B
+  [PASS] 两个图标文件内容不同
+  [PASS] 调试端点就绪 / 首屏渲染完成
+  [PASS] 检测到在线设备           :: 3 台
+  [PASS] 点击「启动投屏」
+  [PASS] ★ scrcpy 窗口真实可见    :: 0xcf0954 "ADB助手 - aaab4f58"
+  [PASS] 窗口类为 SDL_app
+  [PASS] 窗口尺寸合理             :: 1166x556
+  [PASS] 取到 scrcpy 进程 pid     :: 30468
+  [PASS] ★ scrcpy 进程环境块含 SCRCPY_ICON_PATH
+  [PASS] 图标路径指向 scrcpy-icon.png（非主程序 icon.png）
+
+生产包验收合计 67/67
+----------------------------------------------------------------
+  Stage 1 12/12 · Stage 2  9/9 · Stage 3  7/7
+  Stage 4 13/13 · Stage 5 12/12 · Stage 6 14/14
+
+本轮修掉的两个验收脚本缺陷
+----------------------------------------------------------------
+  1. scripts/e2e-mirror-installed.cjs 调用 scripts/enum-windows.py，
+     但该文件从未入库（仓库里只有 enum-windows2.py，且 v2 用 --exe
+     而非位置参数）。窗口枚举恒返回空数组，导致 Stage 5 的
+     「scrcpy 窗口被创建 / 真实可见」两项永远 FAIL（假阴性）。
+     修复：改调 enum-windows2.py 并去掉位置参数 —— v2 默认按
+     \resources\bin\scrcpy.exe 结尾精确匹配，正好覆盖安装版路径，
+     同时排除同名的 QtScrcpy.exe。修复后 12/12。
+
+  2. Stage 5/6 靠 python 枚举窗口，脚本内置 PYTHON 环境变量兜底；
+     本机 shim 下的 python 不是托管版本，运行时需显式导出：
+       export PYTHON=C:/Users/yangming/.workbuddy/binaries/python/versions/3.13.12/python.exe
 
 本轮配套的脚本改动
 ----------------------------------------------------------------
@@ -213,5 +281,5 @@ Stage 3 · portable 便携版（7/7）
 
 ================================================================
   结论：v1.0 生产包可交付。打包成功、PE 资源正确改写、
-        启动/核心功能/便携版三段验收 28/28 全绿。
+        安装版完整覆盖旧版 v0.9，六段验收 67/67 全绿。
 ================================================================
