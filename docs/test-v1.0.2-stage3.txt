@@ -1,12 +1,18 @@
-生产包验收 Stage 3（portable）· 2026-09-14T13:43:12.033Z
-exe: D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1.0.2\ADB桌面助手-v1.0.2-portable.exe
+=== Stage 3 portable 便携版 ===
+rc=0  用时 11.3s
+
+=== 生产包验收 · Stage 3：portable 便携版 ===
 
 [PASS] portable 产物存在 :: 83.76 MB
+启动 portable，pid=4660（自解压到 %TEMP%，稍慢）...
 [PASS] portable 自解压未被拒绝 :: 进程存活
 [PASS] 调试端点就绪 :: file:///C:/Users/yangming/AppData/Local/Temp/3JJxqbGEZjD8SJeuJhRygqSI7RI/resources/app.asar/dist/index.html
+  页面: file:///C:/Users/yangming/AppData/Local/Temp/3JJxqbGEZjD8SJeuJhRygqSI7RI/resources/app.asar/dist/index.html
+  标题: ADB 桌面助手
 [PASS] 从 %TEMP% 解压目录加载页面 :: file:///C:/Users/yangming/AppData/Local/Temp/3JJxqbGEZjD8SJeuJhRygqSI7RI/resources/app.asar/dist/index.html
 [PASS] React 已挂载 :: root 子节点 1
 [PASS] preload 桥接就绪 :: 58 个方法
 [PASS] 便携版环境自检通过 :: 5 项 allOk=true
 
-合计：7/7 通过
+=== 结果：7/7 通过 ===
+结果已写入 D:\WorkSpace\手机助手\adb-assistant-v0.9\docs\test-packaged-stage3.txt

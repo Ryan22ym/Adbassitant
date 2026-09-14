@@ -1,0 +1,22 @@
+=== Stage 6 投屏窗口图标 ===
+rc=0  用时 15.3s
+
+=== 投屏窗口图标验收（安装版）===
+
+[PASS] exe 存在于安装目录
+[PASS] 应用图标 bin/icon.png 存在
+[PASS] 投屏图标 bin/scrcpy-icon.png 存在
+[PASS] 两个图标文件内容不同 :: app=847785B / scrcpy=8818B
+[PASS] 调试端点就绪
+[PASS] 首屏渲染完成
+[PASS] 检测到在线设备 :: 3 台
+[PASS] 点击「启动投屏」 :: {"ok":true}
+   2s 可见投屏窗口 = 1 :: ADB助手 - aaab4f58 [784,28,1264,1101]
+[PASS] ★ scrcpy 窗口真实可见 :: 0x3e1042 "ADB助手 - aaab4f58" SDL_app
+[PASS] 窗口类为 SDL_app :: SDL_app
+[PASS] 窗口尺寸合理 :: 480x1073
+[PASS] 取到 scrcpy 进程 pid :: 33996
+[PASS] ★ scrcpy 进程环境块含 SCRCPY_ICON_PATH :: C:\Users\yangming\AppData\Local\Programs\ADBAssistant\resources\bin\scrcpy-icon.png
+[PASS] 图标路径指向 scrcpy-icon.png（非主程序 icon.png） :: C:\Users\yangming\AppData\Local\Programs\ADBAssistant\resources\bin\scrcpy-icon.png
+
+===== 14/14 通过 =====

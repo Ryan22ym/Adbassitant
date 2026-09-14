@@ -1,0 +1,98 @@
+================================================================
+ADB 桌面助手 v1.0.2 —— 打包 / 安装 / 验收报告
+================================================================
+日期：2026-09-14
+提交：0924dbc  fix: v1.0.2 - 修复弱网代理残留把设备搞成「上不了网」
+
+本版内容
+----------------------------------------------------------------
+1. 🔴 弱网代理清理修复（本次重点）
+   Android 8+ 全局 HTTP 代理有**两套键**：别名 http_proxy + 真身
+   global_http_proxy_host/port（系统实际读真身）。旧逻辑只认别名，导致：
+     · 清理只删掉别名（Deleted 1 rows），真身留着 → 设备继续走死代理；
+     · 检测读别名得 null/:0 就判「无残留」→ 直接 return，残留永不清除；
+     · 更深一层：ProxyTracker 只在键**变更**时刷新，别名早已不存在时 delete
+       不产生通知（Deleted 0 rows），内存里的旧代理继续把**所有流量**
+       （含系统联网校验探针）送往已关闭端口
+       → 表现为「ping 通、DNS 通，但所有 App 都上不了网」。
+   修复后的清理顺序（三步都不能省、不能换）：
+     ① settings put global http_proxy :0   ← 触发变更通知刷新 ProxyTracker
+     ② 清真身四键（host/port/exclusion_list/pac_url）
+     ③ 撤 adb reverse，最后才关本地代理
+   新增 readGlobalProxyState / parseGlobalProxyState / isProxyDirty /
+   describeProxyState 成套 helper，recoverStaleSession、tickProxy、
+   probeDevice、startWeakNet、cleanupStaleProxy 全部改走它们。
+2. 修 scripts/run-electron.py 两个静默失效 bug（日志被判「无变化」白等超时；
+   relpath 跨盘符抛异常）。
+3. README 补「清代理必须 put :0 再清真身」整节。
+
+产物 out-v1.0.2/
+----------------------------------------------------------------
+  ADB桌面助手-v1.0.2-x64.exe          84.09 MB   NSIS 安装包（向导式，可选安装目录）
+  ADB桌面助手-v1.0.2-portable.exe     83.76 MB   免安装便携版
+  win-unpacked/ADB桌面助手.exe        180.07 MB  未压缩目录版
+PE 校验：ProductName=ADB桌面助手 / FileVersion=1.0.2 / ProductVersion=1.0.2 ✓
+asar 校验：global_http_proxy_host 命中 9 处、isProxyDirty 3 处、
+          侧栏版本号 ["v","1.0.2"] 命中 1 处、v1.0.1 残留 0 处
+
+安装（v1.0.1 → v1.0.2 覆盖安装）
+----------------------------------------------------------------
+  安装目录：%LOCALAPPDATA%\Programs\ADBAssistant   （per-user，无需 UAC）
+  方式：安装包复制到 %TEMP% 后 cmd /c 纯 ASCII bat：/S /D=<目标>
+  结果：rc=0，89 个文件落地
+
+  核对项                                     结果
+  ----------------------------------------  ----------------------------
+  主程序 FileVersion                         1.0.0 → 1.0.2（180.07 MB）
+  注册表 DisplayName / DisplayVersion        ADB桌面助手 1.0.2 / 1.0.2
+  安装版 asar 含代理修复                      9 处命中 ✓
+  resources/bin 与打包产物 md5                14 vs 14，零差异 ✓
+  快捷方式（桌面 + 开始菜单）                  均存在 ✓
+
+生产包六段验收 67/67
+----------------------------------------------------------------
+| 段 | 内容 | 结果 | 归档 |
+|---|---|---|---|
+| Stage 1 | 启动与骨架（9 条路由） | 12/12 | docs/test-v1.0.2-stage1.txt |
+| Stage 2 | 核心功能（真机） | 9/9 | docs/test-v1.0.2-stage2.txt |
+| Stage 3 | portable 便携版 | 7/7 | docs/test-v1.0.2-stage3.txt |
+| Stage 4 | NSIS 安装版（跑安装目录真身） | 13/13 | docs/test-v1.0.2-stage4.txt |
+| Stage 5 | 安装版投屏端到端 | 12/12 | docs/test-v1.0.2-stage5.txt |
+| Stage 6 | 投屏窗口图标 | 14/14 | docs/test-v1.0.2-stage6.txt |
+| 合计 | | **67/67** | |
+
+关键实测值：
+  · 安装版页面确实从安装目录 asar 加载：
+    file:///C:/Users/.../Programs/ADBAssistant/resources/app.asar/dist/index.html
+  · preload 桥接 58 个方法；环境自检 5 项 allOk=true
+  · 随包 adb 枚举到 3 台设备；读分辨率 720x1600 / 320dpi
+  · 投屏：真实点击按钮 → 1s 内窗口可见「ADB助手 - aaab4f58」，
+    窗口类 SDL_app、尺寸 480x1073
+  · SCRCPY_ICON_PATH 指向安装目录 resources\bin\scrcpy-icon.png（非主程序 icon.png）
+
+弱网代理清理专项回归（本次修复的锁死测试）
+----------------------------------------------------------------
+  scripts/weaknet-proxy-cleanup-regression.cjs  →  真机 16/16 通过
+  归档：docs/test-weaknet-proxy-cleanup.txt
+  决定性三项：
+    · 对照项：旧判据（只读 http_proxy）**确实漏判** → 坐实事故根因
+    · 残留期 3 个连接打到 127.0.0.1:17890 → 清理后 **0 个**
+    · 清理后设备直连外网 HTTP 200
+
+环境记录（本轮新增经验）
+----------------------------------------------------------------
+1. ⚠️ **安装目录被卡死进程锁住会让 NSIS 覆盖安装失败**（本例 rc=2，目录被删成残缺态）。
+   首次安装失败的原因：旧版 app 实例卡死（无窗口、Not Responding、422MB），
+   它锁着 主程序 exe / app.asar / resources\bin\* / resources.pak。
+2. ⚠️ **`taskkill` 报「没有此任务的实例在运行」≠ 杀不掉**。旧笔记写的
+   「内核句柄泄漏，用户态无解，只有重启」**被本轮实测推翻**：
+   ctypes `OpenProcess(0x0001)` + `TerminateProcess` 直接走内核 API，
+   一次成功、文件锁立刻全开。当场清掉 3 个被判"只能重启"的僵尸
+   （app 33404 / scrcpy 24204 / electron 36124）。
+   工具：scripts/_kill-our-processes.py
+   注意：绝不按映像名无差别杀 electron.exe（会杀掉 WorkBuddy 自己）；
+        scrcpy.exe 必须用路径里的 \resources\bin\ 段匹配（排除同名 QtScrcpy）。
+3. ⚠️ **分段验收必须逐段清残留进程**。Stage 3 的 portable 实例若仍存活，
+   Stage 4 的 CDP 会连到它（页面 URL 变成 %TEMP% 解压目录），
+   表现为 Stage 4 的「页面从安装目录 asar 加载」假失败。
+   本轮 Stage 4/5 在清理残留后单独重跑即全绿。

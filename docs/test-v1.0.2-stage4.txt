@@ -1,12 +1,20 @@
-生产包验收 Stage 4（NSIS 安装版）· 2026-09-14T13:44:19.642Z
-install: C:\Users\yangming\AppData\Local\Programs\ADBAssistant
+=== Stage 4 NSIS 安装版 ===
+rc=0 用时 7.3s
+
+=== 生产包验收 · Stage 4：NSIS 安装版 ===
+
+安装目录：C:\Users\yangming\AppData\Local\Programs\ADBAssistant
 
 [PASS] 安装目录存在 :: C:\Users\yangming\AppData\Local\Programs\ADBAssistant
 [PASS] 主程序已安装 :: 180.07 MB
 [PASS] 卸载程序已生成 :: 222 KB
 [PASS] 随包二进制经 extraResources 就位 :: 14 个文件
 [PASS] 图标资源就位
+
+从安装目录启动，pid=30780...
 [PASS] 安装版可启动并开调试端点 :: 端口已响应
+  页面: file:///C:/Users/yangming/AppData/Local/Programs/ADBAssistant/resources/app.asar/dist/index.html
+  标题: ADB 桌面助手
 [PASS] 页面从安装目录 asar 加载 :: file:///C:/Users/yangming/AppData/Local/Programs/ADBAssistant/resources/app.asar/dist/index.html
 [PASS] React 已挂载 :: root 子节点 1
 [PASS] preload 桥接就绪 :: 58 个方法
@@ -15,4 +23,5 @@ install: C:\Users\yangming\AppData\Local\Programs\ADBAssistant
 [PASS] 安装版可执行真实 adb 功能（读分辨率） :: 720x1600 / 320dpi
 [PASS] 安装版可正常退出 :: 已退出
 
-合计：13/13 通过
+=== 结果：13/13 通过 ===
+结果已写入 D:\WorkSpace\手机助手\adb-assistant-v0.9\docs\test-packaged-stage4.txt
