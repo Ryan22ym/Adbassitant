@@ -7,6 +7,9 @@ import { IPC } from '@shared/types';
 import DevicePage from './pages/DevicePage';
 import MirrorPage from './pages/MirrorPage';
 import ToolsPage from './pages/ToolsPage';
+import AppsPage from './pages/AppsPage';
+import LogcatPage from './pages/LogcatPage';
+import WeakNetworkPage from './pages/WeakNetworkPage';
 import CommandPage from './pages/CommandPage';
 import LogsPage from './pages/LogsPage';
 import SettingsPage from './pages/SettingsPage';
@@ -15,6 +18,9 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/': { title: '设备', desc: '查看设备状态与详细信息' },
   '/mirror': { title: '投屏', desc: '通过 scrcpy 实时投屏并控制设备' },
   '/tools': { title: '常用工具', desc: '截图、录屏、分辨率、应用安装与文件传输' },
+  '/apps': { title: '应用管理', desc: '浏览应用列表，卸载、停止、清数据与提取 APK' },
+  '/logcat': { title: '实时 Logcat', desc: '流式抓取设备日志，过滤与一键保存' },
+  '/weaknet': { title: '弱网模拟', desc: '模拟带宽、延迟、抖动、丢包等真实网络状况' },
   '/command': { title: '命令终端', desc: '直接执行任意 adb 命令' },
   '/logs': { title: '运行日志', desc: '实时查看操作记录并一键导出' },
   '/settings': { title: '设置', desc: '外观、默认目录与环境自检' },
@@ -105,6 +111,9 @@ export default function App() {
               <Route path="/" element={<DevicePage />} />
               <Route path="/mirror" element={<MirrorPage />} />
               <Route path="/tools" element={<ToolsPage />} />
+              <Route path="/apps" element={<AppsPage />} />
+              <Route path="/logcat" element={<LogcatPage />} />
+              <Route path="/weaknet" element={<WeakNetworkPage />} />
               <Route path="/command" element={<CommandPage />} />
               <Route path="/logs" element={<LogsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

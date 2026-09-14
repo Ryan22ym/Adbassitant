@@ -1,11 +1,11 @@
-# ADB 桌面助手 v0.9
+# ADB 桌面助手 v1.0
 
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
 
 ---
 
-## 功能（v0.9）
+## 功能（v1.0）
 
 | 模块 | 能力 |
 | --- | --- |
@@ -17,9 +17,26 @@
 | **Monkey** | 图形化稳定性测试，可选目标应用、事件数、节流、seed，实时输出日志 |
 | **安装 APK** | 选择本地 APK 安装，支持覆盖安装与自动授权 |
 | **文件传输** | 批量 push 到设备、批量 pull 到电脑 |
+| **应用管理** 🆕 | 用户/系统/全部三态筛选 + 关键字搜索；详情（版本号/占用/安装时间/Activity 数/权限）；启动、强制停止、清除数据、提取 APK、启用停用、卸载 |
+| **实时 Logcat** 🆕 | 流式抓取（120ms 批量推送 + 20000 行环形缓冲）；级别/TAG 通配/关键字/进程/缓冲区多路过滤；快捷过滤（只看错误 / 闪退 ANR / Activity 启动）；暂停刷新、一键保存 |
+| **弱网模拟** 🆕 | 对标 clumsy，上行/下行独立配置 7 个参数（带宽/延迟/抖动/丢包/错报/乱序/重复包）；6 个内置档位 + 自定义预设持久化；持续时长与倒计时；设备能力探测（Root/tc/ifb）；未 Root 可走整体断网保底 |
 | **命令终端** | 执行任意 adb 命令，16 个常用命令快捷入口，↑/↓ 翻阅历史 |
 | **运行日志** | 实时记录全部命令与结果，按级别筛选、关键字搜索、一键导出 txt |
 | **设置** | 主题切换、默认保存目录、环境自检 |
+
+### 弱网模拟说明
+
+| 方向 | 含义 | 实现 |
+| --- | --- | --- |
+| **上行** | 设备发出的流量（上传、请求） | `tc qdisc add dev <iface> root netem …` |
+| **下行** | 设备收到的流量（下载、响应） | 先挂 `ifb` 网卡 + `ingress` 重定向，再在 ifb 上挂 netem |
+
+- 带宽限制用 `tbf` 而非 netem 的 `rate`（更准）；其余参数走 netem。
+- 两向可独立配置，模拟真实网络的不对称性。
+- **前置条件**：上行 netem 需要 Root（`su`）；下行需要内核 `ifb` 模块。
+  两者都不具备时，可用「整体断网」开关（`svc wifi/data disable`，免 Root）。
+- 预设持久化在 `userData/weaknet-presets.json`，与内置档位分开管理。
+- 启动前会先 `probeDevice()` 探测设备能力，UI 如实展示三行能力卡片。
 
 ---
 
@@ -36,7 +53,9 @@ adb-assistant-v0.9/
 │       ├── adb.ts             # 子进程执行器、设备枚举、日志管道
 │       ├── device-ops.ts      # 分辨率、截图、录屏
 │       ├── mirror.ts          # scrcpy 投屏与录制
-│       ├── files.ts           # push/pull、APK 安装、应用列表、Monkey
+│       ├── files.ts           # push/pull、APK 安装、应用列表与详情、Monkey
+│       ├── logcat.ts          # 实时 logcat 流式抓取、环形缓冲、多路过滤
+│       ├── weaknet.ts         # 弱网模拟（tc/netem + ifb）、设备能力探测、预设持久化
 │       ├── logger.ts          # 会话日志缓冲与导出
 │       └── settings.ts        # 配置持久化
 │
@@ -50,7 +69,7 @@ adb-assistant-v0.9/
 │   │   ├── ui.css
 │   │   ├── layout.tsx         # 侧边栏、顶栏、设备选择器、Toast
 │   │   └── layout.css
-│   ├── pages/                 # 六个功能页面
+│   ├── pages/                 # 九个功能页面
 │   ├── store/app.ts           # Zustand 全局状态
 │   ├── lib/                   # ipc 封装、格式化工具
 │   └── styles/global.css      # 设计系统变量（浅/深色）
@@ -258,6 +277,35 @@ scrcpy 录制通道（`startScrcpyRecord`）。
 镜像偶发**文件截断**（下载的包缺文件、目录为空），表现为运行时 `Cannot find module './lib/xxx'`。
 排查用 `python scripts/check-modules.py`，修复办法是删掉该包目录后单独重装。
 
+### ⚠️ 新增推送通道必须同步 preload 白名单
+
+`preload.ts` 的 `on()` 有一个 `allowed` 白名单，只放行白名单内的通道。
+**新加任何主进程 → 渲染进程的推送通道，都要把它加进 `allowed`，否则渲染层静默收不到任何消息**
+（不报错、不警告，只是永远不触发回调）。
+
+同时 `preload.ts` 里的 IPC 通道常量是**内联字面量**，不 import `shared/types.ts`
+（编译后相对路径失效）。所以**改通道名要改两处**：`shared/types.ts` 和 `preload.ts`。
+忘了同步的典型症状是"主进程日志显示推了，界面纹丝不动"。
+
+### ⚠️ ColorOS 精简 ROM 没有 `ip` 命令
+
+`probeDevice()` 原实现用 `ip -o link show` 拿网络接口列表，在 OPPO ColorOS（实测 CPH1931 /
+Android 10）上直接返回空 —— ROM 精简掉了 `ip`。现象是弱网页面的「网络接口」下拉框空白。
+
+兜底方案：再并发跑一条 `cat /proc/net/dev`，用 `parseProcNetDev()` 解析
+（格式 `iface: rx_bytes rx_packets … tx_bytes …`），并过滤掉 `lo` / `ifb*`
+（后者是我们自己建的虚拟网卡，不该给用户选）。优先用 `ip` 的结果，为空才退到 `/proc/net/dev`。
+
+同理 `hasTc` / `hasIfb` 也不能只靠 `which`：`which` 在部分 toybox 环境返回非零但工具其实可用。
+现在是**实际执行探测** —— 跑一次 `tc qdisc show` 看输出/报错里有没有 `qdisc|netem|RTNETLINK`；
+ifb 则在有 Root 时直接 `modprobe ifb numifbs=1 && echo IFB_OK` 验证。
+
+### 侧栏高亮"滞后一页"是测试假象
+
+写 UI 校验脚本时若直接改 `window.location.hash` 跳页，会绕过 React Router 的更新时序，
+截图里出现"页面已经是弱网，侧栏高亮还停在 Logcat"。这不是 router 的 bug。
+正确做法是用 `loadFile(file, { hash })` 逐页重新加载，见 `scripts/check-nav.cjs`。
+
 ---
 
 ## 环境要求
@@ -279,6 +327,20 @@ node_modules/electron/dist/electron.exe scripts/e2e-record.cjs
 # 抓取各页面 UI 截图到 ui-shots/
 node_modules/electron/dist/electron.exe scripts/capture-ui.cjs
 
+# ---- v1.0 新增 ----
+
+# 静态产物检查（纯 Node，不启动 electron，7 项）
+node scripts/e2e-v1-smoke.cjs
+
+# 三个新页面截图 + 标题/侧栏/卡片/api 校验（3 项）
+node_modules/electron/dist/electron.exe scripts/capture-v1-pages.cjs
+
+# 9 条路由逐个加载，校验标题与侧栏高亮（9 项）
+node_modules/electron/dist/electron.exe scripts/check-nav.cjs
+
+# 真机只读功能验证：应用列表/详情、弱网探测、预设读写、进程、logcat（8 项）
+node_modules/electron/dist/electron.exe scripts/e2e-v1-device.cjs
+
 # 检查 node_modules 是否被镜像截断
 python scripts/check-modules.py
 
@@ -291,6 +353,12 @@ python scripts/verify-scrcpy-env.py
 
 > Windows 下跑 electron 脚本前需先 `unset ELECTRON_RUN_AS_NODE`，
 > 否则 electron 会以 Node 模式启动。
+>
+> `scripts/e2e-v1-smoke.cjs` 是**纯 Node** 脚本（只读编译产物做静态检查），
+> 必须用 `node` 跑，**不能**用 `electron.exe` 跑 —— 见下方 ELECTRON_RUN_AS_NODE 陷阱。
+>
+> 现成包装器：`scripts/run-capture-v1.bat`（清变量后启动截图脚本）。
+> 这些脚本里 `spawn` electron 之前都做了 `delete env.ELECTRON_RUN_AS_NODE`。
 
 ## 打包产物验收
 
@@ -364,9 +432,11 @@ node scripts/e2e-mirror-icon.cjs         # Stage 6：投屏窗口图标区分（
 
 ## 版本规划
 
-- **v0.9（当前）**：设备管理、投屏、截图/录屏、分辨率、Monkey、APK 安装、
+- **v0.9**：设备管理、投屏、截图/录屏、分辨率、Monkey、APK 安装、
   文件传输、命令终端、日志导出
-- **v1.0（进行中）**：
-  - 实时 logcat（流式抓取、级别/tag/关键字过滤、一键保存）
-  - 应用管理（列表、卸载、强制停止、清数据、提取 APK）
+- **v1.0（当前）**：
+  - 实时 logcat（流式抓取、级别/tag/关键字/进程过滤、一键保存）
+  - 应用管理（列表、详情、卸载、强制停止、清数据、启动、提取 APK、启用停用）
+  - 弱网模拟（clumsy 风格，上行/下行独立 7 参数，预设持久化，能力探测）
+  - 验收：静态 7/7、页面 3/3、导航 9/9、真机 8/8 —— 见 `docs/test-v1.txt`
 - **v1.0+（候选）**：相册浏览、双向剪贴板、拖放安装、连点器

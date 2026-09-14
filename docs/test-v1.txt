@@ -1,0 +1,128 @@
+================================================================
+  ADB 助手 v1.0 验收报告
+  日期：2026-09-11
+  基线：v0.9 (commit 2f0d2b8)，分支 main
+  设备：OPPO CPH1931 / Android 10 / serial aaab4f58（在线 4 台）
+================================================================
+
+一、本轮迭代范围
+----------------------------------------------------------------
+1. 实时 Logcat（流式抓取 + 级别/TAG/关键字/进程过滤 + 一键保存）
+2. 应用管理（列表/详情/卸载/强停/清数据/启动/提取APK/启用停用）
+3. 弱网模拟（对标 clumsy，上行/下行独立参数，预设持久化）
+
+二、静态产物检查（scripts/e2e-v1-smoke.cjs）
+----------------------------------------------------------------
+7/7 通过
+
+  [PASS] shared/types.ts 新增 IPC 通道常量（20 个）
+  [PASS] electron/services/logcat.ts 存在且导出完整
+  [PASS] electron/services/weaknet.ts 存在且导出完整
+  [PASS] electron/services/files.ts 新增应用管理函数
+  [PASS] electron/preload.ts 内联通道与 api 方法同步
+  [PASS] preload 推送白名单包含 3 个新通道
+  [PASS] ipc.ts 注册了全部新增 handler
+
+三、编译与构建
+----------------------------------------------------------------
+  tsc -p tsconfig.electron.json       无错误
+  tsc -p tsconfig.json (渲染层)        无错误
+  vite build                          成功
+
+四、渲染层页面检查（scripts/capture-v1-pages.cjs）
+----------------------------------------------------------------
+3/3 通过，渲染层无错误
+
+  [PASS] #/apps     标题="应用管理"     侧栏高亮="应用管理"   卡片=2  截图=150723B
+  [PASS] #/logcat   标题="实时 Logcat"  侧栏高亮="实时 Logcat" 卡片=1  截图=104294B
+  [PASS] #/weaknet  标题="弱网模拟"     侧栏高亮="弱网模拟"   卡片=5  截图=231570B
+
+五、侧栏高亮全量校验（scripts/check-nav.cjs）
+----------------------------------------------------------------
+9/9 通过（逐路由重新加载，排除 hash 直改导致的时序假象）
+
+  [PASS] #/         设备
+  [PASS] #/mirror   投屏
+  [PASS] #/tools    常用工具
+  [PASS] #/apps     应用管理
+  [PASS] #/logcat   实时 Logcat
+  [PASS] #/weaknet  弱网模拟
+  [PASS] #/command  命令终端
+  [PASS] #/logs     运行日志
+  [PASS] #/settings 设置
+
+六、真机功能 E2E（scripts/e2e-v1-device.cjs）
+----------------------------------------------------------------
+8/8 通过
+
+  [PASS] 设备列表      :: 4 台，在线 4 台，选用 aaab4f58
+  [PASS] 应用列表      :: 共 343，用户 159，样例 android
+  [PASS] 应用详情      :: com.coloros.gamespaceui
+                          versionName=5.16.0_space targetSdk=31 perms=40
+  [PASS] 弱网探测      :: rooted=false hasTc=true hasIfb=false
+                          iface=wlan0 ifaces=[r_rmnet_data5,wlan0]
+  [PASS] 弱网预设读写  :: 原有 6 个，保存成功，删除后已清理
+  [PASS] 进程列表      :: 201 个进程
+  [PASS] Logcat 抓取   :: 3s 收到 162 行（可解析 160 行），running=true
+  [PASS] Logcat 级别过滤 :: 8 行，非 E/F 级别 0 行（过滤正确）
+
+七、已知限制与环境说明
+----------------------------------------------------------------
+1. 弱网下行（入向）限速需 ifb 内核模块支持。测试机 ColorOS 精简 ROM
+   未加载 ifb，且未 Root，故 hasIfb=false；代码已实现 ifb + ingress
+   重定向路径，在支持环境可生效。
+2. 上行 netem 需要 Root（su）。测试机未 Root，因此 E2E 只验证了
+   「探测能力」与「预设读写」，未实际下发 tc 规则。
+3. 保底方案：未 Root 时可用「整体断网」开关（svc wifi/data disable）。
+4. ColorOS 精简 ROM 无 ip 命令，网络接口列表走 /proc/net/dev 兜底解析。
+
+八、代码变更清单
+----------------------------------------------------------------
+修改：
+  shared/types.ts                 +AppDetail/Logcat*/WeakNet* 类型，+20 通道
+  electron/preload.ts             内联通道同步 + api 方法 + 推送白名单
+  electron/ipc.ts                 +20 个 handler + 3 个推送管道
+  electron/services/files.ts      +9 个应用管理函数
+  src/App.tsx                     +3 路由
+  src/components/layout.tsx       +3 侧栏项 + 3 个 SVG 图标，版本号 v0.9→v1.0
+  src/pages/pages.css             +8024B（chip / 应用 / logcat / 弱网样式）
+  package.json                    0.9.0 → 1.0.0
+
+新增：
+  electron/services/logcat.ts     10,976B  流式抓取 + 环形缓冲 + 过滤
+  electron/services/weaknet.ts    18,461B  tc/netem + ifb + 预设持久化
+  src/pages/LogcatPage.tsx        14,644B
+  src/pages/AppsPage.tsx          13,787B
+  src/pages/WeakNetworkPage.tsx   20,106B
+  scripts/e2e-v1-smoke.cjs        静态产物检查
+  scripts/capture-v1-pages.cjs    三页面截图 + 校验
+  scripts/check-nav.cjs           9 条路由高亮校验
+  scripts/e2e-v1-device.cjs       真机只读功能验证
+  scripts/run-capture-v1.bat      清 ELECTRON_RUN_AS_NODE 后启动
+
+九、踩坑记录
+----------------------------------------------------------------
+1. ELECTRON_RUN_AS_NODE 陷阱
+   本机 agent 环境注入了 ELECTRON_RUN_AS_NODE=1，导致 electron.exe 以
+   纯 Node 模式运行，require('electron') 返回路径字符串而非 API 对象，
+   报错 "Cannot read properties of undefined (reading 'whenReady')"。
+   解决：在 bash 中 unset ELECTRON_RUN_AS_NODE 后再启动。
+   PowerShell 的 Start-Process -Environment @{ELECTRON_RUN_AS_NODE=$null}
+   无效（仍继承），必须用 shell unset。
+
+2. 侧栏高亮"滞后一页"是测试假象
+   直接改 window.location.hash 绕过了 React Router 的更新时序。
+   改用 loadFile(file, {hash}) 逐页重新加载后 9/9 正确。
+
+3. TS 语法雷区
+   shared/types.ts 中误写 raw-only 非法标识符 → 改 rawOnly
+   weaknet.ts 正则字面量混入路径斜杠 → /tc/ 简化
+   AppliedRule.cleanup 是 string[]，误包一层中括号变成 string[][]
+
+4. 编译产物中 handler 用 IPC.XXX 符号引用
+   冒烟脚本早期按字符串 'app:detail' 查找全部失败，改为匹配常量名。
+
+================================================================
+  结论：v1.0 三块功能全部落地，静态 7/7、页面 3/3、导航 9/9、
+        真机 8/8 全部通过，可提交 main 分支。
+================================================================

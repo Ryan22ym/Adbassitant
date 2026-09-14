@@ -41,6 +41,29 @@ const Icon = {
       <path d="M14 3.5v5h5M8 13h8M8 17h5" strokeLinecap="round" />
     </svg>
   ),
+  apps: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="3" y="3" width="7.5" height="7.5" rx="1.8" />
+      <rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8" />
+      <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8" />
+      <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8" />
+    </svg>
+  ),
+  logcat: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="2.5" y="4" width="19" height="16" rx="2.5" />
+      <path d="M6.5 9h2M6.5 12.5h6M6.5 16h3.5" strokeLinecap="round" />
+      <path d="M16 9h1.5M16 12.5h1.5M16 16h1.5" strokeLinecap="round" />
+    </svg>
+  ),
+  weaknet: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 20v-4.5" strokeLinecap="round" />
+      <path d="M8.5 12.5a5 5 0 017 0" strokeLinecap="round" />
+      <path d="M5.5 9a9.5 9.5 0 0113 0" strokeLinecap="round" />
+      <circle cx="12" cy="20" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <circle cx="12" cy="12" r="3" />
@@ -74,6 +97,9 @@ const NAV = [
   { to: '/', label: '设备', icon: Icon.device, exact: true },
   { to: '/mirror', label: '投屏', icon: Icon.mirror },
   { to: '/tools', label: '常用工具', icon: Icon.tools },
+  { to: '/apps', label: '应用管理', icon: Icon.apps },
+  { to: '/logcat', label: '实时 Logcat', icon: Icon.logcat },
+  { to: '/weaknet', label: '弱网模拟', icon: Icon.weaknet },
   { to: '/command', label: '命令终端', icon: Icon.terminal },
   { to: '/logs', label: '运行日志', icon: Icon.log },
   { to: '/settings', label: '设置', icon: Icon.settings },
@@ -89,7 +115,7 @@ export function Sidebar() {
         <div className="brand-mark">A</div>
         <div className="brand-text">
           <strong>ADB 助手</strong>
-          <span>v0.9</span>
+          <span>v1.0</span>
         </div>
       </div>
 

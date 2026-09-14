@@ -34,6 +34,33 @@ const IPC = {
   MONKEY_RUN: 'monkey:run',
   MONKEY_STOP: 'monkey:stop',
   APP_LIST: 'app:list',
+
+  /* 应用管理（v1.0） */
+  APP_DETAIL: 'app:detail',
+  APP_UNINSTALL: 'app:uninstall',
+  APP_FORCE_STOP: 'app:forceStop',
+  APP_CLEAR_DATA: 'app:clearData',
+  APP_LAUNCH: 'app:launch',
+  APP_EXTRACT_APK: 'app:extractApk',
+  APP_SET_ENABLED: 'app:setEnabled',
+
+  /* 实时 Logcat（v1.0） */
+  LOGCAT_START: 'logcat:start',
+  LOGCAT_STOP: 'logcat:stop',
+  LOGCAT_STATUS: 'logcat:status',
+  LOGCAT_CLEAR: 'logcat:clear',
+  LOGCAT_SAVE: 'logcat:save',
+  LOGCAT_PROCESSES: 'logcat:processes',
+
+  /* 弱网模拟（v1.0） */
+  WEAKNET_START: 'weaknet:start',
+  WEAKNET_STOP: 'weaknet:stop',
+  WEAKNET_STATUS: 'weaknet:status',
+  WEAKNET_PRESET_LIST: 'weaknet:presetList',
+  WEAKNET_PRESET_SAVE: 'weaknet:presetSave',
+  WEAKNET_PRESET_DELETE: 'weaknet:presetDelete',
+  WEAKNET_PROBE: 'weaknet:probe',
+
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
   LOG_LIST_ALL: 'log:listAll',
@@ -44,6 +71,9 @@ const IPC = {
   PUSH_RECORD_STATUS: 'push:recordStatus',
   PUSH_DEVICE_CHANGED: 'push:deviceChanged',
   PUSH_MONKEY_OUTPUT: 'push:monkeyOutput',
+  PUSH_LOGCAT_LINES: 'push:logcatLines',
+  PUSH_LOGCAT_STATUS: 'push:logcatStatus',
+  PUSH_WEAKNET_STATUS: 'push:weaknetStatus',
 } as const;
 
 /**
@@ -114,6 +144,40 @@ const api = {
   ) => invoke(IPC.MONKEY_RUN, serial, pkg, events, throttle, seed),
   stopMonkey: () => invoke(IPC.MONKEY_STOP),
 
+  /* 应用管理（v1.0） */
+  appDetail: (serial: string | undefined, pkg: string) => invoke(IPC.APP_DETAIL, serial, pkg),
+  uninstallApp: (serial: string | undefined, pkg: string, keepData = false) =>
+    invoke(IPC.APP_UNINSTALL, serial, pkg, keepData),
+  forceStopApp: (serial: string | undefined, pkg: string) =>
+    invoke(IPC.APP_FORCE_STOP, serial, pkg),
+  clearAppData: (serial: string | undefined, pkg: string) =>
+    invoke(IPC.APP_CLEAR_DATA, serial, pkg),
+  launchApp: (serial: string | undefined, pkg: string) => invoke(IPC.APP_LAUNCH, serial, pkg),
+  extractApk: (serial: string | undefined, pkg: string, localDir: string) =>
+    invoke(IPC.APP_EXTRACT_APK, serial, pkg, localDir),
+  setAppEnabled: (serial: string | undefined, pkg: string, enabled: boolean) =>
+    invoke(IPC.APP_SET_ENABLED, serial, pkg, enabled),
+
+  /* 实时 Logcat（v1.0） */
+  startLogcat: (serial: string | undefined, filter?: any) =>
+    invoke(IPC.LOGCAT_START, serial, filter),
+  stopLogcat: () => invoke(IPC.LOGCAT_STOP),
+  logcatStatus: () => invoke(IPC.LOGCAT_STATUS),
+  clearLogcat: () => invoke(IPC.LOGCAT_CLEAR),
+  saveLogcat: (meta?: Record<string, string>) => invoke(IPC.LOGCAT_SAVE, meta),
+  logcatProcesses: (serial?: string) => invoke(IPC.LOGCAT_PROCESSES, serial),
+
+  /* 弱网模拟（v1.0） */
+  weaknetStart: (serial: string | undefined, params: any) =>
+    invoke(IPC.WEAKNET_START, serial, params),
+  weaknetStop: () => invoke(IPC.WEAKNET_STOP),
+  weaknetStatus: () => invoke(IPC.WEAKNET_STATUS),
+  weaknetPresets: () => invoke(IPC.WEAKNET_PRESET_LIST),
+  weaknetSavePreset: (name: string, params: any) =>
+    invoke(IPC.WEAKNET_PRESET_SAVE, name, params),
+  weaknetDeletePreset: (id: string) => invoke(IPC.WEAKNET_PRESET_DELETE, id),
+  weaknetProbe: (serial?: string) => invoke(IPC.WEAKNET_PROBE, serial),
+
   /* 日志 */
   getAllLogs: () => invoke(IPC.LOG_LIST_ALL),
   clearLogs: () => invoke(IPC.LOG_CLEAR),
@@ -131,6 +195,9 @@ const api = {
       IPC.PUSH_RECORD_STATUS,
       IPC.PUSH_DEVICE_CHANGED,
       IPC.PUSH_MONKEY_OUTPUT,
+      IPC.PUSH_LOGCAT_LINES,
+      IPC.PUSH_LOGCAT_STATUS,
+      IPC.PUSH_WEAKNET_STATUS,
       'push:screenshot',
     ];
     if (!allowed.includes(channel as any)) {

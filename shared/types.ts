@@ -147,13 +147,172 @@ export interface RecordSession {
 }
 
 /* ------------------------------------------------------------------ */
-/* 应用列表                                                            */
+/* 应用列表 / 应用管理                                                  */
 /* ------------------------------------------------------------------ */
 
 export interface AppInfo {
   packageName: string;
   /** 是否为系统应用 */
   system: boolean;
+  /** 应用显示名（读取失败时回落为包名） */
+  label?: string;
+  /** 版本名，如 8.0.42 */
+  versionName?: string;
+  /** 版本号 */
+  versionCode?: number;
+  /** 安装时间（毫秒时间戳） */
+  installedAt?: number;
+  /** 更新时间（毫秒时间戳） */
+  updatedAt?: number;
+  /** APK 路径 */
+  apkPath?: string;
+  /** 占用空间（字节，APK + 数据 + 缓存） */
+  sizeBytes?: number;
+  /** 是否已停止（pm list packages -d） */
+  disabled?: boolean;
+  /** 是否正在运行（dumpsys 推断，尽力而为） */
+  running?: boolean;
+}
+
+export interface AppDetail {
+  packageName: string;
+  label?: string;
+  versionName?: string;
+  versionCode?: number;
+  installedAt?: number;
+  updatedAt?: number;
+  apkPath?: string;
+  codePath?: string;
+  dataDir?: string;
+  sizeBytes?: number;
+  system: boolean;
+  enabled?: boolean;
+  targetSdk?: number;
+  minSdk?: number;
+  activities?: number;
+  permissions?: string[];
+}
+
+/* ------------------------------------------------------------------ */
+/* 实时 Logcat                                                         */
+/* ------------------------------------------------------------------ */
+
+export type LogcatLevel = 'V' | 'D' | 'I' | 'W' | 'E' | 'F' | 'S';
+
+export interface LogcatBufferName {
+  /** 缓冲区名：main / system / crash / events / radio / all */
+  name: string;
+}
+
+export interface LogcatLine {
+  /** 自增序号 */
+  seq: number;
+  /** 完整原始行 */
+  raw: string;
+  /** 解析后的时间字符串（"09-11 17:58:07.123"） */
+  time?: string;
+  /** 进程号 */
+  pid?: number;
+  /** 线程号 */
+  tid?: number;
+  /** 级别 */
+  level?: LogcatLevel;
+  /** TAG */
+  tag?: string;
+  /** 正文 */
+  message?: string;
+  /** 解析失败时为 true（原样展示 raw） */
+  rawOnly?: boolean;
+}
+
+export interface LogcatFilter {
+  /** 最低级别，低于该级别不推送 */
+  minLevel: LogcatLevel;
+  /** TAG 过滤（支持 * 通配，逗号分隔多个） */
+  tags?: string;
+  /** 正文关键字（逗号分隔，任一命中即保留） */
+  keyword?: string;
+  /** 仅显示指定 PID */
+  pid?: number;
+  /** 进程名过滤（子串匹配） */
+  process?: string;
+  /** 缓冲区 */
+  buffers?: string[];
+  /** 是否只在关键字命中时保留 */
+  matchOnly?: boolean;
+}
+
+export interface LogcatStatus {
+  running: boolean;
+  serial?: string;
+  pid?: number;
+  startedAt?: number;
+  /** 已接收行数 */
+  lines: number;
+  filter?: LogcatFilter;
+}
+
+/* ------------------------------------------------------------------ */
+/* 弱网模拟                                                            */
+/* ------------------------------------------------------------------ */
+
+export type WeakNetMode = 'tc' | 'svc' | 'none';
+
+/** 单个方向的参数（上行 = 设备出口，下行 = 入向） */
+export interface WeakNetDirectionParams {
+  /** 带宽限制（Mbps），0 = 不限速 */
+  bandwidthMbps?: number;
+  /** 延迟（毫秒） */
+  delayMs?: number;
+  /** 延迟抖动（毫秒） */
+  jitterMs?: number;
+  /** 丢包率（%），0-100 */
+  lossPercent?: number;
+  /** 错误包率（%），0-100，netem corrupt */
+  corruptPercent?: number;
+  /** 乱序率（%），0-100 */
+  reorderPercent?: number;
+  /** 重复包率（%），0-100 */
+  duplicatePercent?: number;
+}
+
+export interface WeakNetParams {
+  /** 上行（设备发出的流量） */
+  up: WeakNetDirectionParams;
+  /** 下行（设备收到的流量） */
+  down: WeakNetDirectionParams;
+  /** 持续时长（秒），0 = 一直生效直到手动停止 */
+  durationSec: number;
+  /** 仅作用于指定应用 UID（可选，留空 = 全局） */
+  packageName?: string;
+  /** 是否同时关闭 WiFi / 移动数据（模拟断网） */
+  blockNetwork?: boolean;
+  /** 网络接口名，留空自动探测 */
+  iface?: string;
+}
+
+export interface WeakNetPreset {
+  id: string;
+  name: string;
+  params: WeakNetParams;
+  builtin?: boolean;
+  createdAt: number;
+}
+
+export interface WeakNetStatus {
+  running: boolean;
+  serial?: string;
+  startedAt?: number;
+  /** 剩余秒数，-1 表示不限时 */
+  remainSec: number;
+  params?: WeakNetParams;
+  /** 生效方式：tc=内核 netem（需 root），svc=开关网络（免 root），none=未生效 */
+  mode: WeakNetMode;
+  /** 是否具备 root */
+  rooted?: boolean;
+  iface?: string;
+  /** 上一次的提示信息 */
+  note?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -225,6 +384,32 @@ export const IPC = {
   MONKEY_STOP: 'monkey:stop',
   APP_LIST: 'app:list',
 
+  /* 应用管理（v1.0） */
+  APP_DETAIL: 'app:detail',
+  APP_UNINSTALL: 'app:uninstall',
+  APP_FORCE_STOP: 'app:forceStop',
+  APP_CLEAR_DATA: 'app:clearData',
+  APP_LAUNCH: 'app:launch',
+  APP_EXTRACT_APK: 'app:extractApk',
+  APP_SET_ENABLED: 'app:setEnabled',
+
+  /* 实时 Logcat（v1.0） */
+  LOGCAT_START: 'logcat:start',
+  LOGCAT_STOP: 'logcat:stop',
+  LOGCAT_STATUS: 'logcat:status',
+  LOGCAT_CLEAR: 'logcat:clear',
+  LOGCAT_SAVE: 'logcat:save',
+  LOGCAT_PROCESSES: 'logcat:processes',
+
+  /* 弱网模拟（v1.0） */
+  WEAKNET_START: 'weaknet:start',
+  WEAKNET_STOP: 'weaknet:stop',
+  WEAKNET_STATUS: 'weaknet:status',
+  WEAKNET_PRESET_LIST: 'weaknet:presetList',
+  WEAKNET_PRESET_SAVE: 'weaknet:presetSave',
+  WEAKNET_PRESET_DELETE: 'weaknet:presetDelete',
+  WEAKNET_PROBE: 'weaknet:probe',
+
   /* 日志 */
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
@@ -240,6 +425,9 @@ export const IPC = {
   PUSH_RECORD_STATUS: 'push:recordStatus',
   PUSH_DEVICE_CHANGED: 'push:deviceChanged',
   PUSH_MONKEY_OUTPUT: 'push:monkeyOutput',
+  PUSH_LOGCAT_LINES: 'push:logcatLines',
+  PUSH_LOGCAT_STATUS: 'push:logcatStatus',
+  PUSH_WEAKNET_STATUS: 'push:weaknetStatus',
 } as const;
 
 /* ------------------------------------------------------------------ */

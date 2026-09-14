@@ -1,7 +1,8 @@
 import { existsSync, statSync, readdirSync } from 'fs';
 import { basename, join, extname } from 'path';
 import { randomUUID } from 'crypto';
-import { runAdb, ensureDevice, log, spawnBinary, adbPath } from './adb';
+import { runAdb, ensureDevice, log, spawnBinary, adbPath, ensureDir } from './adb';
+import type { AppInfo, AppDetail } from '../../shared/types';
 
 function formatBytesFallback(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -324,6 +325,329 @@ export async function runMonkey(
 
   log('info', 'Monkey', `已启动：${packageName || '全部应用'}，${events} 次事件，节流 ${throttleMs}ms`);
   return child;
+}
+
+/* ------------------------------------------------------------------ */
+/* 应用管理（v1.0）                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 批量读取应用元信息（显示名 / 版本 / 安装时间 / 体积）
+ *
+ * 走 `pm list packages -3 --show-versioncode -U -i` 拿包名与基础信息，
+ * 再用 `dumpsys package` 一次性补齐 label 与大小。
+ * 单条 shell 命令开销大，因此这里只发 3 条命令，不做逐包查询。
+ */
+export async function listAppsDetailed(
+  serial: string | undefined,
+  includeSystem = true,
+): Promise<AppInfo[]> {
+  const s = await ensureDevice(serial);
+
+  const pkgArgs = ['-s', s, 'shell', 'pm', 'list', 'packages'];
+  if (!includeSystem) pkgArgs.push('-3');
+  pkgArgs.push('--show-versioncode', '-U');
+
+  const [pkgRes, sizeRes, disabledRes] = await Promise.all([
+    runAdb(pkgArgs, { source: '应用', silent: true, timeout: 40000 }),
+    runAdb(['-s', s, 'shell', 'du', '-s', '/data/app/*'], {
+      silent: true,
+      timeout: 40000,
+    }),
+    runAdb(['-s', s, 'shell', 'pm', 'list', 'packages', '-d'], {
+      silent: true,
+      timeout: 20000,
+    }),
+  ]);
+
+  /* pm list packages 行样例：
+   *   package:com.tencent.mm versionCode:2600 uid:10123
+   * 老版本 ROM 不带 versionCode/uid，做兼容。 */
+  const apps: AppInfo[] = [];
+  for (const line of pkgRes.stdout.split(/\r?\n/)) {
+    const t = line.trim();
+    const m = t.match(/^package:(\S+)(?:\s+versionCode:(\d+))?(?:\s+uid:(\d+))?/);
+    if (!m) continue;
+    const packageName = m[1];
+    apps.push({
+      packageName,
+      system: isSystemPackage(packageName),
+      versionCode: m[2] ? parseInt(m[2], 10) : undefined,
+    });
+  }
+
+  if (apps.length === 0) return apps;
+
+  // 目录体积：/data/app/~~xxx==/com.foo-abc==/base.apk → 用包名匹配
+  const sizeMap = parseDuOutput(sizeRes.stdout);
+
+  // 已停用包
+  const disabled = new Set<string>();
+  for (const line of disabledRes.stdout.split(/\r?\n/)) {
+    const m = line.trim().match(/^package:(\S+)/);
+    if (m) disabled.add(m[1]);
+  }
+
+  for (const a of apps) {
+    const hit = matchSize(sizeMap, a.packageName);
+    if (hit !== undefined) a.sizeBytes = hit;
+    if (disabled.has(a.packageName)) a.disabled = true;
+  }
+
+  apps.sort((a, b) => a.packageName.localeCompare(b.packageName));
+  log('info', '应用', `已读取 ${apps.length} 个应用`);
+  return apps;
+}
+
+/**
+ * du -s /data/app/* 输出解析
+ * 形如： 12345   /data/app/~~AbC==/com.foo.bar-XyZ==
+ */
+function parseDuOutput(stdout: string): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = line.trim().match(/^(\d+)\s+(\S+)$/);
+    if (!m) continue;
+    const kb = parseInt(m[1], 10);
+    const path = m[2];
+    const base = path.split('/').pop() || '';
+    // com.foo.bar-XyZ== → com.foo.bar
+    const pkg = base.replace(/-[^-]*==?$/, '').replace(/==$/, '');
+    if (!pkg) continue;
+    map.set(pkg, (map.get(pkg) || 0) + kb * 1024);
+  }
+  return map;
+}
+
+function matchSize(map: Map<string, number>, pkg: string): number | undefined {
+  if (map.has(pkg)) return map.get(pkg);
+  // 前缀匹配兜底（有的 ROM 目录名做了混淆）
+  for (const [k, v] of map) {
+    if (k === pkg) return v;
+  }
+  return undefined;
+}
+
+/**
+ * 读取单个应用的详细信息（dumpsys package <pkg>）
+ */
+export async function getAppDetail(
+  serial: string | undefined,
+  packageName: string,
+): Promise<AppDetail> {
+  const s = await ensureDevice(serial);
+  const pkg = (packageName || '').trim();
+  if (!pkg) throw new Error('包名为空');
+
+  const res = await runAdb(['-s', s, 'shell', 'dumpsys', 'package', pkg], {
+    silent: true,
+    timeout: 25000,
+  });
+  const out = res.stdout;
+  if (!out.trim()) throw new Error(`未找到应用 ${pkg}`);
+
+  const pick = (re: RegExp): string | undefined => out.match(re)?.[1]?.trim();
+
+  const versionName = pick(/versionName=(\S+)/);
+  const versionCodeStr = pick(/versionCode=(\d+)/);
+  const firstInstallStr = pick(/firstInstallTime=(.+)/);
+  const lastUpdateStr = pick(/lastUpdateTime=(.+)/);
+  const codePath = pick(/codePath=(\S+)/);
+  const dataDir = pick(/dataDir=(\S+)/);
+  const targetSdkStr = pick(/targetSdk=(\d+)/) || pick(/targetSdkVersion=(\d+)/);
+  const minSdkStr = pick(/minSdk=(\d+)/) || pick(/minSdkVersion=(\d+)/);
+  const enabledStr = pick(/enabled=(\w+)/);
+
+  const activities = (out.match(/android\.intent\.action\.MAIN/g) || []).length;
+
+  // 权限列表
+  const permissions: string[] = [];
+  const permBlock = out.match(/requested permissions:([\s\S]*?)(?:\n\s*\n|install permissions:)/);
+  if (permBlock) {
+    for (const l of permBlock[1].split(/\r?\n/)) {
+      const m = l.trim().match(/^([\w.]+)$/);
+      if (m) permissions.push(m[1]);
+    }
+  }
+
+  return {
+    packageName: pkg,
+    versionName,
+    versionCode: versionCodeStr ? parseInt(versionCodeStr, 10) : undefined,
+    installedAt: parseDumpTime(firstInstallStr),
+    updatedAt: parseDumpTime(lastUpdateStr),
+    apkPath: codePath,
+    codePath,
+    dataDir,
+    system: isSystemPackage(pkg),
+    enabled: enabledStr ? enabledStr === 'true' || enabledStr === '1' : undefined,
+    targetSdk: targetSdkStr ? parseInt(targetSdkStr, 10) : undefined,
+    minSdk: minSdkStr ? parseInt(minSdkStr, 10) : undefined,
+    activities,
+    permissions: permissions.slice(0, 40),
+  };
+}
+
+/** dumpsys 时间形如 2024-05-11 09:32:14 */
+function parseDumpTime(s?: string): number | undefined {
+  if (!s) return undefined;
+  const m = s.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/);
+  if (!m) return undefined;
+  const t = Date.parse(`${m[1]}T${m[2]}`);
+  return Number.isFinite(t) ? t : undefined;
+}
+
+/** 卸载应用 */
+export async function uninstallApp(
+  serial: string | undefined,
+  packageName: string,
+  keepData = false,
+): Promise<string> {
+  const s = await ensureDevice(serial);
+  const args = ['-s', s, 'uninstall'];
+  if (keepData) args.push('-k');
+  args.push(packageName);
+
+  const res = await runAdb(args, { source: '应用', timeout: 90000 });
+  const text = (res.stdout + '\n' + res.stderr).trim();
+  if (/Failure|Error/i.test(text) || !res.ok) {
+    throw new Error(text.replace(/^.*?Failure\s*/i, '').trim() || '卸载失败');
+  }
+  log('success', '应用', `已卸载 ${packageName}`);
+  return text;
+}
+
+/** 强制停止 */
+export async function forceStopApp(serial: string | undefined, packageName: string): Promise<string> {
+  const s = await ensureDevice(serial);
+  const res = await runAdb(['-s', s, 'shell', 'am', 'force-stop', packageName], {
+    source: '应用',
+    timeout: 20000,
+  });
+  if (!res.ok && /Error|Exception/i.test(res.stderr + res.stdout)) {
+    throw new Error((res.stderr || res.stdout).trim());
+  }
+  log('success', '应用', `已强制停止 ${packageName}`);
+  return 'ok';
+}
+
+/** 清除数据（等价于系统设置里的「清除数据」） */
+export async function clearAppData(serial: string | undefined, packageName: string): Promise<string> {
+  const s = await ensureDevice(serial);
+  const res = await runAdb(['-s', s, 'shell', 'pm', 'clear', packageName], {
+    source: '应用',
+    timeout: 30000,
+  });
+  const text = (res.stdout + res.stderr).trim();
+  if (!/Success/i.test(text)) throw new Error(text || '清除失败');
+  log('success', '应用', `已清除 ${packageName} 的数据`);
+  return text;
+}
+
+/** 启动应用（monkey 单事件最通用，避免拿不到 launcher activity） */
+export async function launchApp(serial: string | undefined, packageName: string): Promise<string> {
+  const s = await ensureDevice(serial);
+  const res = await runAdb(
+    ['-s', s, 'shell', 'monkey', '-p', packageName, '-c', 'android.intent.category.LAUNCHER', '1'],
+    { source: '应用', timeout: 20000 },
+  );
+  const text = (res.stdout + res.stderr).trim();
+  if (/No activities found|monkey aborted/i.test(text)) {
+    throw new Error('该应用没有可启动的桌面入口');
+  }
+  log('success', '应用', `已启动 ${packageName}`);
+  return text;
+}
+
+/** 启用 / 停用应用 */
+export async function setAppEnabled(
+  serial: string | undefined,
+  packageName: string,
+  enabled: boolean,
+): Promise<string> {
+  const s = await ensureDevice(serial);
+  const res = await runAdb(
+    ['-s', s, 'shell', 'pm', enabled ? 'enable' : 'disable-user', '--user', '0', packageName],
+    { source: '应用', timeout: 20000 },
+  );
+  const text = (res.stdout + res.stderr).trim();
+  if (/Error|Exception|does not exist/i.test(text)) throw new Error(text);
+  log('success', '应用', `${enabled ? '已启用' : '已停用'} ${packageName}`);
+  return text || 'ok';
+}
+
+/**
+ * 提取 APK 到电脑
+ *
+ * 流程：pm path 拿设备上的 apk 路径 → 复制到 /sdcard 临时目录
+ *      → adb pull 到本地 → 删掉设备临时文件。
+ * 直接 pull /data/app/... 多数设备会被 SELinux 拦，所以需要中转一次。
+ */
+export async function extractApk(
+  serial: string | undefined,
+  packageName: string,
+  localDir: string,
+): Promise<{ localPath: string; size: number }> {
+  const s = await ensureDevice(serial);
+
+  const pathRes = await runAdb(['-s', s, 'shell', 'pm', 'path', packageName], {
+    silent: true,
+    timeout: 15000,
+  });
+  const remote = pathRes.stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l.startsWith('package:') && l.includes('base.apk'))
+    ?.replace(/^package:/, '');
+
+  const fallback = pathRes.stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l.startsWith('package:'))
+    ?.replace(/^package:/, '');
+
+  const apkRemote = remote || fallback;
+  if (!apkRemote) throw new Error(`未找到 ${packageName} 的 APK 路径（可能是系统应用）`);
+
+  ensureDir(localDir);
+
+  const tempName = `.adbextract_${randomUUID().replace(/-/g, '').slice(0, 10)}.apk`;
+  const tempPath = `/sdcard/${tempName}`;
+
+  // 1) 设备内复制到可读目录
+  const cp = await runAdb(['-s', s, 'shell', 'cp', '-f', apkRemote, tempPath], {
+    silent: true,
+    timeout: 60000,
+  });
+  if (!cp.ok) {
+    // 部分设备 cp 不可用，退回 cat 重定向
+    const cat = await runAdb(['-s', s, 'shell', `cat "${apkRemote}" > ${tempPath}`], {
+      silent: true,
+      timeout: 120000,
+    });
+    if (!cat.ok) {
+      throw new Error(`无法读取 APK：${(cp.stderr || cat.stderr).trim() || '权限不足'}`);
+    }
+  }
+
+  // 2) 拉回本地
+  const localPath = join(localDir, `${packageName}.apk`);
+  const pull = await runAdb(['-s', s, 'pull', tempPath, toPosixPath(localPath)], {
+    source: '应用',
+    silent: true,
+    timeout: 10 * 60 * 1000,
+  });
+
+  // 3) 清理设备临时文件（无论成功与否）
+  await runAdb(['-s', s, 'shell', 'rm', '-f', tempPath], { silent: true, timeout: 15000 });
+
+  if (!pull.ok) {
+    throw new Error(`拉取失败：${(pull.stderr || pull.stdout).trim()}`);
+  }
+
+  const size = safeSize(localPath);
+  log('success', '应用', `已提取 ${packageName}.apk（${formatBytesFallback(size)}）`);
+  return { localPath, size };
 }
 
 /* ------------------------------------------------------------------ */

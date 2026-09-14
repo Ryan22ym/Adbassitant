@@ -6,6 +6,8 @@ import {
   type MirrorOptions,
   type AppSettings,
   type CommandResult,
+  type LogcatFilter,
+  type WeakNetParams,
 } from '../shared/types';
 import {
   listDevices,
@@ -37,7 +39,35 @@ import {
   installApk,
   listPackages,
   runMonkey,
+  listAppsDetailed,
+  getAppDetail,
+  uninstallApp,
+  forceStopApp,
+  clearAppData,
+  launchApp,
+  setAppEnabled,
+  extractApk,
 } from './services/files';
+import {
+  startLogcat,
+  stopLogcat,
+  getLogcatStatus,
+  clearLogcatBuffer,
+  saveLogcat,
+  listProcesses,
+  setLogcatLinesSink,
+  setLogcatStatusSink,
+} from './services/logcat';
+import {
+  startWeakNet,
+  stopWeakNet,
+  getWeakNetStatus,
+  listPresets,
+  savePreset,
+  deletePreset,
+  probeDevice,
+  setWeakNetStatusSink,
+} from './services/weaknet';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog } from './services/logger';
 import { getSettings, saveSettings, resolveDir } from './services/settings';
 import { checkEnv } from './env-check';
@@ -78,6 +108,12 @@ export function registerIpc() {
   setLogPushSink((entry) => send(IPC.PUSH_LOG, entry));
 
   setMirrorStatusSink((s) => send(IPC.PUSH_MIRROR_STATUS, s));
+
+  setLogcatLinesSink((lines) => send(IPC.PUSH_LOGCAT_LINES, lines));
+
+  setLogcatStatusSink((s) => send(IPC.PUSH_LOGCAT_STATUS, s));
+
+  setWeakNetStatusSink((s) => send(IPC.PUSH_WEAKNET_STATUS, s));
 
   /* ---------------- 环境 ---------------- */
 
@@ -321,13 +357,6 @@ export function registerIpc() {
   /* ---------------- 应用 / Monkey ---------------- */
 
   ipcMain.handle(
-    IPC.APP_LIST,
-    wrap((_e, serial: string | undefined, includeSystem = true) =>
-      listPackages(serial, includeSystem),
-    ),
-  );
-
-  ipcMain.handle(
     IPC.MONKEY_RUN,
     wrap(
       async (
@@ -404,6 +433,122 @@ export function registerIpc() {
   );
 
   ipcMain.handle(IPC.LOG_LIST_ALL, wrap(() => getLogs()));
+
+/* ---------------- 应用管理（v1.0） ---------------- */
+
+  ipcMain.handle(
+    IPC.APP_LIST,
+    wrap((_e, serial: string | undefined, includeSystem = true) =>
+      listPackages(serial, includeSystem),
+    ),
+  );
+
+  ipcMain.handle(
+    IPC.APP_DETAIL,
+    wrap((_e, serial: string | undefined, pkg: string) => getAppDetail(serial, pkg)),
+  );
+
+  ipcMain.handle(
+    IPC.APP_UNINSTALL,
+    wrap((_e, serial: string | undefined, pkg: string, keepData = false) =>
+      uninstallApp(serial, pkg, keepData),
+    ),
+  );
+
+  ipcMain.handle(
+    IPC.APP_FORCE_STOP,
+    wrap((_e, serial: string | undefined, pkg: string) => forceStopApp(serial, pkg)),
+  );
+
+  ipcMain.handle(
+    IPC.APP_CLEAR_DATA,
+    wrap((_e, serial: string | undefined, pkg: string) => clearAppData(serial, pkg)),
+  );
+
+  ipcMain.handle(
+    IPC.APP_LAUNCH,
+    wrap((_e, serial: string | undefined, pkg: string) => launchApp(serial, pkg)),
+  );
+
+  ipcMain.handle(
+    IPC.APP_SET_ENABLED,
+    wrap((_e, serial: string | undefined, pkg: string, enabled: boolean) =>
+      setAppEnabled(serial, pkg, enabled),
+    ),
+  );
+
+  ipcMain.handle(IPC.APP_EXTRACT_APK, wrap((_e, serial: string | undefined, pkg: string) => {
+    const dir = resolveDir('pull');
+    ensureDir(dir);
+    return extractApk(serial, pkg, dir);
+  }));
+
+  /* ---------------- 实时 Logcat（v1.0） ---------------- */
+
+  ipcMain.handle(
+    IPC.LOGCAT_START,
+    wrap((_e, serial: string | undefined, filter?: Partial<LogcatFilter>) =>
+      startLogcat(serial, filter),
+    ),
+  );
+
+  ipcMain.handle(IPC.LOGCAT_STOP, wrap(() => stopLogcat()));
+  ipcMain.handle(IPC.LOGCAT_STATUS, wrap(() => getLogcatStatus()));
+
+  ipcMain.handle(IPC.LOGCAT_CLEAR, wrap(() => clearLogcatBuffer()));
+
+  ipcMain.handle(
+    IPC.LOGCAT_SAVE,
+    wrap(async (_e, meta?: Record<string, string>) => {
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, '0');
+      const defaultName = `logcat_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.txt`;
+
+      const r = await dialog.showSaveDialog({
+        title: '保存 Logcat',
+        defaultPath: join(resolveDir('pull'), defaultName),
+        filters: [{ name: '文本文件', extensions: ['txt'] }],
+      });
+      if (r.canceled || !r.filePath) return null;
+
+      const result = saveLogcat(r.filePath, meta);
+      log('success', 'Logcat', `已保存到 ${r.filePath}`);
+      return result;
+    }),
+  );
+
+  ipcMain.handle(
+    IPC.LOGCAT_PROCESSES,
+    wrap((_e, serial?: string) => listProcesses(serial)),
+  );
+
+  /* ---------------- 弱网模拟（v1.0） ---------------- */
+
+  ipcMain.handle(
+    IPC.WEAKNET_START,
+    wrap((_e, serial: string | undefined, params: WeakNetParams) =>
+      startWeakNet(serial, params),
+    ),
+  );
+
+  ipcMain.handle(IPC.WEAKNET_STOP, wrap(() => stopWeakNet()));
+  ipcMain.handle(IPC.WEAKNET_STATUS, wrap(() => getWeakNetStatus()));
+  ipcMain.handle(IPC.WEAKNET_PRESET_LIST, wrap(() => listPresets()));
+
+  ipcMain.handle(
+    IPC.WEAKNET_PRESET_SAVE,
+    wrap((_e, name: string, params: WeakNetParams) => savePreset(name, params)),
+  );
+
+  ipcMain.handle(
+    IPC.WEAKNET_PRESET_DELETE,
+    wrap((_e, id: string) => deletePreset(id)),
+  );
+
+  ipcMain.handle(
+    IPC.WEAKNET_PROBE,
+    wrap((_e, serial?: string) => probeDevice(serial)),
+  );
 
   /* ---------------- 设置 ---------------- */
 
