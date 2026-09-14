@@ -273,6 +273,19 @@ GUI 程序必须让它自己决定窗口可见性。
 > koffi 3.x 的 API 与 2.x 不兼容，且**回调内调 `koffi.decode` 会段错误**；
 > 若将来仍需 FFI，细节见 `docs/test-mirror-icon.txt`。
 
+### ⚠️ 验收脚本的静默兜底会把「脚本坏了」伪装成「功能失败」
+
+`e2e-mirror-installed.cjs` 曾在 `catch { return [] }` 里调用一个**从未入库**的
+`scripts/enum-windows.py`（仓库里只有 `enum-windows2.py`，而且它用 `--exe` 传参、
+不接受位置参数）。异常被吞掉后窗口枚举恒返回空数组，于是 Stage 5 最后两项
+「scrcpy 窗口被创建 / 真实可见」**永远 FAIL** —— 看起来像产品缺陷，实际是脚本自己坏了。
+
+**规则**：验收脚本里的异常兜底至少要打到日志。`catch { return [] }` 这种写法会把
+排查方向直接带偏；遇到"恒定失败"先怀疑判据本身，别急着改产品代码。
+
+相关：Stage 5/6 靠 python 枚举窗口，脚本读 `process.env.PYTHON || 'python'`。
+本机若 `python` 不是托管版本，需显式 `export PYTHON=<托管 python 绝对路径>`。
+
 ### ⚠️ QtScrcpy 与 scrcpy 同名，别用 `taskkill /IM`
 
 用户机器上很可能同时装着 QtScrcpy，它的进程名也叫 `scrcpy.exe`。
@@ -416,27 +429,33 @@ ADB_OUT_DIR=out-v1.1 node scripts/e2e-packaged.cjs
 ```
 
 > 跑之前先 `unset ELECTRON_RUN_AS_NODE`（脚本内部也会 delete，但父子都干净更稳）。
-> Stage 1/2/3 可直接用 `node` 跑；Stage 5/6 需要真机。
+> Stage 1/2/3 可直接用 `node` 跑；**Stage 5/6 需要真机**，还要
+> `export PYTHON=<托管 python 的绝对路径>` —— 它们靠 python 枚举窗口来断言窗口真实可见，
+> 而系统里的 `python` 可能不是托管版本。
 
 | 阶段 | 结果 | 覆盖内容 |
 |---|---|---|
-| Stage 1 | **12/12** | 产物存在、随包二进制齐全、进程启动、asar 加载、React 挂载、preload 34 方法、设备枚举、环境自检、6 路由渲染、日志落地、正常退出 |
+| Stage 1 | **12/12** | 产物存在、随包二进制齐全、进程启动、asar 加载、React 挂载、preload **54** 方法、设备枚举、环境自检、**9 路由**渲染、日志落地、正常退出 |
 | Stage 2 | **9/9** | 分辨率 `720x1600/320dpi`、截图落地合法 PNG、`shell getprop` 返回机型、投屏启停、日志、设置持久化 |
 | Stage 3 | **7/7** | portable 自解压 → `%TEMP%` 目录加载页面 → React 挂载 → 环境自检 |
-| Stage 4 | **13/13** | 安装目录/主程序/卸载器落地、resources/bin 12 文件、从安装目录启动、页面从安装路径加载、设备枚举、真实功能实测、正常退出 |
-| Stage 5 | **12/12** | 走真实界面路径点「启动投屏」→ 接口 running、窗口对象创建、**窗口真实可见** |
+| Stage 4 | **13/13** | 安装目录/主程序/卸载器落地、resources/bin 14 文件、从安装目录启动、页面从安装路径加载、设备枚举、真实功能实测、正常退出 |
+| Stage 5 | **12/12** | 走真实界面路径点「启动投屏」→ 接口 running、窗口对象创建、**窗口真实可见（3 秒内）** |
 | Stage 6 | **14/14** | 两个图标文件内容不同、投屏窗口 `SDL_app` 真实可见、**读 scrcpy 进程环境块确认 `SCRCPY_ICON_PATH` 指向 `scrcpy-icon.png`** |
+| **合计** | **67/67** | v1.0.0 六段全绿（Stage 4~6 跑的是 NSIS 真实安装版） |
 
-结果归档在 `docs/test-packaged-stage{1,2,3,4}.txt` 与 `docs/test-mirror-icon.txt`。
+结果归档在 `docs/test-packaged-stage{1,2,3,4,5}.txt`、`docs/test-mirror-icon.txt` 与 `docs/test-v1.txt`。
 
 > **Stage 6 的判据设计**：不靠 UI 状态、不靠时序，直接读 scrcpy 子进程的 **PEB 环境块**
 > （`NtQueryInformationProcess` + `ReadProcessMemory`，见 `scripts/verify-scrcpy-env.py`），
 > 确认 `SCRCPY_ICON_PATH` 真的传进去了。窗口可见性只是辅助判据 —— 图标生效与否
 > 归根到底是"环境变量到没到"，读环境块才是充分证据。
 
-> Stage 4 需要先真实安装一次。NSIS 静默安装的正确姿势：
-> 从 **cmd** 调用 `Setup.exe /S /D=<绝对路径>`，`/D=` 必须是最后一个参数、路径不能加引号。
-> 从 bash/PowerShell 直接传参会因反斜杠转义和字符编码导致路径畸变，务必写成 `.bat` 再用 `cmd /c` 执行。
+> Stage 4 需要先真实安装一次（会**覆盖**已装的旧版本）。NSIS 静默覆盖安装的正解：
+> 把安装包复制到 `%TEMP%` 的 **ASCII 路径**，再用 Python 以 **list 形式**直接调 exe ——
+> `subprocess.Popen([setup, '/S', '/D=' + 目标目录])`。不经 shell，参数零歧义；
+> per-user 安装**无需 UAC**，`RC=0` 即成功，注册表 `DisplayVersion` 会同步更新。
+> `/D=` 必须是最后一个参数且路径不能加引号。从 bash/PowerShell 直接传参会因反斜杠转义
+> 和字符编码导致路径畸变（装到错误位置），写成 `.bat` + `cmd /c` 也行，但要保证纯 ASCII。
 
 > **Stage 5 的设计要点**：必须**走真实用户路径**（切投屏页 → 找按钮 → `element.click()`），
 > 不能直接调 `window.adbApi.startMirror()`。绕开界面的测试会漏掉
