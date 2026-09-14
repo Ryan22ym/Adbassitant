@@ -1,0 +1,31 @@
+生产包验收 · Stage 5：安装版投屏端到端
+
+验证目标：走真实用户路径（启动安装版 → 切投屏页 → 真实点击「启动投屏」）后，
+scrcpy 投屏窗口必须真实可见（IsWindowVisible === true），而不是只看进程存活。
+
+修复背景：
+  spawnBinary() 曾传 windowsHide:true，导致 scrcpy(SDL2) 继承 STARTF_USESHOWWINDOW+SW_HIDE，
+  窗口对象创建成功（HWND/尺寸/位置都对）但 IsWindowVisible 恒为 false，
+  屏幕上和任务栏里都看不到。对照实验：windowsHide:false → 3s 内可见；true → 15s+ 不可见。
+
+脚本：scripts/e2e-mirror-installed.cjs   （npm run test:mirror:installed）
+
+────────────────────────────────────────────
+
+=== Stage 5 · 安装版投屏最终验收 ===
+
+[PASS] exe 存在于安装目录 :: C:\Users\yangming\AppData\Local\Programs\ADBAssistant\ADB桌面助手.exe
+[PASS] resources/bin 随包二进制齐全
+[PASS] 调试端点就绪
+[PASS] 页面从安装目录加载 :: file:///C:/Users/yangming/AppData/Local/Programs/ADBAssistant/resources/app.asar/dist/index.html
+[PASS] 首屏渲染完成
+[PASS] 检测到在线设备 :: 4 台
+[PASS] 投屏页存在「启动投屏」按钮 :: {"found":true,"disabled":false}
+[PASS] 按钮可点击
+[PASS] 按钮点击成功 :: {"ok":true}
+   2s ✓ 可见窗口: ["ADB助手 - aaab4f58"]
+[PASS] 接口报告投屏运行中
+[PASS] scrcpy 窗口被创建 :: ADB助手 - aaab4f58
+[PASS] ★ scrcpy 窗口真实可见 :: ADB助手 - aaab4f58
+
+===== 12/12 通过 =====

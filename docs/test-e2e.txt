@@ -1,0 +1,13 @@
+=== E2E start ===
+目标设备: aaab4f58 (OPPO CPH1931)
+[PASS] 读取分辨率 :: 720x1600 / 320dpi
+[PASS] 截图并保存 PNG :: 4.5KB, 1306ms, PNG头=true
+[PASS] 执行 adb 命令 :: model=CPH1931
+[PASS] 读取应用列表 :: 30 个第三方应用
+[PASS] push/pull 往返一致性 :: 内容一致(e2e-roundtrip.txt)
+[PASS] 日志记录与导出 :: 2156B / 32 行
+[PASS] 分辨率修改与恢复 :: 720x1600 → 720x1280 → 720x1600
+[PASS] 投屏启动 :: pid=33044, alive=true
+[PASS] 投屏停止 :: 已停止
+
+总计 9 项，失败 0 项

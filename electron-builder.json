@@ -1,0 +1,57 @@
+{
+  "appId": "com.xiaoyang.adbassistant",
+  "productName": "ADB桌面助手",
+  "directories": {
+    "output": "build-output",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "package.json",
+    "!**/*.map"
+  ],
+  "extraResources": [
+    {
+      "from": "bin",
+      "to": "bin",
+      "filter": [
+        "**/*"
+      ]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      },
+      {
+        "target": "portable",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-v${version}-${arch}.${ext}",
+    "icon": "build/icon.ico",
+    "verifyUpdateCodeSignature": false
+  },
+  "forceCodeSigning": false,
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "ADB桌面助手",
+    "installerIcon": "build/icon.ico",
+    "uninstallerIcon": "build/icon.ico"
+  },
+  "portable": {
+    "artifactName": "${productName}-v${version}-portable.${ext}"
+  },
+  "compression": "normal",
+  "asar": true
+}

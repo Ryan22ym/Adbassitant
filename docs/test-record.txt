@@ -1,0 +1,8 @@
+=== record e2e ===
+[PASS] 投屏录制 MP4 :: 453.4KB
+[PASS] 启动设备录屏 :: id=382730d7
+[PASS] 设备录屏完成并本地落地 :: 99.6KB -> screenrecord_20260911_200807.mp4
+[PASS] 截图落地默认目录 :: C:\Users\yangming\Pictures\ADB助手\screenshot_20260911_200820.png
+[PASS] 设置持久化 :: theme=dark
+
+总计 5 项，失败 0 项

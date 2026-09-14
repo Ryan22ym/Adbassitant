@@ -1,0 +1,14 @@
+投屏端到端验证 · 2026-09-14T03:08:47.746Z
+exe: D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v2\win-unpacked\ADB桌面助手.exe
+
+[PASS] 起始状态无残留进程 :: 已清理
+[PASS] 设备就绪 :: 3 台
+[PASS] 「启动投屏」按钮存在且可用 :: {"found":true,"disabled":false}
+[PASS] scrcpy 进程被拉起 :: 持续 15s 存活
+[PASS] getMirrorStatus 返回 running=true :: pid=56112
+[PASS] 界面状态显示运行中
+[FAIL] 存在 scrcpy 投屏窗口 :: 未找到窗口
+[PASS] 投屏可停止
+[PASS] 停止后 scrcpy 已退出 :: 0 个残留
+
+合计：8/9 通过

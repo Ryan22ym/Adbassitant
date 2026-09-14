@@ -1,0 +1,14 @@
+生产包验收 Stage 2 · 2026-09-14T02:13:32.115Z
+exe: D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1\win-unpacked\ADB桌面助手.exe
+
+[PASS] 生产版页面就绪 :: index.html
+[PASS] 找到就绪设备 :: aaab4f58
+[PASS] 读取分辨率 :: {"physical":"720x1600","current":"720x1600","density":320}
+[PASS] 截图落地为合法 PNG :: screenshot_20260914_101322.png  392.1 KB
+[PASS] 执行 adb 命令 :: CPH1931
+[PASS] 投屏启动且进程存活 :: running=true pid=45392 alive=true
+[PASS] 投屏可正常停止 :: running=false
+[PASS] 运行日志可读取 :: 27 条
+[PASS] 设置可读写 :: theme=dark
+
+合计：9/9 通过

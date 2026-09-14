@@ -1,0 +1,23 @@
+
+
+========== 冒烟测试结果 ==========
+[PASS] IPC 注册
+[PASS] 环境: adb :: v1.0.41
+[PASS] 环境: scrcpy :: v3.1
+[PASS] 环境: scrcpy-server
+[PASS] 环境: AdbWinApi.dll
+[PASS] 环境: AdbWinUsbApi.dll
+[PASS] 环境自检总体
+[PASS] 设备枚举 :: 发现 3 台: aaab4f58(device), emulator-5556(offline), emulator-5558(offline)
+[PASS] 页面加载
+[PASS] React 挂载
+[PASS] 侧边栏渲染 :: 导航项 6 个
+[PASS] 品牌标题 :: ADB 助手
+[PASS] 页面标题 :: 设备
+[PASS] 主题属性 :: light
+[PASS] preload 桥接 :: 34 个方法
+[PASS] 渲染层→主进程 IPC :: 设备 3 台
+[PASS] 渲染层环境自检 IPC :: allOk=true, 5 项
+[PASS] 控制台错误 :: 无
+==================================
+总计 18 项，失败 0 项

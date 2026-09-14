@@ -1,0 +1,216 @@
+/* ==================================================================
+   设计系统 —— 全局变量与基础样式
+   原则：浅色为默认，深色通过 [data-theme="dark"] 覆盖
+   ================================================================== */
+
+:root {
+  /* 中性色 */
+  --bg-app: #f5f6f8;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #fafbfc;
+  --bg-hover: #f0f2f5;
+  --bg-active: #e8ecf2;
+  --bg-inset: #f7f8fa;
+
+  /* 边框 */
+  --border: #e4e7ec;
+  --border-strong: #d0d5dd;
+
+  /* 文本 */
+  --text-primary: #1a1d21;
+  --text-secondary: #5b6470;
+  --text-tertiary: #8b95a3;
+  --text-inverse: #ffffff;
+
+  /* 主色 */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #eff4ff;
+  --accent-border: #c7d7fe;
+
+  /* 语义色 */
+  --success: #16a34a;
+  --success-soft: #f0fdf4;
+  --warn: #d97706;
+  --warn-soft: #fffbeb;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+
+  /* 终端/代码块 */
+  --code-bg: #1e222a;
+  --code-text: #d6deeb;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 2px 8px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.1);
+
+  /* 圆角 */
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 13px;
+  --r-full: 999px;
+
+  /* 尺寸 */
+  --sidebar-w: 208px;
+  --header-h: 56px;
+
+  /* 动效 */
+  --t-fast: 0.12s ease;
+  --t-base: 0.2s ease;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI',
+    'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-mono: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+}
+
+[data-theme='dark'] {
+  --bg-app: #131519;
+  --bg-surface: #1a1d23;
+  --bg-surface-2: #20242b;
+  --bg-hover: #252a32;
+  --bg-active: #2c323b;
+  --bg-inset: #16191e;
+
+  --border: #2a2f38;
+  --border-strong: #3a414c;
+
+  --text-primary: #e8ebf0;
+  --text-secondary: #9aa4b2;
+  --text-tertiary: #6b7686;
+  --text-inverse: #16181d;
+
+  --accent: #4d84f5;
+  --accent-hover: #6b98f7;
+  --accent-soft: #1c2740;
+  --accent-border: #2f4370;
+
+  --success: #34d058;
+  --success-soft: #14281a;
+  --warn: #e3a008;
+  --warn-soft: #2a2110;
+  --danger: #f2555a;
+  --danger-soft: #2c1518;
+
+  --code-bg: #0f1115;
+  --code-text: #cdd6e4;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------------- 重置 ---------------- */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  transition: background var(--t-base), color var(--t-base);
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  outline: none;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+input,
+textarea {
+  user-select: text;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--r-full);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  background-clip: content-box;
+}
+
+/* 可选中文本 */
+.selectable {
+  user-select: text;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* 动画 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.22s ease both;
+}

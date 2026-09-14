@@ -1,0 +1,115 @@
+=== 投屏窗口图标区分 — 验收报告 ===
+日期: 2026-09-14
+产物: out-icon2\ADB桌面助手-v0.9.0-x64.exe (84.06 MB)
+安装: %LOCALAPPDATA%\Programs\ADBAssistant (NSIS 静默 /S, RC=0)
+
+──────────────────────────────────────────────
+需求
+──────────────────────────────────────────────
+任务栏里「ADB 桌面助手」主窗口与 scrcpy 投屏窗口图标完全相同，无法区分。
+期望：投屏窗口显示 scrcpy 原生图标（绿色机器人），主窗口保持应用图标。
+
+──────────────────────────────────────────────
+根因
+──────────────────────────────────────────────
+scrcpy 3.1 的窗口图标查找规则（binary 内硬编码）：
+  1. 环境变量 SCRCPY_ICON_PATH  （最高优先级）
+  2. exe 同目录的 icon.png       （portable 模式）
+  3. 编译期内置图标             （仅在显式 CObjMacros 编译时才有）
+
+我们随包分发的 bin/ 目录里放了应用图标 bin/icon.png，而 scrcpy.exe 正好也
+在 bin/ 下，于是它就"顺手"把我们的应用图标当成了自己的窗口图标。
+
+debug 日志实锤：
+  DEBUG: Using icon (portable): ...\resources\bin\icon.png
+
+──────────────────────────────────────────────
+修复
+──────────────────────────────────────────────
+1. 从 scrcpy.exe 的 PE 资源里提取官方图标（RT_GROUP_ICON + RT_ICON 重组 ICO）
+   → scripts/extract-scrcpy-icon.py
+   → build/scrcpy.ico (8840 B) → bin/scrcpy-icon.png (8818 B, 256x256)
+
+2. electron/services/adb.ts
+   - 新增 scrcpyIconPath(): 在 bin/ 下查找 scrcpy-icon.png / scrcpy.ico
+   - spawnBinary() 新增 extraEnv 参数，合并进子进程环境
+
+3. electron/services/mirror.ts
+   - startMirror 注入 SCRCPY_ICON_PATH=<bin>/scrcpy-icon.png
+
+验证日志实锤：
+  DEBUG: Using SCRCPY_ICON_PATH: ...\resources\bin\scrcpy-icon.png
+
+──────────────────────────────────────────────
+方案演进（走过的弯路，供后人避坑）
+──────────────────────────────────────────────
+先尝试了 Win32 硬改窗体图标：koffi FFI + SetClassLongPtrW(GCLP_HICON)
++ WM_SETICON + SetWindowPos。在记事本上验证可改（wmIcon 0 → 1113729171），
+但发现 scrcpy 官方已原生支持 SCRCPY_ICON_PATH，遂整体废弃该方案，
+`npm uninstall koffi`，移除 window-icon.ts / win32.ts / window-enum.ts，
+还原 electron-builder.json 的 asarUnpack。包体回到 84.06 MB。
+
+koffi 3.x 踩坑记录（若将来仍要用 FFI）：
+  - 函数挂在库对象上: lib.func('EnumWindows', ret, params)
+    （不是 2.x 的 koffi.func(lib, ...)）
+  - 回调类型 = koffi.pointer(koffi.proto('bool __stdcall X(HWND_t, intptr)'))
+    __stdcall 不能省；回调可直接传 JS 函数，不必 koffi.register
+  - ⚠️ 回调内绝对不能调 koffi.decode(ptr, ...) → 段错误 (RC=139)
+    回调收到的 HWND 已经是 BigInt，直接 Number(hwnd) 即可
+  - HWND 等 Win32 别名不是内置类型，需 koffi.alias
+
+──────────────────────────────────────────────
+验收（安装版，走真实界面路径）
+──────────────────────────────────────────────
+脚本: scripts/e2e-mirror-icon.cjs
+路径: 启动安装版 exe → CDP 注入 location.hash='#/mirror' → 真实 btn.click()
+
+结果: 14/14 PASS
+
+[PASS] exe 存在于安装目录
+[PASS] 应用图标 bin/icon.png 存在
+[PASS] 投屏图标 bin/scrcpy-icon.png 存在
+[PASS] 两个图标文件内容不同 :: app=847785B / scrcpy=8818B
+[PASS] 调试端点就绪
+[PASS] 首屏渲染完成
+[PASS] 检测到在线设备 :: 4 台
+[PASS] 点击「启动投屏」
+[PASS] ★ scrcpy 窗口真实可见 :: 0x191ae4 "ADB助手 - aaab4f58" SDL_app
+[PASS] 窗口类为 SDL_app
+[PASS] 窗口尺寸合理 :: 480x1073
+[PASS] 取到 scrcpy 进程 pid :: 53732
+[PASS] ★ scrcpy 进程环境块含 SCRCPY_ICON_PATH
+       = C:\Users\yangming\AppData\Local\Programs\ADBAssistant\resources\bin\scrcpy-icon.png
+[PASS] 图标路径指向 scrcpy-icon.png（非主程序 icon.png）
+
+最后两条是硬证据：直接读 scrcpy 进程的 PEB 环境块，
+不依赖 UI 状态、不依赖时序。实现见 scripts/verify-scrcpy-env.py。
+
+配套工具:
+  scripts/find-scrcpy-pid.py    按完整路径定位我们的 scrcpy（排除 QtScrcpy）
+  scripts/verify-scrcpy-env.py  读任意 pid 环境块 / 独立起 scrcpy 做冒烟验证
+
+──────────────────────────────────────────────
+⚠️ 环境陷阱（重要）
+──────────────────────────────────────────────
+1. Q t S c r c p y 同 名 陷 阱
+   用户机器上装了 QtScrcpy，其进程名也是 scrcpy.exe。
+   - `taskkill /IM scrcpy.exe` 会误杀用户的 QtScrcpy
+   - PowerShell `-like '*scrcpy.exe'` 同样会误匹配
+   必须用完整路径结尾精确匹配: \resources\bin\scrcpy.exe
+
+2. 枚举窗口的 ctypes 回调签名
+   ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM) 在 64 位下宽度不对，
+   会导致枚举结果恒为空（误判"没有窗口"）。
+   正确写法: ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+3. 安装目录被占用
+   旧版实例在运行时会锁住安装目录，NSIS 安装返回 RC=2 且文件不全。
+   `taskkill` 可能报"没有此任务的实例"（权限受限），改用
+   PowerShell `Stop-Process -Force` 可成功。
+
+──────────────────────────────────────────────
+遗留
+──────────────────────────────────────────────
+- 内核级僵尸 scrcpy.exe (PID 63660) 无法删除，不影响安装，重启回收
+- 中间产物目录 out-icon / out-icon2 / out-v1~v5 / build-output (~2.5 GB) 待清

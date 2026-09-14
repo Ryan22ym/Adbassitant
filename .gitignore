@@ -1,0 +1,36 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+dist-electron/
+release/
+bin/
+
+# 打包产物
+dist-release/
+dist-release-broken-*/
+dist-release.broken-*/
+dist-pkg/
+
+# 中间产物 / 试验输出
+out-*/
+build-output/
+eb-mirror/
+ui-shots/
+e2e-tmp/
+
+# 日志与调试产物
+*.log
+*-output.txt
+screenshot-app.*
+window.png
+bounds.txt
+lockers.txt
+_procs.txt
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
