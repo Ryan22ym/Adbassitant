@@ -18,7 +18,9 @@ const path = require('path');
 const fs = require('fs');
 
 const ROOT = path.resolve(__dirname, '..');
-const EXE = path.join(ROOT, 'out-v1', 'win-unpacked', 'ADB桌面助手.exe');
+// 产物目录可通过 ADB_OUT_DIR 覆盖（历史上输出目录被句柄锁住时需要换名打包）
+const OUT_DIR = process.env.ADB_OUT_DIR || 'out-v1';
+const EXE = path.join(ROOT, OUT_DIR, 'win-unpacked', 'ADB桌面助手.exe');
 const PORT = 9333;
 
 const results = [];
@@ -129,7 +131,7 @@ class CDP {
   check('生产 exe 存在', true, `${exeSize} MB  ${EXE}`);
 
   // 生产环境 bin 目录（extraResources 落地位置）
-  const binDir = path.join(ROOT, 'out-v1', 'win-unpacked', 'resources', 'bin');
+  const binDir = path.join(ROOT, OUT_DIR, 'win-unpacked', 'resources', 'bin');
   const need = ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll', 'scrcpy.exe', 'scrcpy-server',
     'SDL2.dll', 'avcodec-61.dll', 'avformat-61.dll', 'avutil-59.dll', 'swresample-5.dll', 'libusb-1.0.dll'];
   const missing = need.filter((f) => !fs.existsSync(path.join(binDir, f)));
@@ -261,7 +263,8 @@ class CDP {
   }
 
   // —— 页面路由可达性 ——
-  const routes = ['#/', '#/mirror', '#/tools', '#/command', '#/logs', '#/settings'];
+  const routes = ['#/', '#/mirror', '#/tools', '#/apps', '#/logcat', '#/weaknet',
+    '#/command', '#/logs', '#/settings'];
   const routeOk = await cdp.eval(`(async () => {
     const out = [];
     for (const h of ${JSON.stringify(routes)}) {

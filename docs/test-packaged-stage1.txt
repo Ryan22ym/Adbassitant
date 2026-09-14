@@ -1,17 +1,17 @@
-生产包验收 Stage 1 · 2026-09-14T02:13:12.631Z
-exe: D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1\win-unpacked\ADB桌面助手.exe
+生产包验收 Stage 1 · 2026-09-14T07:06:42.822Z
+exe: D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1.0\win-unpacked\ADB桌面助手.exe
 
-[PASS] 生产 exe 存在 :: 180.1 MB  D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1\win-unpacked\ADB桌面助手.exe
+[PASS] 生产 exe 存在 :: 180.1 MB  D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1.0\win-unpacked\ADB桌面助手.exe
 [PASS] 随包二进制齐全 :: 11 个文件
-[PASS] 生产进程启动 :: pid=55508
-[PASS] 远程调试端点就绪 :: file:///D:/WorkSpace/%E6%89%8B%E6%9C%BA%E5%8A%A9%E6%89%8B/adb-assistant-v0.9/out-v1/win-unpacked/resources/app.asar/dist/index.html
-[PASS] 页面从 asar 加载成功 :: file:///D:/WorkSpace/%E6%89%8B%E6%9C%BA%E5%8A%A9%E6%89%8B/adb-assistant-v0.9/out-v1/win-unpacked/resources/app.asar/dist/index.html
+[PASS] 生产进程启动 :: pid=26372
+[PASS] 远程调试端点就绪 :: file:///D:/WorkSpace/%E6%89%8B%E6%9C%BA%E5%8A%A9%E6%89%8B/adb-assistant-v0.9/out-v1.0/win-unpacked/resources/app.asar/dist/index.html
+[PASS] 页面从 asar 加载成功 :: file:///D:/WorkSpace/%E6%89%8B%E6%9C%BA%E5%8A%A9%E6%89%8B/adb-assistant-v0.9/out-v1.0/win-unpacked/resources/app.asar/dist/index.html
 [PASS] React 已挂载 :: root 子节点 1
-[PASS] preload 桥接就绪 :: 34 个方法
-[PASS] 随包 adb 枚举设备 :: 3 台（就绪 1）: aaab4f58, emulator-5556, emulator-5558
+[PASS] preload 桥接就绪 :: 54 个方法
+[PASS] 随包 adb 枚举设备 :: 3 台（就绪 2）: aaab4f58, emulator-5556, emulator-5558
 [PASS] 环境自检项存在 :: 5 项
-[PASS] 全部页面可渲染 :: 6 个路由
-[PASS] 运行日志有内容 :: 9 条
+[PASS] 全部页面可渲染 :: 9 个路由
+[PASS] 运行日志有内容 :: 13 条
 [PASS] 生产进程可正常退出 :: 已退出
 
 合计：12/12 通过

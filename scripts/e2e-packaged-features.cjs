@@ -15,7 +15,9 @@ const fs = require('fs');
 const os = require('os');
 
 const ROOT = path.resolve(__dirname, '..');
-const EXE = path.join(ROOT, 'out-v1', 'win-unpacked', 'ADB桌面助手.exe');
+// 产物目录可通过 ADB_OUT_DIR 覆盖（历史上输出目录被句柄锁住时需要换名打包）
+const OUT_DIR = process.env.ADB_OUT_DIR || 'out-v1';
+const EXE = path.join(ROOT, OUT_DIR, 'win-unpacked', 'ADB桌面助手.exe');
 const PORT = 9334;
 
 const results = [];

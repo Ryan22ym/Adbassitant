@@ -17,7 +17,17 @@ const fs = require('fs');
 const os = require('os');
 
 const ROOT = path.resolve(__dirname, '..');
-const EXE = path.join(ROOT, 'out-v1', 'ADB桌面助手-v0.9.0-portable.exe');
+// 产物目录可通过 ADB_OUT_DIR 覆盖；portable 文件名带版本号，动态匹配避免写死
+const OUT_DIR = process.env.ADB_OUT_DIR || 'out-v1';
+function findPortable() {
+  const dir = path.join(ROOT, OUT_DIR);
+  if (fs.existsSync(dir)) {
+    const hit = fs.readdirSync(dir).find((f) => /-portable\.exe$/i.test(f));
+    if (hit) return path.join(dir, hit);
+  }
+  return path.join(dir, 'ADB桌面助手-portable.exe');
+}
+const EXE = findPortable();
 const PORT = 9335;
 
 const results = [];

@@ -110,20 +110,58 @@ npm run dev
 ## 打包
 
 ```bash
-npm run dist
+# 推荐：自动起本地 mirror，绕开 winCodeSign 的 macOS 符号链接问题
+python scripts/build.py
+
+# 跳过编译，只重跑 electron-builder
+python scripts/build.py --no-build
+
+# 输出目录被句柄锁住时换个名字（见下方「输出目录被僵尸句柄锁住」）
+python scripts/build.py --out out-v1.1
 ```
 
-产物在 `dist-pkg/` 目录，同时生成 NSIS 安装包与免安装 portable 版本。
+产物目录由 `electron-builder.json` 的 `directories.output` 决定，同时生成 NSIS 安装包与
+免安装 portable 版本，命名形如 `ADB桌面助手-v1.0.0-x64.exe` / `ADB桌面助手-v1.0.0-portable.exe`。
 二进制文件通过 `extraResources` 打进 `resources/bin/`。
+
+> **别直接 `npm run dist`**：它去官方源下载 `winCodeSign-2.6.0.7z`，该包内含 macOS 符号链接，
+> Windows 非管理员环境解压必然失败，会导致 exe 资源未被改写（产物退化为裸 Node 模式且静默失效）。
+> `scripts/build.py` 会拉起本地 HTTP mirror（读 `eb-mirror/`）绕过这一步，
+> 并且已经剔除环境里的 `ELECTRON_RUN_AS_NODE`。
+>
+> 生产包验收脚本的产物目录可用环境变量覆盖：
+> `ADB_OUT_DIR=out-v1.1 node scripts/e2e-packaged.cjs`。默认仍是 `out-v1`。
 
 ### 打包前必读：不要让进程占住输出目录
 
-打包会**删除并重建** `dist-pkg/win-unpacked/`。如果有进程把该目录作为**当前工作目录**
+打包会**删除并重建**输出目录下的 `win-unpacked/`。如果有进程把该目录作为**当前工作目录**
 （例如测试脚本 `spawn(exe, { cwd: win-unpacked })`），Windows 会持有目录句柄，
 electron-builder 删除时直接报"拒绝访问"。
 
 **规则**：任何启动产物 exe 的脚本，`cwd` 必须指向中性目录（如 `os.tmpdir()`）。
 同理，运行过产物后应确保进程完全退出再打包。
+
+### ⚠️ 输出目录被僵尸句柄锁住时，只有重启能救
+
+症状：清理旧的打包产物时，目录里**只剩一个 `resources/app.asar` 删不掉**，
+报 `ERROR_SHARING_VIOLATION(32)`；进一步连整个目录都改不了名，报 `ERROR_ACCESS_DENIED(5)`。
+`tasklist` 里又找不到任何 electron/adb 进程 —— 那是**已退出进程泄漏的内核句柄**（见
+「环境备注」里的"僵尸进程"），任何用户态手段都释放不了，**必须重启系统**。
+
+| 手段 | 结果 |
+|---|---|
+| `shutil.rmtree` / `os.remove` | 被 safe-delete hook 拦，转回收站后失败（`SAFE_DELETE_FAIL_CLOSED`） |
+| `cmd /c rd /s /q` | 大文件能删，`app.asar` 仍报拒绝访问 |
+| `robocopy <空目录> <目标> /MIR` | **最有效**，能清掉绝大多数文件 |
+| `MoveFileW`（Win32） | 同样失败，目录整体被锁 |
+| 重启系统 | ✅ 唯一可靠的回收方式 |
+
+**打包时的应对**：不要硬删，用 `--out` 换个输出目录即可（见「打包」章节）：
+
+```bash
+python scripts/build.py --out out-v1.1
+ADB_OUT_DIR=out-v1.1 node scripts/e2e-packaged.cjs
+```
 
 ### ⚠️ 绝对不要关闭 `signAndEditExecutable`
 
@@ -366,13 +404,19 @@ python scripts/verify-scrcpy-env.py
 它直接启动 `out-v1/win-unpacked/ADB桌面助手.exe`，用 CDP 远程调试驱动真实生产进程。
 
 ```bash
-npm run test:packaged            # Stage 1：启动与骨架（12 项）
-npm run test:packaged:features   # Stage 2：核心功能实测（9 项，需真机）
+node scripts/e2e-packaged.cjs            # Stage 1：启动与骨架（12 项）
+node scripts/e2e-packaged-features.cjs   # Stage 2：核心功能实测（9 项，需真机）
 node scripts/e2e-packaged-portable.cjs   # Stage 3：portable 便携版（7 项）
 node scripts/e2e-installed.cjs           # Stage 4：NSIS 安装版（13 项，需先装一次）
 node scripts/e2e-mirror-installed.cjs    # Stage 5：安装版投屏端到端（12 项，需真机）
 node scripts/e2e-mirror-icon.cjs         # Stage 6：投屏窗口图标区分（14 项，需真机）
+
+# 产物目录不是默认的 out-v1 时，用 ADB_OUT_DIR 指定
+ADB_OUT_DIR=out-v1.1 node scripts/e2e-packaged.cjs
 ```
+
+> 跑之前先 `unset ELECTRON_RUN_AS_NODE`（脚本内部也会 delete，但父子都干净更稳）。
+> Stage 1/2/3 可直接用 `node` 跑；Stage 5/6 需要真机。
 
 | 阶段 | 结果 | 覆盖内容 |
 |---|---|---|

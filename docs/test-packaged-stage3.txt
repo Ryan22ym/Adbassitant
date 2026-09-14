@@ -1,12 +1,12 @@
-生产包验收 Stage 3（portable）· 2026-09-14T02:12:55.975Z
-exe: D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1\ADB桌面助手-v0.9.0-portable.exe
+生产包验收 Stage 3（portable）· 2026-09-14T07:06:06.979Z
+exe: D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1.0\ADB桌面助手-v1.0.0-portable.exe
 
-[PASS] portable 产物存在 :: 83.71 MB
+[PASS] portable 产物存在 :: 83.75 MB
 [PASS] portable 自解压未被拒绝 :: 进程存活
-[PASS] 调试端点就绪 :: file:///C:/Users/yangming/AppData/Local/Temp/3JIbOUtf4o2slmGG0HXLxpIDVst/resources/app.asar/dist/index.html
-[PASS] 从 %TEMP% 解压目录加载页面 :: file:///C:/Users/yangming/AppData/Local/Temp/3JIbOUtf4o2slmGG0HXLxpIDVst/resources/app.asar/dist/index.html
+[PASS] 调试端点就绪 :: file:///C:/Users/yangming/AppData/Local/Temp/3JJBrfR9wJvfmO72tk9oANM8hT1/resources/app.asar/dist/index.html
+[PASS] 从 %TEMP% 解压目录加载页面 :: file:///C:/Users/yangming/AppData/Local/Temp/3JJBrfR9wJvfmO72tk9oANM8hT1/resources/app.asar/dist/index.html
 [PASS] React 已挂载 :: root 子节点 1
-[PASS] preload 桥接就绪 :: 34 个方法
+[PASS] preload 桥接就绪 :: 54 个方法
 [PASS] 便携版环境自检通过 :: 5 项 allOk=true
 
 合计：7/7 通过
