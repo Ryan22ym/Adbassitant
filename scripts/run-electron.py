@@ -18,10 +18,12 @@
   1. 子进程 stdout/stderr **重定向到文件**，不继承父 shell 的管道 —— 父进程能干净退出；
   2. 默认给**独立 `--user-data-dir`**（临时目录），避免与僵尸进程抢 profile；
   3. 清掉 `ELECTRON_RUN_AS_NODE`（宿主会注入，不清 Electron 会退化成纯 Node）；
-  4. `--watch <文件>`：脚本干活的标志是**它的日志文件有了新写入**。
+  4. `--watch <文件>`：脚本干活的标志是**它的日志文件有了变化**。
      配合 `--until <正则>` 可以等到日志里出现「完成标记」再收工；
      一旦命中就**主动结束子进程**，不再傻等超时；
      同时把新增的日志打印出来，并据此判定 PASS / FAIL。
+     注意判据是「体积变化」而非「体积变大」：不少脚本开头会
+     `fs.writeFileSync(LOG, '')` 清空日志，只判变大就永远等不到，白等到超时（返回 124）。
 
 用法
 ------------------------------------------------------------
@@ -73,6 +75,14 @@ def _snapshot(paths):
     return st
 
 
+def _rel(path):
+    """相对项目根的展示名。跨盘符（C: vs D:）时 relpath 会抛 ValueError，退化为绝对路径。"""
+    try:
+        return os.path.relpath(path, ROOT)
+    except ValueError:
+        return path
+
+
 def _collect(paths, before):
     """取 --watch 文件在启动后新增的内容。"""
     chunks = []
@@ -82,13 +92,15 @@ def _collect(paths, before):
         except OSError:
             continue
         start = before.get(p, -1)
-        if start < 0:
-            start = 0  # 启动前不存在 → 整个文件都算新增
+        # start<0：启动前不存在；size<start：期间被脚本清空重建（很多脚本开头会
+        # `fs.writeFileSync(LOG,'')`）——两种都从 0 读，否则会读到 EOF 之后什么都拿不到。
+        if start < 0 or size < start:
+            start = 0
         if size <= start:
             continue
         with open(p, 'r', encoding='utf-8', errors='replace') as fh:
             fh.seek(start)
-            chunks.append('----- %s -----\n%s' % (os.path.relpath(p, ROOT), fh.read()))
+            chunks.append('----- %s -----\n%s' % (_rel(p), fh.read()))
     return '\n'.join(chunks)
 
 
@@ -155,7 +167,9 @@ def main() -> int:
                 return 124
             if not fired and watches:
                 now = _snapshot(watches)
-                if any(now[p] > before.get(p, -1) for p in watches):
+                # 注意用 `!=` 而不是 `>`：脚本常在一开始清空自己的日志，
+                # 此时体积会**变小**，用 `>` 判断会永远等不到"变化"（白等到超时强杀）。
+                if any(now[p] != before.get(p, -1) for p in watches):
                     if not until_res or _matches(watches, before, until_res):
                         fired = True
                         fire_at = time.time()

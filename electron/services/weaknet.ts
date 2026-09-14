@@ -39,6 +39,11 @@ import { app } from 'electron';
  *      带宽、丢包等参数。这两个环节都不需要 Root。
  *      实现见 services/proxy-shaping.ts（丢包/乱序/重复在应用层做等效近似）。
  *
+ *      ⚠️ 代理设置的**读 / 写 / 清**都必须走下方「设备全局代理状态」那段里的
+ *      成套 helper，不能直接摸 `http_proxy`。Android 8+ 把它拆成了遗留别名 +
+ *      真身三件套两套键，只认别名会漏判残留、清理删到空气，最终把设备搞成
+ *      「ping 通但所有 App 都上不了网」。详见那段注释里的事故复盘。
+ *
  *   ③ svc wifi/data（最低保底）
  *      只能开关整个数据通道，用于模拟「完全断网 / 弱信号」这类场景。
  *      无法做带宽、延迟、丢包等精细控制。
@@ -164,16 +169,16 @@ export async function recoverStaleSession(): Promise<string | null> {
   try {
     // 1) 代理残留：先撤代理设置，再断 reverse
     if (m.proxyPort) {
-      await runAdb(['-s', s, 'shell', 'settings', 'delete', 'global', 'http_proxy'], {
-        silent: true,
-        timeout: 8000,
-      });
-      await runAdb(['-s', s, 'reverse', '--remove', `tcp:${m.proxyPort}`], {
-        silent: true,
-        timeout: 8000,
-      });
+      // 走统一的成套清理（put :0 触发内存态刷新 + 清真身四键）。
+      // 这里**不能**只 `delete global http_proxy`：那一下只删掉别名（`Deleted 1 rows`），
+      // 真身 `global_http_proxy_host/port` 全留着 → 设备带着残留代理一直断网。
+      const left = await cleanupProxy(s, { port: m.proxyPort, reversed: true });
       await stopShapingProxy();
-      done.push(`已清除设备代理 127.0.0.1:${m.proxyPort}`);
+      done.push(
+        left
+          ? `设备代理残留未清干净（${left}），请到 WLAN 设置里把代理改回「无」`
+          : `已清除设备代理 127.0.0.1:${m.proxyPort}`,
+      );
     }
 
     // 2) 上次是断网模式：把网络开回来
@@ -238,15 +243,13 @@ async function tickProxy() {
   ticking = true;
 
   try {
-    const r = await runAdb(['-s', ctx.serial, 'shell', 'settings', 'get', 'global', 'http_proxy'], {
-      silent: true,
-      timeout: 6000,
-    });
+    // 读全套键并归一化：用户手填后系统同样可能把别名迁移成真身
+    const st = await readGlobalProxyState(ctx.serial);
     // 会话可能在等待期间被停掉了
     if (session !== ctx) return;
 
-    const got = r.stdout.trim();
-    ctx.proxy.current = got && got !== 'null' ? got : null;
+    const got = st.effective;
+    ctx.proxy.current = got;
     const addr = `${ctx.proxy.host}:${ctx.proxy.port}`;
 
     if (got === addr) {
@@ -329,11 +332,10 @@ export async function probeDevice(serial: string | undefined): Promise<ProbeResu
     // 兜底：ColorOS / MIUI 等精简 ROM 常常没有 ip 命令，/proc/net/dev 一定存在
     runAdb(['-s', s, 'shell', 'cat', '/proc/net/dev'], { silent: true, timeout: 8000 }),
     runAdb(['-s', s, 'shell', 'getprop', 'ro.build.version.sdk'], { silent: true, timeout: 8000 }),
-    // 读当前的全局代理设置 —— 用于识别上一次会话残留（改了代理却没恢复会让人断网）
-    runAdb(['-s', s, 'shell', 'settings', 'get', 'global', 'http_proxy'], {
-      silent: true,
-      timeout: 8000,
-    }),
+    // 读当前的全局代理设置 —— 用于识别上一次会话残留（改了代理却没恢复会让人断网）。
+    // 必须读 `settings list global` 拿全量，只读 `http_proxy` 会漏掉真身
+    // `global_http_proxy_host/port`（别名可能已被系统迁移清空）。
+    runAdb(['-s', s, 'shell', 'settings', 'list', 'global'], { silent: true, timeout: 8000 }),
   ]);
 
   const canWriteSettings = await probeWriteSettings(s);
@@ -365,8 +367,9 @@ export async function probeDevice(serial: string | undefined): Promise<ProbeResu
   if (ifaces.length === 0) ifaces = parseProcNetDev(procNetRes.stdout);
   const iface = pickIface(ifaces);
 
-  const rawProxy = proxyRes.stdout.trim();
-  const httpProxy = rawProxy && rawProxy !== 'null' ? rawProxy : null;
+  // 归一化成「系统实际生效的代理地址」，UI 直接展示这个值
+  const proxyState = parseGlobalProxyState(proxyRes.stdout);
+  const httpProxy = proxyState.effective;
 
   // 注意：现在未 Root 也有可用方案了 —— 本地代理不需要任何设备侧权限
   let note: string;
@@ -577,15 +580,13 @@ export async function startWeakNet(
           timeout: 10000,
         });
 
-        // (3) 必须读回确认。写失败却报成功是最坏的情况（用户以为生效了其实没有）
-        const back = await runAdb(
-          ['-s', s, 'shell', 'settings', 'get', 'global', 'http_proxy'],
-          { silent: true, timeout: 8000 },
-        );
-        const got = back.stdout.trim();
-        if (got !== addr) {
+        // (3) 必须读回确认。写失败却报成功是最坏的情况（用户以为生效了其实没有）。
+        //     注意读全套键：系统可能立刻把别名迁移成真身 host/port，
+        //     只读 `http_proxy` 会误判成「没写进去」，把一个其实已经生效的会话回滚掉。
+        const st = await readGlobalProxyState(s);
+        if (st.effective !== addr) {
           throw new Error(
-            `代理未写入（期望 ${addr}，读回「${got || '空'}」）——设备可能禁用了 secure settings 写入`,
+            `代理未写入（期望 ${addr}，读回「${st.effective || '空'}」）——设备可能禁用了 settings 写入`,
           );
         }
         ctx.proxy.active = true;
@@ -712,24 +713,155 @@ export async function stopWeakNet(): Promise<WeakNetStatus> {
   return getWeakNetStatus();
 }
 
+/* ------------------------------------------------------------------ */
+/* 设备全局代理状态：读 / 判 / 清                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Android 8+ 把「全局 HTTP 代理」存在**两套键**里，读、判、清都必须同时覆盖：
+ *
+ *   1. `http_proxy`  —— 遗留别名，形如 `127.0.0.1:17890`
+ *   2. `global_http_proxy_host` / `global_http_proxy_port`
+ *      / `global_http_proxy_exclusion_list` / `global_proxy_pac_url`
+ *                    —— 系统**实际读取**的真身
+ *
+ * ⚠️ 事故复盘（真实发生过，把一台设备搞成「ping 通但所有 App 都没网」）：
+ *
+ *   工具写 `http_proxy = 127.0.0.1:P` 后，SettingsProvider 会**立即同步出真身**
+ *   `global_http_proxy_host/port`（别名保持原值，实测两套键并存）。旧代码只认别名，
+ *   于是两头都错：
+ *     · 清理：`delete global http_proxy` → `Deleted 1 rows`，**删掉的只是别名**，
+ *       真身一直留着，系统继续按真身走代理；
+ *     · 检测：别名已不在，读 `http_proxy` 得到 null/`:0` → 判定「无残留」→
+ *       直接 return，什么都不做，残留永远清不掉。
+ *   更隐蔽的是第三层：清理只 `delete` 也**不够**。ProxyTracker（真正决定走不走代理的
+ *   组件）只在 `http_proxy` 发生**变更**时才刷新；别名早就不存在时 delete 不产生任何
+ *   通知（`Deleted 0 rows`），于是设置里查不到代理，内存里的旧代理却继续把**所有流量**
+ *   （含系统自己的联网校验探针）送往那个已经关闭的端口。实测：`put :0` 之前 45 秒抓到
+ *   11 条流向死端口的连接（含 `connectivitycheck.gstatic.com/generate_204`），put 之后 0 条。
+ *
+ *   结论：清理必须先 `put global http_proxy :0` 触发变更通知刷新 ProxyTracker，
+ *   再清真身四键。顺序不能反 —— put 触发的同步会把 host/port 又写回来。
+ */
+const PROXY_TRUE_BODY_KEYS = [
+  'global_http_proxy_host',
+  'global_http_proxy_port',
+  'global_http_proxy_exclusion_list',
+  'global_proxy_pac_url',
+] as const;
+
+interface DeviceProxyState {
+  /** 是否成功读到设置（设备离线 / adb 异常时为 false） */
+  reachable: boolean;
+  /** 系统实际生效的代理地址，形如 `127.0.0.1:17890`；无代理则为 null */
+  effective: string | null;
+  host: string | null;
+  port: number | null;
+  /** 所有非空的 proxy 相关键，便于如实展示与残留判定 */
+  raw: Record<string, string>;
+}
+
+/** `settings list global` 的输出 → 代理状态（纯函数，便于复用与测试） */
+function parseGlobalProxyState(listOutput: string): DeviceProxyState {
+  const raw: Record<string, string> = {};
+  for (const line of listOutput.split(/\r?\n/)) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (!key.includes('proxy')) continue;
+    const val = line.slice(eq + 1).trim();
+    if (val && val !== 'null') raw[key] = val;
+  }
+
+  const alias = raw['http_proxy'];
+  const host = raw['global_http_proxy_host'];
+  const portStr = raw['global_http_proxy_port'];
+  const port = portStr && /^\d+$/.test(portStr) ? parseInt(portStr, 10) : null;
+
+  // 别名取 `:0` / `0` 是 Android 表示「无代理」的中性值，不算生效
+  const aliasAddr = alias && alias !== ':0' && alias !== '0' ? alias : null;
+
+  // 真身优先：系统读的是 host/port，别名只是遗留入口
+  let effective: string | null = null;
+  if (host && port) effective = `${host}:${port}`;
+  else if (host) effective = host;
+  else effective = aliasAddr;
+
+  return { reachable: true, effective, host: host ?? null, port, raw };
+}
+
+async function readGlobalProxyState(serial: string): Promise<DeviceProxyState> {
+  // 一次 `settings list global` 拿全，避免多次 get 之间的竞态与漏键
+  const res = await runAdb(['-s', serial, 'shell', 'settings', 'list', 'global'], {
+    silent: true,
+    timeout: 8000,
+  });
+  if (!res.ok && !res.stdout) {
+    return { reachable: false, effective: null, host: null, port: null, raw: {} };
+  }
+  return parseGlobalProxyState(res.stdout);
+}
+
+/**
+ * 设备上是否**还有**代理残留。
+ * 只要真身或别名任一非空就算脏 —— 只认别名必然漏判。
+ */
+function isProxyDirty(st: DeviceProxyState): boolean {
+  if (st.effective) return true;
+  // `put :0` 之后系统可能留下 `global_http_proxy_port=0` 这类中性残留，不算脏
+  return Object.entries(st.raw).some(([key, val]) => {
+    if (key === 'global_http_proxy_port' && (val === '0' || val === '')) return false;
+    if (key === 'http_proxy' && (val === ':0' || val === '0')) return false;
+    return true;
+  });
+}
+
+/** 残留的人类可读描述，用于日志与提示 */
+function describeProxyState(st: DeviceProxyState): string {
+  const parts: string[] = [];
+  if (st.raw['http_proxy']) parts.push(`http_proxy=${st.raw['http_proxy']}`);
+  const h = st.raw['global_http_proxy_host'];
+  const p = st.raw['global_http_proxy_port'];
+  if (h || p) parts.push(`global_http_proxy_host/port=${h || '空'}:${p || '空'}`);
+  for (const key of ['global_proxy_pac_url', 'global_http_proxy_exclusion_list']) {
+    if (st.raw[key]) parts.push(`${key}=${st.raw[key]}`);
+  }
+  return parts.join('，') || '未知';
+}
+
 /**
  * 清掉设备侧的代理设置与 reverse 通道。
  *
- * 顺序很重要：**先撤代理设置，再断 reverse，最后才关本地代理**。
- * 反过来的话，中间会有一小段时间设备把流量发向已经关闭的端口。
+ * 三步都不能省，顺序也不能换：
+ *   ① `put global http_proxy :0` —— **必须 put，不能只 delete**（见上方事故复盘）。
+ *      `:0` 是表示「无代理」的中性值，put 它会触发 SettingsProvider 的迁移 + 变更通知，
+ *      系统内存里的代理态随之刷新。
+ *   ② 删掉真身四键 —— 系统实际读的是 `global_http_proxy_host/port`。
+ *      顺序不能颠倒：先删真身再 put :0，put 触发的迁移会把 host/port 又写回来。
+ *   ③ 撤 reverse，最后才关本地代理。反过来的话，中间会有一小段设备把流量发向已关闭的端口。
  *
- * 返回值：若设备上仍残留代理（ROM 禁止 adb 清设置），返回残留值，否则返回 null。
+ * 返回值：若设备上仍残留代理（ROM 禁止 adb 清设置），返回残留描述，否则返回 null。
  */
 async function cleanupProxy(
   serial: string,
-  proxy?: WeakNetProxyInfo,
+  proxy?: Pick<WeakNetProxyInfo, 'port' | 'reversed'>,
 ): Promise<string | null> {
-  await runAdb(['-s', serial, 'shell', 'settings', 'delete', 'global', 'http_proxy'], {
+  // ① 触发变更通知，刷新系统的内存代理态（这一步是「清干净」的关键）
+  await runAdb(['-s', serial, 'shell', 'settings', 'put', 'global', 'http_proxy', ':0'], {
     silent: true,
     timeout: 10000,
   });
 
-  if (proxy?.reversed) {
+  // ② 清真身。别名保留为 `:0` 中性值 —— 删它既无意义，还可能丢掉那次变更通知
+  for (const key of PROXY_TRUE_BODY_KEYS) {
+    await runAdb(['-s', serial, 'shell', 'settings', 'delete', 'global', key], {
+      silent: true,
+      timeout: 10000,
+    });
+  }
+
+  // ③ 撤 reverse 通道
+  if (proxy?.reversed && proxy.port) {
     await runAdb(['-s', serial, 'reverse', '--remove', `tcp:${proxy.port}`], {
       silent: true,
       timeout: 10000,
@@ -739,13 +871,9 @@ async function cleanupProxy(
     await runAdb(['-s', serial, 'reverse', '--remove-all'], { silent: true, timeout: 10000 });
   }
 
-  // 读回确认 —— 拦截 ROM 上 delete 会失败，必须如实上报给用户
-  const back = await runAdb(['-s', serial, 'shell', 'settings', 'get', 'global', 'http_proxy'], {
-    silent: true,
-    timeout: 8000,
-  });
-  const left = back.stdout.trim();
-  return left && left !== 'null' ? left : null;
+  // 读回确认 —— ROM 上 put/delete 都可能被拦，必须如实上报给用户
+  const st = await readGlobalProxyState(serial);
+  return isProxyDirty(st) ? describeProxyState(st) : null;
 }
 
 /**
@@ -756,14 +884,15 @@ export async function cleanupStaleProxy(
   serial: string | undefined,
 ): Promise<{ before: string | null; cleaned: boolean; left?: string | null }> {
   const s = await ensureDevice(serial);
-  const res = await runAdb(['-s', s, 'shell', 'settings', 'get', 'global', 'http_proxy'], {
-    silent: true,
-    timeout: 8000,
-  });
-  const raw = res.stdout.trim();
-  const before = raw && raw !== 'null' ? raw : null;
+  const st = await readGlobalProxyState(s);
 
-  if (!before) return { before: null, cleaned: false };
+  // 读不到设置（设备离线）时不要谎报「已清理」
+  if (!st.reachable) return { before: null, cleaned: false };
+
+  const before = st.effective;
+
+  // 判据看真身 + 别名全套；只读 `http_proxy` 会在这里静默 return，什么都不做
+  if (!isProxyDirty(st)) return { before, cleaned: false };
 
   const left = await cleanupProxy(s);
   await stopShapingProxy();
@@ -778,7 +907,7 @@ export async function cleanupStaleProxy(
     return { before, cleaned: false, left };
   }
 
-  log('info', '弱网', `已清理设备上残留的代理设置（${before}）`);
+  log('info', '弱网', `已清理设备上残留的代理设置（${before || '未识别的残留键'}）`);
   return { before, cleaned: true };
 }
 

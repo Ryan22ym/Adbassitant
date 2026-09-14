@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -19,6 +19,7 @@
     "check:modules": "python scripts/check-modules.py",
     "test:smoke": "electron scripts/smoke.cjs",
     "test:e2e": "electron scripts/e2e.cjs",
+    "test:weaknet:cleanup": "python scripts/run-electron.py scripts/weaknet-proxy-cleanup-regression.cjs --watch ui-shots/_proxyclean.log --until \"PROXY CLEANUP REGRESSION DONE\"",
     "test:e2e:record": "electron scripts/e2e-record.cjs",
     "test:packaged": "node scripts/e2e-packaged.cjs",
     "test:packaged:features": "node scripts/e2e-packaged-features.cjs",

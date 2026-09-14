@@ -72,8 +72,40 @@
 - AOSP / 多数机型 / 模拟器 —— **可以自动写**，启动即生效；
 - **ColorOS 等定制 ROM 会剥夺该权限**，任何 global 写入都抛 `SecurityException`。
   此时 UI 自动切到**手动代理向导**：`adb reverse` 与代理服务照常建立（已在真机实测通道可用），
-  界面给出 4 步操作指引，并每秒轮询 `settings get global http_proxy`，用户填好后自动识别并开始注入；
+  界面给出 4 步操作指引，并每秒轮询**全套代理键**（`settings list global` 里的 host/port 真身），
+  用户填好后自动识别并开始注入；
   停止后会提示用户把代理改回「无」（同样因为该 ROM 不允许我们自动清除）。
+
+**🔴 清代理必须「先 `put :0` 再清真身」—— 否则设备会彻底断网**
+
+Android 8+ 的全局 HTTP 代理存在**两套键**里，读 / 判 / 清都必须同时覆盖：
+
+| 键 | 角色 |
+|---|---|
+| `http_proxy` | 遗留别名，形如 `127.0.0.1:17890` |
+| `global_http_proxy_host` / `..._port` / `..._exclusion_list` / `global_proxy_pac_url` | **系统实际读取的真身** |
+
+工具写 `http_proxy` 后，系统会**立即同步出真身**（别名保持原值，两套键并存）。只认别名的代码两头都错：
+
+- **清理**：`delete global http_proxy` → `Deleted 1 rows`，删掉的**只是别名**，真身留着，系统继续走代理；
+- **检测**：别名已不在，读 `http_proxy` 得 null/`:0` → 判定「无残留」→ 直接 return，残留永远清不掉。
+
+更隐蔽的第三层：**只 `delete` 也不够**。`ProxyTracker`（真正决定走不走代理的组件）只在
+`http_proxy` 发生**变更**时才刷新；别名早就不存在时 delete 不产生任何通知（`Deleted 0 rows`），
+于是「设置里查不到代理，内存里的旧代理却把**所有流量**（含系统的联网校验探针）继续送往已关闭的端口」。
+实测：`put :0` 之前 45 秒抓到 11 条流向死端口的连接（含 `connectivitycheck.gstatic.com/generate_204`），
+put 之后 0 条。**结果就是「ping 通、DNS 通，但所有 App 都上不了网」。**
+
+正确顺序（`cleanupProxy()`，三步都不能省）：
+
+1. `settings put global http_proxy :0` —— 触发变更通知刷新 ProxyTracker，**必须 put，不能只 delete**；
+2. 删除真身四键 —— 顺序不能反，put 触发的同步会把 host/port 又写回来；
+3. 撤 `adb reverse`，最后才关本地代理（反过来中间会有一小段设备把流量发向已关闭的端口）。
+
+> 清理成功的判据**不能只看设置键** —— 只有「不再有流量打到该端口」才是决定性证据。
+> 回归测试 `scripts/weaknet-proxy-cleanup-regression.cjs`（`npm run test:weaknet:cleanup`）
+> 在真机上造出这个现场并锁死：PC 监听 17890 + `adb reverse` + 真实浏览器导航，
+> 断言残留期有连接、清理后 0 连接。实测 **16/16 通过**。
 
 启动前 `probeDevice()` 会实测这些能力（Root / tc / ifb / 接口 / SDK / 能否写设置），UI 如实展示。
 

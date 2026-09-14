@@ -409,6 +409,76 @@ async function adb(args, timeout = 20000) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* 设备全局代理：读 / 判 / 清（与 electron/services/weaknet.ts 对齐）   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Android 8+ 把全局代理存在**两套键**里：
+ *   别名 `http_proxy` + 真身 `global_http_proxy_host` / `..._port`
+ *   / `..._exclusion_list` / `global_proxy_pac_url`（系统实际读的是真身）。
+ *
+ * ⚠️ 本脚本早期只 `delete global http_proxy` 并只读它做校验，这是**错的**：
+ *   工具写完别名后 SettingsProvider 会把它迁移成真身并清空别名，于是
+ *     · 校验读 `http_proxy` → 空 → 谎报「已清除」；
+ *     · delete 删的是空气 → 真身残留 → 设备彻底断网（v1.0.1 真实事故）。
+ *   另外清理**必须 put :0**：ProxyTracker 只在键发生变更时刷新，
+ *   键已被迁移清空时 delete 不产生通知，内存里的旧代理照旧生效。
+ */
+const PROXY_TRUE_BODY = [
+  'global_http_proxy_host',
+  'global_http_proxy_port',
+  'global_http_proxy_exclusion_list',
+  'global_proxy_pac_url',
+];
+
+const isReal = (v) => !!v && v !== 'null' && v !== '';
+
+/** 读设备上全部 proxy 相关键 */
+async function readProxyKeys(serial) {
+  const r = await adb(['-s', serial, 'shell', 'settings list global'], 20000);
+  const m = {};
+  for (const line of r.stdout.split('\n')) {
+    const i = line.indexOf('=');
+    if (i <= 0) continue;
+    const k = line.slice(0, i).trim();
+    if (k.includes('proxy')) m[k] = line.slice(i + 1).trim();
+  }
+  return m;
+}
+
+/** 系统实际生效的代理地址；无代理返回 null */
+function effectiveProxy(m) {
+  const host = m['global_http_proxy_host'];
+  const port = m['global_http_proxy_port'];
+  const alias = m['http_proxy'];
+  if (isReal(host) && isReal(port)) return `${host}:${port}`;
+  if (isReal(host)) return host;
+  if (isReal(alias) && alias !== ':0' && alias !== '0') return alias;
+  return null;
+}
+
+/** 是否还有代理残留（真身或别名任一非空，且非 `:0` 中性值） */
+function proxyDirty(m) {
+  if (effectiveProxy(m)) return true;
+  if (isReal(m['global_proxy_pac_url'])) return true;
+  if (isReal(m['global_http_proxy_exclusion_list'])) return true;
+  return false;
+}
+
+/**
+ * 清设备全局代理。三步顺序固定：
+ *   ① put :0 触发迁移 + 变更通知（刷新 ProxyTracker 内存态）—— 不能只 delete
+ *   ② 清真身四键（系统实际读的）
+ *   ③ 别名保留为 `:0` 中性值
+ */
+async function clearDeviceProxy(serial) {
+  await adb(['-s', serial, 'shell', 'settings put global http_proxy :0'], 15000);
+  for (const k of PROXY_TRUE_BODY) {
+    await adb(['-s', serial, 'shell', `settings delete global ${k}`], 15000);
+  }
+}
+
 /** 设备侧是否存在可用的 curl（AOSP/模拟器有，精简 ROM 常常没有） */
 async function probeCurl(serial) {
   const r = await adb(['-s', serial, 'shell', 'curl --version'], 15000);
@@ -595,11 +665,12 @@ async function stageB(shaping) {
     if (wr.ok) {
       const addr = `127.0.0.1:${PROXY_PORT}`;
       const put = await sh(`settings put global http_proxy ${addr}`);
-      const back = await sh('settings get global http_proxy');
+      // 读回要读全套键：系统可能立刻把别名迁移成真身，只读 http_proxy 会误判成「没写进去」
+      const got = effectiveProxy(await readProxyKeys(serial));
       check('全局 HTTP 代理写入并读回一致（免 Root 自动路径）',
-        put.ok && back.stdout === addr, `读回「${back.stdout}」`);
+        put.ok && got === addr, `读回「${got || '空'}」`);
 
-      if (back.stdout !== addr) {
+      if (got !== addr) {
         console.log('  [SKIP] 真实应用级验证 —— 系统未接受该代理设置');
       } else {
         // 设备 shell 的 curl 不读系统代理，所以必须用真实应用验证。
@@ -711,10 +782,10 @@ async function stageB(shaping) {
      * 「手工代理」这条路上通道、代理、弱网注入三件事都成立，
      * 唯一需要人工的只是把那串地址敲进系统设置里。
      */
-    await sh('settings delete global http_proxy');
-    const noProxy = (await sh('settings get global http_proxy')).stdout;
+    await clearDeviceProxy(serial);
+    const noProxyKeys = await readProxyKeys(serial);
     check('手动代理路径：此时系统代理确实为空（证明不是靠全局代理）',
-      !noProxy || noProxy === 'null' || noProxy === ':0', `读回「${noProxy}」`);
+      !proxyDirty(noProxyKeys), `proxy 键：${JSON.stringify(noProxyKeys)}`);
 
     if (hasCurl) {
       shaping.setShapingParams(shapingParams({}, {}));
@@ -737,15 +808,15 @@ async function stageB(shaping) {
 
     /* 7) 清理，并确认设备侧真的干净了 */
     shaping.setShapingParams(null);
-    await sh('settings delete global http_proxy');
+    await clearDeviceProxy(serial);
     await adb(['-s', serial, 'reverse', '--remove', `tcp:${PROXY_PORT}`]);
     await sh('am force-stop com.android.chrome');
     await sh('am force-stop com.heytap.browser');
     await sh('am force-stop mark.via');
 
-    const after = await sh('settings get global http_proxy');
-    check('清理后设备代理已清除', after.stdout === 'null' || after.stdout === '' || after.stdout === ':0',
-      `读回「${after.stdout || '空'}」`);
+    const afterKeys = await readProxyKeys(serial);
+    check('清理后设备代理已清除（真身 + 别名全套）', !proxyDirty(afterKeys),
+      `proxy 键：${JSON.stringify(afterKeys)}`);
 
     const revList = await adb(['-s', serial, 'reverse', '--list']);
     check('清理后 reverse 已移除', !revList.stdout.includes(`tcp:${PROXY_PORT}`),
@@ -771,8 +842,10 @@ async function stageB(shaping) {
       console.log('  [SKIP] 清理后外网连通性 —— 该设备当前无默认路由（测试机常态），跳过');
     }
   } finally {
-    // 任何异常路径都不留脏状态（进程被强杀时，App 侧还有崩溃恢复兜底）
-    await adb(['-s', serial, 'shell', 'settings delete global http_proxy'], 15000);
+    // 任何异常路径都不留脏状态（进程被强杀时，App 侧还有崩溃恢复兜底）。
+    // 注意必须 put :0 而不能只 delete —— 只 delete 不产生变更通知，
+    // 系统内存里的代理态不会刷新，设备会「设置里查不到代理但一直断网」。
+    await clearDeviceProxy(serial);
     await adb(['-s', serial, 'reverse', '--remove', `tcp:${PROXY_PORT}`]);
   }
 }
