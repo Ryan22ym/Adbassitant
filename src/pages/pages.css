@@ -47,9 +47,17 @@
   text-align: left;
   transition: background var(--t-fast);
   width: 100%;
+  /* 行本体是 div[role=button]（内部要放「快速投屏」按钮，button 不能嵌套） */
+  cursor: pointer;
+  user-select: none;
 }
 
-.device-row:hover:not(:disabled) {
+.device-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.device-row:hover:not(.disabled) {
   background: var(--bg-hover);
 }
 
@@ -57,9 +65,18 @@
   background: var(--accent-soft);
 }
 
-.device-row:disabled {
+/* 未就绪（未授权 / 离线）的行 */
+.device-row.disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* 行右侧操作区（快速投屏按钮），不参与行点击 */
+.device-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .device-avatar {

@@ -15,6 +15,23 @@ const PORT = 9341;
 const SHOT = path.join(__dirname, '..', 'ui-shots', 'about-page.png');
 const VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
 
+/**
+ * 从 SettingsPage.tsx 的 VERSION_NOTES 里取出当前版本的亮点文案，
+ * 这样发版后不必再改本脚本（断言始终跟着源码走）。
+ */
+function expectedNoteFor(version) {
+  try {
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'pages', 'SettingsPage.tsx'), 'utf8');
+    const block = src.slice(src.indexOf('VERSION_NOTES'), src.indexOf('export default function SettingsPage'));
+    const m = block.match(new RegExp(`'${version.replace(/\./g, '\\.')}':\\s*'([^']+)'`));
+    return m ? m[1] : '';
+  } catch {
+    return '';
+  }
+}
+const EXPECTED_NOTE = expectedNoteFor(VERSION);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function waitTarget(retries = 90, interval = 500) {
@@ -126,7 +143,12 @@ class CDP {
       console.log('  亮点   :', String(about.notice).slice(0, 80) + '...');
       check(`版本显示 v${VERSION}（不再是写死的 v0.9.0）`,
         about.rows.some((r) => r.replace(/\s/g, '').includes('版本v' + VERSION)));
-      check('亮点文案为 1.0.2 版本内容', String(about.notice).includes('弱网代理残留'));
+      check('版本行不带旧的手写后缀（如「基础功能版」）',
+        !about.rows.some((r) => /0\.9\.0|基础功能版/.test(r)));
+      check(`亮点文案是 v${VERSION} 的（与源码 VERSION_NOTES 一致）`,
+        EXPECTED_NOTE ? String(about.notice).includes(EXPECTED_NOTE.slice(0, 24))
+                     : String(about.notice).includes('更多高级功能'),
+        EXPECTED_NOTE ? EXPECTED_NOTE.slice(0, 30) + '…' : '（该版本未登记亮点，回退默认文案）');
     }
 
     // 滚动到「关于」卡片再截图

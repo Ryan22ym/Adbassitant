@@ -1,0 +1,20 @@
+=== Stage 5 安装版投屏 ===
+rc=0  用时 12.4s
+
+=== Stage 5 · 安装版投屏最终验收 ===
+
+[PASS] exe 存在于安装目录 :: C:\Users\yangming\AppData\Local\Programs\ADBAssistant\ADB桌面助手.exe
+[PASS] resources/bin 随包二进制齐全
+[PASS] 调试端点就绪
+[PASS] 页面从安装目录加载 :: file:///C:/Users/yangming/AppData/Local/Programs/ADBAssistant/resources/app.asar/dist/index.html
+[PASS] 首屏渲染完成
+[PASS] 检测到在线设备 :: 3 台
+[PASS] 投屏页存在「启动投屏」按钮 :: {"found":true,"disabled":false}
+[PASS] 按钮可点击
+[PASS] 按钮点击成功 :: {"ok":true}
+   1s ✓ 可见窗口: ["ADB助手 - aaab4f58"]
+[PASS] 接口报告投屏运行中
+[PASS] scrcpy 窗口被创建 :: ADB助手 - aaab4f58
+[PASS] ★ scrcpy 窗口真实可见 :: ADB助手 - aaab4f58
+
+===== 12/12 通过 =====

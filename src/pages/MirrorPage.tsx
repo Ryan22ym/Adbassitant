@@ -3,6 +3,7 @@ import { Card, Button, Field, Input, Select, Switch, Notice, Badge, Segmented } 
 import { useApp, useCurrentDevice } from '@/store/app';
 import { call } from '@/lib/ipc';
 import { formatDuration } from '@/lib/format';
+import { MIRROR_DEFAULTS, loadMirrorPrefs, saveMirrorPrefs } from '@/lib/mirror';
 
 const PRESETS = [
   { label: '流畅（1080 / 4Mbps / 30fps）', maxSize: 1080, bitRate: 4, fps: 30 },
@@ -11,21 +12,48 @@ const PRESETS = [
   { label: '超清（2560 / 24Mbps / 60fps）', maxSize: 2560, bitRate: 24, fps: 60 },
 ];
 
+/** 找到与给定参数匹配的预设下标；无匹配返回 -1（表示自定义） */
+function presetIndexOf(maxSize: number, bitRate: number, fps: number): number {
+  return PRESETS.findIndex(
+    (p) => p.maxSize === maxSize && p.bitRate === bitRate && p.fps === fps,
+  );
+}
+
 export default function MirrorPage() {
   const mirror = useApp((s) => s.mirror);
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
 
+  // 初值取「上次用过的参数」（与快速投屏按钮同源），没调过则是默认均衡档
+  const [initial] = useState(() => loadMirrorPrefs());
   const [busy, setBusy] = useState(false);
-  const [preset, setPreset] = useState('1');
-  const [custom, setCustom] = useState(false);
-  const [maxSize, setMaxSize] = useState(1440);
-  const [bitRate, setBitRate] = useState(8);
-  const [fps, setFps] = useState(60);
-  const [noAudio, setNoAudio] = useState(true);
-  const [stayAwake, setStayAwake] = useState(true);
-  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
-  const [keyboard, setKeyboard] = useState<'sdk' | 'uhid' | 'disabled'>('sdk');
+  const [preset, setPreset] = useState(() => {
+    const i = presetIndexOf(
+      initial.maxSize ?? MIRROR_DEFAULTS.maxSize!,
+      initial.bitRateMbps ?? MIRROR_DEFAULTS.bitRateMbps!,
+      initial.maxFps ?? MIRROR_DEFAULTS.maxFps!,
+    );
+    return i >= 0 ? String(i) : '1';
+  });
+  const [custom, setCustom] = useState(() => {
+    const i = presetIndexOf(
+      initial.maxSize ?? MIRROR_DEFAULTS.maxSize!,
+      initial.bitRateMbps ?? MIRROR_DEFAULTS.bitRateMbps!,
+      initial.maxFps ?? MIRROR_DEFAULTS.maxFps!,
+    );
+    return i < 0;
+  });
+  const [maxSize, setMaxSize] = useState(initial.maxSize ?? MIRROR_DEFAULTS.maxSize!);
+  const [bitRate, setBitRate] = useState(initial.bitRateMbps ?? MIRROR_DEFAULTS.bitRateMbps!);
+  const [fps, setFps] = useState(initial.maxFps ?? MIRROR_DEFAULTS.maxFps!);
+  const [noAudio, setNoAudio] = useState(initial.noAudio ?? MIRROR_DEFAULTS.noAudio!);
+  const [stayAwake, setStayAwake] = useState(initial.stayAwake ?? MIRROR_DEFAULTS.stayAwake!);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(
+    initial.alwaysOnTop ?? MIRROR_DEFAULTS.alwaysOnTop!,
+  );
+  const [keyboard, setKeyboard] = useState<'sdk' | 'uhid' | 'disabled'>(
+    (initial.keyboard as 'sdk' | 'uhid' | 'disabled') ?? 'sdk',
+  );
 
   const applyPreset = (idx: string) => {
     setPreset(idx);
@@ -43,21 +71,23 @@ export default function MirrorPage() {
       return;
     }
     setBusy(true);
+    const options = {
+      serial: current.serial,
+      maxSize,
+      bitRateMbps: bitRate,
+      maxFps: fps,
+      noAudio,
+      stayAwake,
+      alwaysOnTop,
+      keyboard,
+    };
     try {
-      await call(
-        () =>
-          window.adbApi.startMirror({
-            serial: current.serial,
-            maxSize,
-            bitRateMbps: bitRate,
-            maxFps: fps,
-            noAudio,
-            stayAwake,
-            alwaysOnTop,
-            keyboard,
-          }),
-        { successMessage: '投屏窗口已启动' },
-      );
+      await call(() => window.adbApi.startMirror(options), {
+        successMessage: '投屏窗口已启动',
+      });
+      // 记住本次参数：设备页的「快速投屏」按钮会沿用
+      const { serial: _omit, ...prefs } = options;
+      saveMirrorPrefs(prefs);
     } catch (e) {
       toast('error', (e as Error).message);
     } finally {

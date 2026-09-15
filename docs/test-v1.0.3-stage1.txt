@@ -1,0 +1,59 @@
+=== Stage 1 启动与骨架 ===
+rc=0  用时 10.2s
+
+=== 生产包验收 · Stage 1：启动与环境 ===
+
+[PASS] 生产 exe 存在 :: 180.1 MB  D:\WorkSpace\手机助手\adb-assistant-v0.9\out-v1.0.3\win-unpacked\ADB桌面助手.exe
+[PASS] 随包二进制齐全 :: 11 个文件
+
+启动生产版（带远程调试端口）...
+  pid = 28264
+[PASS] 生产进程启动 :: pid=28264
+[PASS] 远程调试端点就绪 :: file:///D:/WorkSpace/%E6%89%8B%E6%9C%BA%E5%8A%A9%E6%89%8B/adb-assistant-v0.9/out-v1.0.3/win-unpacked/resources/app.asar/dist/index.html
+
+--- 生产环境快照 ---
+  location : file:///D:/WorkSpace/%E6%89%8B%E6%9C%BA%E5%8A%A9%E6%89%8B/adb-assistant-v0.9/out-v1.0.3/win-unpacked/resources/app.asar/dist/index.html
+  title    : ADB 桌面助手
+  root 子节点: 1
+  preload 方法数: 58
+  页面文本 : "A\nADB 助手\nv1.0.3\n设备\n投屏\n常用工具\n应用管理\n实时 Logcat\n弱网模拟\n命令终端\n运行日志\n设置\n未连接设备\n设备\n\n查看设备状态与详细信息\n\n已连接设备\n\n共 0 台，其中 0 台就绪\n\n无设备\n重启 ADB\n\n未检"
+[PASS] 页面从 asar 加载成功 :: file:///D:/WorkSpace/%E6%89%8B%E6%9C%BA%E5%8A%A9%E6%89%8B/adb-assistant-v0.9/out-v1.0.3/win-unpacked/resources/app.asar/dist/index.html
+[PASS] React 已挂载 :: root 子节点 1
+[PASS] preload 桥接就绪 :: 58 个方法
+[PASS] 随包 adb 枚举设备 :: 3 台（就绪 3）: aaab4f58, emulator-5556, emulator-5558
+
+--- 环境自检原始返回 ---
+  {"ok":true,"data":{"items":[{"name":"adb","ok":true,"path":"D:\\WorkSpace\\手机助手\\adb-assistant-v0.9\\out-v1.0.3\\win-unpacked\\resources\\bin\\adb.exe","version":"1.0.41"},{"name":"scrcpy","ok":true,"path":"D:\\WorkSpace\\手机助手\\adb-assistant-v0.9\\out-v1.0.3\\win-unpacked\\resources\\bin\\scrcpy.exe","version":"3.1"},{"name":"scrcpy-server","ok":true,"path":"D:\\WorkSpace\\手机助手\\adb-assistant-v0.9\\out-v1.0.3\\win-unpacked\\resources\\bin\\scrcpy-server"},{"name":"AdbWinApi.dll","ok":true,"path":"D:\\WorkSpace\\手机助手\\adb-assistant-v0.9\\out-v1.0.3\\win-unpacked\\resources\\bin\\AdbWinApi.dll"},{"name":"AdbWinUsbApi.dll","ok":true,"path":"D:\\WorkSpace\\手机助手\\adb-assistant-v0.9\\out-v1.0.3\\win-unpacked\\resources\\bin\\AdbWinUsbApi.dll"}],"allOk":true}}
+    · adb: OK 
+    · scrcpy: OK 
+    · scrcpy-server: OK 
+    · AdbWinApi.dll: OK 
+    · AdbWinUsbApi.dll: OK 
+[PASS] 环境自检项存在 :: 5 项
+
+--- 路由渲染 ---
+    #/           root 子节点 1
+    #/mirror     root 子节点 1
+    #/tools      root 子节点 1
+    #/apps       root 子节点 1
+    #/logcat     root 子节点 1
+    #/weaknet    root 子节点 1
+    #/command    root 子节点 1
+    #/logs       root 子节点 1
+    #/settings   root 子节点 1
+[PASS] 全部页面可渲染 :: 9 个路由
+
+--- 运行日志尾部 ---
+    [success]  完成（1122ms）
+    [info]  检测到 3 台设备
+    [command]  "adb.exe" devices -l
+    [success]  完成（146ms）
+    [command]  "adb.exe" devices -l
+    [success]  完成（147ms）
+    [command]  "adb.exe" devices -l
+    [success]  完成（167ms）
+[PASS] 运行日志有内容 :: 13 条
+[PASS] 生产进程可正常退出 :: 已退出
+
+=== 结果：12/12 通过 ===
+结果已写入 D:\WorkSpace\手机助手\adb-assistant-v0.9\docs\test-packaged-stage1.txt

@@ -1,0 +1,22 @@
+=== Stage 2 核心功能（真机） ===
+rc=0  用时 15.1s
+
+=== 生产包验收 · Stage 2：核心功能 ===
+
+启动生产版 pid=11660，等待页面就绪...
+[PASS] 生产版页面就绪 :: index.html
+[PASS] 找到就绪设备 :: aaab4f58
+  分辨率返回: {"physical":"720x1600","current":"720x1600","density":320}
+[PASS] 读取分辨率 :: {"physical":"720x1600","current":"720x1600","density":320}
+[PASS] 截图落地为合法 PNG :: screenshot_20260915_123603.png  1138.9 KB
+  adb 命令原始返回: {"ok":true,"data":{"ok":true,"code":0,"stdout":"CPH1931\r\n","stderr":"","commandLine":"\"adb.exe\" -s aaab4f58 shell getprop ro.product.model","duration":359}}
+[PASS] 执行 adb 命令 :: CPH1931
+  投屏启动返回: {"ok":true,"data":{"running":true,"serial":"aaab4f58","pid":33368,"startedAt":1789446966262,"options":{"serial":"aaab4f5
+  投屏状态: {"running":true,"serial":"aaab4f58","pid":33368,"startedAt":1789446966262,"options":{"serial":"aaab4f58"}}
+[PASS] 投屏启动且进程存活 :: running=true pid=33368 alive=true
+[PASS] 投屏可正常停止 :: running=false
+[PASS] 运行日志可读取 :: 30 条
+[PASS] 设置可读写 :: theme=dark
+
+=== 结果：9/9 通过 ===
+结果已写入 D:\WorkSpace\手机助手\adb-assistant-v0.9\docs\test-packaged-stage2.txt

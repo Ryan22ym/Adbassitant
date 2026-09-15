@@ -4,6 +4,7 @@ import { DevicePicker, deviceLabel } from '@/components/layout';
 import { useApp, useOnlineCount } from '@/store/app';
 import { call, tryCall } from '@/lib/ipc';
 import { formatBytes } from '@/lib/format';
+import { mirrorOptionsFor, isMirroringDevice } from '@/lib/mirror';
 
 interface DeviceDetail {
   brand?: string;
@@ -133,6 +134,35 @@ export default function DevicePage() {
   const onlineCount = useOnlineCount();
   const hasProblem = devices.some((d) => d.state === 'unauthorized' || d.state === 'offline');
 
+  /* 快速投屏：不切页直接起投屏窗口 */
+  const mirror = useApp((s) => s.mirror);
+  const [quickBusy, setQuickBusy] = useState<string | null>(null);
+
+  const quickMirror = async (serial: string) => {
+    setQuickBusy(serial);
+    try {
+      // 沿用投屏页上次用的参数（未调过则是默认均衡档）
+      await call(() => window.adbApi.startMirror(mirrorOptionsFor(serial)), {
+        successMessage: '投屏窗口已启动',
+      });
+    } catch (e) {
+      toast('error', (e as Error).message);
+    } finally {
+      setQuickBusy(null);
+    }
+  };
+
+  const quickStopMirror = async () => {
+    setQuickBusy('__stop__');
+    try {
+      await call(() => window.adbApi.stopMirror(), { successMessage: '投屏已停止' });
+    } catch (e) {
+      toast('error', (e as Error).message);
+    } finally {
+      setQuickBusy(null);
+    }
+  };
+
   return (
     <>
       {/* 设备列表 */}
@@ -168,31 +198,81 @@ export default function DevicePage() {
           />
         ) : (
           <div className="device-list">
-            {devices.map((d) => (
-              <button
-                key={d.serial}
-                className={`device-row ${d.serial === currentSerial ? 'selected' : ''}`}
-                onClick={() => d.state === 'device' && useApp.getState().setCurrentSerial(d.serial)}
-                disabled={d.state !== 'device'}
-              >
-                <span className={`device-avatar ${d.state === 'device' ? 'ok' : ''}`}>
-                  {d.isEmulator ? 'E' : 'A'}
-                </span>
-                <span className="device-main">
-                  <span className="device-name">{deviceLabel(d)}</span>
-                  <span className="device-serial mono">{d.serial}</span>
-                </span>
-                <span className="device-tags">
-                  <Badge tone={d.connection === 'tcp' ? 'accent' : 'default'}>
-                    {d.connection === 'tcp' ? '无线' : 'USB'}
-                  </Badge>
-                  {d.isEmulator && <Badge tone="default">模拟器</Badge>}
-                  <Badge tone={stateTone(d.state)} dot={d.state === 'device'}>
-                    {stateLabel(d.state)}
-                  </Badge>
-                </span>
-              </button>
-            ))}
+            {devices.map((d) => {
+              const ready = d.state === 'device';
+              const thisMirroring = isMirroringDevice(d.serial, mirror.running ? mirror.serial : undefined);
+              const otherMirroring = mirror.running && !thisMirroring;
+              return (
+                <div
+                  key={d.serial}
+                  className={`device-row ${d.serial === currentSerial ? 'selected' : ''} ${ready ? '' : 'disabled'}`}
+                  role="button"
+                  tabIndex={ready ? 0 : -1}
+                  aria-disabled={!ready}
+                  onClick={() => ready && useApp.getState().setCurrentSerial(d.serial)}
+                  onKeyDown={(e) => {
+                    if (!ready) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      useApp.getState().setCurrentSerial(d.serial);
+                    }
+                  }}
+                >
+                  <span className={`device-avatar ${ready ? 'ok' : ''}`}>
+                    {d.isEmulator ? 'E' : 'A'}
+                  </span>
+                  <span className="device-main">
+                    <span className="device-name">{deviceLabel(d)}</span>
+                    <span className="device-serial mono">{d.serial}</span>
+                  </span>
+                  <span className="device-tags">
+                    <Badge tone={d.connection === 'tcp' ? 'accent' : 'default'}>
+                      {d.connection === 'tcp' ? '无线' : 'USB'}
+                    </Badge>
+                    {d.isEmulator && <Badge tone="default">模拟器</Badge>}
+                    <Badge tone={stateTone(d.state)} dot={d.state === 'device'}>
+                      {stateLabel(d.state)}
+                    </Badge>
+                  </span>
+                  {/* 快速投屏：无需切到投屏页；正在投屏的这台变成「停止投屏」 */}
+                  <span className="device-actions">
+                    {thisMirroring ? (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        loading={quickBusy === '__stop__'}
+                        title="停止投屏窗口"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          quickStopMirror();
+                        }}
+                      >
+                        停止投屏
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        loading={quickBusy === d.serial}
+                        disabled={!ready || !!otherMirroring}
+                        title={
+                          otherMirroring
+                            ? `已有投屏在运行（${mirror.serial}），请先停止`
+                            : `直接投屏这台设备（沿用投屏页的画质设置）`
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          useApp.getState().setCurrentSerial(d.serial);
+                          quickMirror(d.serial);
+                        }}
+                      >
+                        投屏
+                      </Button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>
