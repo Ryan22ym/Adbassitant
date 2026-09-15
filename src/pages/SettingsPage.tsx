@@ -4,6 +4,16 @@ import { useApp } from '@/store/app';
 import { call } from '@/lib/ipc';
 import type { EnvCheckResult } from '@shared/types';
 
+/**
+ * 每个版本的一句话亮点，key 为 package.json 的完整版本号。
+ * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
+ */
+const VERSION_NOTES: Record<string, string> = {
+  '1.0.2': '本版本修复弱网代理残留导致设备断网的问题：清理时先 put :0 触发系统刷新，再清代理真身键，确保手机恢复上网。另新增常用应用收藏与免 Root 弱网模拟（丢包/延迟/限速）。',
+  '1.0.1': '本版本新增应用管理页常用应用收藏（跨设备记忆包名），弱网模拟改为免 Root 代理方案（adb reverse + 系统全局代理 + 电脑端注入），无需 Root 即可使用。',
+  '1.0.0': '本版本聚焦基础能力：设备管理、投屏、截图录屏、分辨率调节、Monkey、APK 安装、文件传输、命令终端与日志导出。',
+};
+
 export default function SettingsPage() {
   const settings = useApp((s) => s.settings);
   const setSettings = useApp((s) => s.setSettings);
@@ -139,14 +149,14 @@ export default function SettingsPage() {
       <Card title="关于">
         <div className="kv-list">
           <About k="程序名称" v="ADB 桌面助手" />
-          <About k="版本" v="v0.9.0（基础功能版）" />
+          <About k="版本" v={`v${__APP_VERSION__}`} />
           <About k="UI 技术栈" v="Electron + React 18 + TypeScript" />
           <About k="投屏引擎" v="scrcpy 3.1" />
           <About k="设备通信" v="Android Platform-Tools (adb)" />
         </div>
         <Notice tone="accent">
-          本版本聚焦基础能力：设备管理、投屏、截图录屏、分辨率调节、Monkey、
-          APK 安装、文件传输、命令终端与日志导出。更多高级功能将在后续版本加入。
+          {VERSION_NOTES[__APP_VERSION__] ??
+            '更多高级功能将在后续版本加入。'}
         </Notice>
       </Card>
     </>
