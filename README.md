@@ -22,7 +22,7 @@
 | **录屏** | 设备端 screenrecord；设备未内置时自动回退 scrcpy 录制通道，自动落地 MP4 |
 | **分辨率** | 查看物理/当前分辨率与 DPI，5 组预设 + 自定义，一键恢复默认 |
 | **Monkey** | 图形化稳定性测试，可选目标应用、事件数、节流、seed，实时输出日志 |
-| **安装 APK** | 选择本地 APK 安装，支持覆盖安装与自动授权；**支持把 APK 直接拖到程序窗口任意位置安装**，实时弹出进度（安装中 / 成功 / 失败），安装期间锁定不接受重复任务 |
+| **安装 APK** | 选择本地 APK 安装，三种安装方式（**覆盖安装 -r 保留数据 / 清洁安装 先卸载清数据 / 全新安装 已存在则拒绝**）与自动授权；**支持把 APK 直接拖到程序窗口任意位置安装**，实时弹出进度（安装中 / 成功 / 失败），显示目标设备与包名，**装完按包名 `pm path` 复核**，安装期间锁定不接受重复任务 |
 | **文件传输** | 批量 push 到设备、批量 pull 到电脑 |
 | **应用管理** 🆕 | 用户/系统/全部三态筛选 + 关键字搜索；详情（版本号/占用/安装时间/Activity 数/权限）；启动、强制停止、清除数据、提取 APK、启用停用、卸载；**常用应用收藏**（星标固定，跨设备/跨重启保留，一键启动） |
 | **实时 Logcat** 🆕 | 流式抓取（120ms 批量推送 + 20000 行环形缓冲）；级别/TAG 通配/关键字/进程/缓冲区多路过滤；快捷过滤（只看错误 / 闪退 ANR / Activity 启动）；暂停刷新、一键保存 |
@@ -548,6 +548,47 @@ getPathForFile: (file: File) => {
 跑之前一律先 `python scripts/_kill-our-processes.py`。
 （另外这些脚本自己会 `delete env.ELECTRON_RUN_AS_NODE`，否则 Electron 退化成纯 Node。）
 
+### ⚠️「adb 报 Success」不等于装上了：必须装后复核 + 目标设备定死
+
+用户报过「界面显示安装成功、日志里 adb 命令也跑了，但手机上找不到应用」。查下来
+**不是 `-r` 的问题**（实测 `-r` 装全新包完全正常），而是两个工程缺口：
+
+1. **目标设备没定死**。`ensureDevice(serial)` 在 serial 为空时取的是「在线列表第一台」；
+   三台设备同时在线（真机 + 两个模拟器）时等于随机挑一台，界面照样报「安装成功」，
+   用户在自己手机上自然找不到。→ 安装路径上只认界面选中的那台，**serial 缺失且多台在线直接拒绝**；
+   并且把「装到哪台」写进日志、页面和弹窗。
+2. **装完不复核**。`adb install` 返回 `Success` 只代表设备端安装会话提交了，
+   多用户 / 系统分身（装到了别的 user）、存储或权限受限、厂商安全策略拦截都可能
+   「Success 但设备上没有这个包」。→ 装完必须 `pm path <包名>` 复核，
+   查不到就判失败并把原因摊开写出来。
+
+成本是要拿到**包名**：`pm path` 和「清洁安装」的 `uninstall` 都要按包名来，而
+platform-tools 不带 aapt。所以有了 `electron/services/apk.ts` —— 手写的 ZIP + AXML 解析，
+只读 APK 里的 `AndroidManifest.xml` 拿 package / versionName / versionCode。
+
+### ⚠️ 手写 AXML 解析的两个必踩坑
+
+自己解析二进制 `AndroidManifest.xml` 时，有两处极容易写错，而且症状都很隐蔽：
+
+- **字符串池的字节序不固定**。同一个 flag（非 UTF-8 = UTF-16）下，aapt1 产的 manifest
+  是 **UTF-16BE**，aapt2 有出小端的。按固定 `toString('utf16le')` 解，`t`(0x0074) 会变成
+  U+7400 这种汉字区乱码 —— 属性名全错，但**解析过程不报任何错**，只是最后 `package` 匹配不上，
+  表现为「读不出包名」。解法：两条字节序都试，按 **ASCII 可读字符数**投票
+  （manifest 里的标签名/属性名/包名基本全是 ASCII，选错字节序 ASCII 计数会直接掉到 0）。
+- **属性数组的起点是 `attrExt + attributeStart`**。StartElement 的布局是
+  `chunk头 8B | lineNumber 4B | comment 4B | ← attrExt 在这里`，attrExt 内部才是
+  `ns(4) name(4) attributeStart(2) attributeSize(2) attributeCount(2)…`。
+  少加这 8 字节就会读到 `attributeCount` 上去，属性名整体错位，同样**不报错**。
+
+`npm run check:apk-parse` 就是钉这两个坑：包名与版本号必须和设备端 `dumpsys package` 对上。
+
+### ⚠️ `adb install` 不带 `-r` 也会覆盖已装应用
+
+老资料说「`adb install` 遇到已装包会报 `INSTALL_FAILED_ALREADY_EXISTS`，要覆盖得加 `-r`」——
+**在 Android 12 上实测不成立**：不带 `-r` 照样把已装应用覆盖掉了（日志里 `Success`，
+包正常更新）。所以「全新安装（已存在则拒绝）」这种语义**不能靠省略 `-r` 实现**，
+必须自己先 `pm path <包名>` 判一次再决定要不要往下走。
+
 ---
 
 ## 环境要求
@@ -622,6 +663,14 @@ python scripts/run-electron.py scripts/check-drag-install.cjs \
 # 注意：被测应用有单实例锁，跑之前先 python scripts/_kill-our-processes.py
 node scripts/check-drag-install.cjs --installed
 # 或 npm run check:drag-install:installed
+
+# ---- APK 包名解析（纯 Node，秒级）----
+# 9 项：手写的 ZIP + AXML 解析器能不能读出正确的包名/版本号（与设备端 dumpsys 交叉验证）
+npm run check:apk-parse
+
+# ---- 三种安装方式（后端直测，21 项）----
+# 覆盖 / 清洁 / 全新 + 目标设备定死 + 装后复核 + 互斥锁 + 日志可追溯
+npm run check:install-modes
 ```
 
 > Windows 下跑 electron 脚本前需先 `unset ELECTRON_RUN_AS_NODE`，

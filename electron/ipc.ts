@@ -8,6 +8,7 @@ import {
   type CommandResult,
   type LogcatFilter,
   type WeakNetParams,
+  type InstallMode,
 } from '../shared/types';
 import {
   listDevices,
@@ -351,8 +352,14 @@ export function registerIpc() {
 
   ipcMain.handle(
     IPC.APK_INSTALL,
-    wrap((_e, serial: string | undefined, apkPath: string, reinstall = true, grantAll = false) =>
-      installApk(serial, apkPath, reinstall, grantAll),
+    wrap(
+      (
+        _e,
+        serial: string | undefined,
+        apkPath: string,
+        mode: InstallMode = 'overwrite',
+        grantAll = false,
+      ) => installApk(serial, apkPath, mode, grantAll),
     ),
   );
 

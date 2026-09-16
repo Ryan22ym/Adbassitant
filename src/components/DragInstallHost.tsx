@@ -119,7 +119,8 @@ async function handleWindowDrop(files: File[]) {
   }
   if (skipped > 0) st.toast('info', `已忽略 ${skipped} 个非 APK 文件`);
 
-  await installApkFiles(apks);
+  // 与「安装 APK」页保持同一个安装方式，避免用户选了清洁安装、拖进去却是覆盖安装
+  await installApkFiles(apks, { mode: st.installMode });
 }
 
 /* ------------------------------------------------------------------ */
@@ -156,6 +157,18 @@ function InstallDialog({ task }: { task: InstallTask }) {
         {(task.sizeBytes ?? 0) > 0 && (
           <p className="install-size">{formatBytes(task.sizeBytes)}</p>
         )}
+
+        {/*
+          装到哪台机器必须写出来。多设备在线时，「安装成功」本身
+          说明不了任何事 —— 用户很可能在另一台手机上找应用。
+        */}
+        <div className="install-meta">
+          {task.modeLabel && <span className="install-chip">{task.modeLabel}</span>}
+          {task.device && <span className="install-chip ghost">→ {task.device}</span>}
+          {isSuccess && task.verified === true && (
+            <span className="install-chip ok">已复核</span>
+          )}
+        </div>
 
         {installing ? (
           <p className="install-note">

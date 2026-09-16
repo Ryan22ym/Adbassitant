@@ -5,6 +5,7 @@ import type {
   MirrorStatus,
   AppSettings,
   RecordSession,
+  InstallMode,
 } from '@shared/types';
 
 /* ------------------------------------------------------------------ */
@@ -36,6 +37,17 @@ export interface InstallTask {
   sizeBytes?: number;
   /** 成功时为 adb 输出，失败时为失败原因 */
   message?: string;
+  /** 安装方式的中文标签（覆盖 / 清洁 / 全新）—— 让用户知道数据会不会被清 */
+  modeLabel?: string;
+  /**
+   * 目标设备标签（型号 · Android 版本）+ 序列号。
+   * 多台设备在线时必须能看到究竟装到哪台，否则「装到别的机器上」无从察觉。
+   */
+  device?: string;
+  /** 从 APK 里读出的包名 / 版本，装完复核用 */
+  packageName?: string;
+  /** 装后是否按包名复核到（undefined = 读不出包名没复核） */
+  verified?: boolean;
   /** 第几个 / 总共几个（多文件顺序安装时用） */
   index?: number;
   total?: number;
@@ -82,6 +94,13 @@ interface AppState {
   /* 拖放安装 */
   install: InstallTask | null;
   setInstall: (t: InstallTask | null) => void;
+  /**
+   * 当前安装方式。放在 store 里是为了让「整窗拖放」和「安装 APK 页的按钮/拖放区」
+   * 走同一个值 —— 否则用户选了清洁安装，拖进去却是覆盖安装，会莫名其妙丢数据。
+   * 故意不做持久化：默认永远是覆盖安装这个不破坏数据的选项。
+   */
+  installMode: InstallMode;
+  setInstallMode: (m: InstallMode) => void;
   /** 是否正把文件拖在窗口上方（用于显示全窗拖放提示） */
   dragActive: boolean;
   setDragActive: (v: boolean) => void;
@@ -172,6 +191,9 @@ export const useApp = create<AppState>((set, get) => ({
   /* ---------------- 拖放安装 ---------------- */
   install: null,
   setInstall: (install) => set({ install }),
+
+  installMode: 'overwrite',
+  setInstallMode: (installMode) => set({ installMode }),
 
   dragActive: false,
   setDragActive: (dragActive) => {

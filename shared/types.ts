@@ -205,6 +205,45 @@ export interface FavoriteApp {
 }
 
 /* ------------------------------------------------------------------ */
+/* APK 安装                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 安装方式：
+ *  - overwrite 覆盖安装（adb install -r）：保留数据，适合升级；签名不一致会失败
+ *  - clean     清洁安装：先按包名卸载旧版本（数据一起清掉）再全新安装，
+ *              用于「覆盖装不上 / 装完行为诡异 / 想从干净状态开始」
+ *  - fresh     全新安装（不带 -r）：设备上已有该包则直接报错，不会动旧数据
+ */
+export type InstallMode = 'overwrite' | 'clean' | 'fresh';
+
+/** 各安装方式的界面文案（主进程日志与渲染层共用，避免两处各写一份） */
+export const INSTALL_MODE_LABEL: Record<InstallMode, string> = {
+  overwrite: '覆盖安装（保留数据）',
+  clean: '清洁安装（先卸载，清除数据）',
+  fresh: '全新安装（不覆盖）',
+};
+
+/** 安装结果 —— 关键在 serial / verified：装到哪台、到底在不在，都要能说清楚 */
+export interface InstallResult {
+  /** 实际安装到的设备序列号 */
+  serial: string;
+  /** 从 APK 里读出的包名（读不出时为空） */
+  packageName?: string;
+  versionName?: string;
+  versionCode?: number;
+  /** adb install 的原始输出 */
+  output: string;
+  /** 清洁安装时是否真的卸载了旧版本（没有旧版本或不适用时为 false） */
+  uninstalled: boolean;
+  /**
+   * 装后是否按包名在设备上复核到（`pm path`）。
+   * 读不出包名时为 undefined —— 表示「装是装完了，但没能复核」。
+   */
+  verified?: boolean;
+}
+
+/* ------------------------------------------------------------------ */
 /* 实时 Logcat                                                         */
 /* ------------------------------------------------------------------ */
 

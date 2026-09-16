@@ -1,5 +1,7 @@
 import { useApp, type InstallTask } from '@/store/app';
+import { deviceLabel } from '@/components/layout';
 import { call } from '@/lib/ipc';
+import { INSTALL_MODE_LABEL, type InstallMode, type InstallResult } from '@shared/types';
 
 /**
  * 拖放 / 按钮安装的统一入口。
@@ -20,8 +22,8 @@ export interface InstallFile {
 }
 
 export interface InstallOptions {
-  /** 覆盖安装（-r），默认 true */
-  reinstall?: boolean;
+  /** 安装方式，默认 overwrite（-r 覆盖、保留数据） */
+  mode?: InstallMode;
   /** 自动授予全部权限（-g），默认 false */
   grantAll?: boolean;
 }
@@ -117,15 +119,20 @@ export async function installApkFiles(
     return;
   }
 
-  const reinstall = options.reinstall ?? true;
+  const mode = options.mode ?? 'overwrite';
   const grantAll = options.grantAll ?? false;
   const total = files.length;
+
+  /* 目标设备要在弹窗里露出来 —— 多台设备在线时装错机器，光看「安装成功」是发现不了的 */
+  const target = `${deviceLabel(device)} · ${device.serial}`;
 
   const beginTask = (index: number): InstallTask => ({
     phase: 'installing',
     fileName: total > 1 ? `${files[index].name}（${index + 1}/${total}）` : files[index].name,
     apkPath: files[index].path,
     sizeBytes: files[index].size,
+    modeLabel: INSTALL_MODE_LABEL[mode],
+    device: target,
     index: index + 1,
     total,
     startedAt: Date.now(),
@@ -136,8 +143,8 @@ export async function installApkFiles(
     useApp.getState().setInstall(task);
 
     try {
-      const output = await call<string>(
-        () => window.adbApi.installApk(device.serial, files[i].path, reinstall, grantAll),
+      const result = await call<InstallResult>(
+        () => window.adbApi.installApk(device.serial, files[i].path, mode, grantAll),
         { silent: true },
       );
 
@@ -146,7 +153,9 @@ export async function installApkFiles(
         const done: InstallTask = {
           ...task,
           phase: 'success',
-          message: cleanOutput(output) || 'Success',
+          message: successMessage(result),
+          packageName: result?.packageName,
+          verified: result?.verified,
           finishedAt: Date.now(),
         };
         useApp.getState().setInstall(done);
@@ -162,6 +171,24 @@ export async function installApkFiles(
       return;
     }
   }
+}
+
+/** 成功详情：把「装到哪台、哪个包、有没有复核过」都写出来 */
+function successMessage(r?: InstallResult): string {
+  if (!r) return 'Success';
+  const lines: string[] = [];
+
+  const out = cleanOutput(r.output);
+  if (out) lines.push(out);
+
+  if (r.packageName) {
+    lines.push(`包名：${r.packageName}${r.versionName ? ` v${r.versionName}` : ''}`);
+  }
+  if (r.uninstalled) lines.push('清洁安装：已先卸载旧版本，应用数据已清除');
+  if (r.verified === true) lines.push(`已复核：${r.serial} 上确实存在该包`);
+  else if (r.verified === undefined) lines.push('提示：读不出 APK 包名，本次未做装后复核');
+
+  return lines.join('\n') || 'Success';
 }
 
 /** 去掉 adb install 输出里的空行与 Success 前缀噪音 */

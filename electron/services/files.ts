@@ -1,8 +1,10 @@
 import { existsSync, statSync, readdirSync } from 'fs';
 import { basename, join, extname } from 'path';
 import { randomUUID } from 'crypto';
-import { runAdb, ensureDevice, log, spawnBinary, adbPath, ensureDir } from './adb';
-import type { AppInfo, AppDetail } from '../../shared/types';
+import { runAdb, ensureDevice, log, spawnBinary, adbPath, ensureDir, listDevices } from './adb';
+import { readApkInfo } from './apk';
+import { INSTALL_MODE_LABEL } from '../../shared/types';
+import type { AppInfo, AppDetail, InstallMode, InstallResult } from '../../shared/types';
 
 function formatBytesFallback(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -195,14 +197,49 @@ export function isInstalling(): boolean {
 }
 
 /**
+ * 明确安装目标。
+ *
+ * `ensureDevice()` 在 serial 为空时取的是「在线列表第一台」——三台设备同时在线时，
+ * 这等于随机挑一台，界面照样报「安装成功」，但用户在自己手机上找不到应用。
+ * 所以安装路径上必须卡死：serial 缺失且多台在线就直接拒绝。
+ */
+async function resolveInstallTarget(serial?: string): Promise<string> {
+  if (serial) return ensureDevice(serial);
+
+  const devices = await listDevices(false);
+  const online = devices.filter((d) => d.state === 'device');
+  if (online.length > 1) {
+    throw new Error(
+      `有 ${online.length} 台设备在线（${online.map((d) => d.serial).join('、')}），` +
+        '无法确定装到哪台，请先在设备选择里指定一台',
+    );
+  }
+  return ensureDevice(serial);
+}
+
+/** 设备上是否已装该包 */
+async function deviceHasPackage(s: string, pkg: string): Promise<boolean> {
+  const res = await runAdb(['-s', s, 'shell', 'pm', 'path', pkg], {
+    silent: true,
+    timeout: 20000,
+  });
+  return /^package:/m.test(res.stdout);
+}
+
+/**
  * APK 安装
+ *
+ * 三种模式见 shared/types.ts 的 InstallMode。
+ * 无论哪种模式，装完都会按包名 `pm path` 复核一遍 —— adb 说 Success 不等于
+ * 设备上真有这个包（多用户/系统分身、存储或权限受限、厂商拦截都可能假成功），
+ * 复核不到就直接判失败，不再让界面出现「显示成功但手机上没有」。
  */
 export async function installApk(
   serial: string | undefined,
   apkPath: string,
-  reinstall = true,
+  mode: InstallMode = 'overwrite',
   grantAll = false,
-): Promise<string> {
+): Promise<InstallResult> {
   if (installInFlight !== null) {
     throw new Error(`正在安装 ${installInFlight}，请等它完成后再试`);
   }
@@ -212,31 +249,111 @@ export async function installApk(
   installInFlight = basename(apkPath) || 'APK';
 
   try {
-    const s = await ensureDevice(serial);
+    const s = await resolveInstallTarget(serial);
 
     if (!existsSync(apkPath)) throw new Error(`APK 不存在：${apkPath}`);
     if (extname(apkPath).toLowerCase() !== '.apk') {
       throw new Error('所选文件不是 .apk 文件');
     }
 
+    const info = readApkInfo(apkPath);
+    const pkg = info.packageName;
     const size = safeSize(apkPath);
-    log('info', '安装', `正在安装 ${basename(apkPath)}（${formatBytesFallback(size)}）…`);
+    const who = pkg ? `${pkg}${info.versionName ? ` v${info.versionName}` : ''}` : basename(apkPath);
 
+    log(
+      'info',
+      '安装',
+      `目标设备 ${s}｜${INSTALL_MODE_LABEL[mode]}：${who}（${formatBytesFallback(size)}）`,
+    );
+    if (!pkg) {
+      log(
+        'warn',
+        '安装',
+        `读不出 APK 包名（${info.error ?? '未知原因'}），装完将不做复核`,
+        basename(apkPath),
+      );
+    }
+
+    /* ---- 清洁安装：先按包名卸载旧版本，数据一并清掉 ---- */
+    let uninstalled = false;
+    if (mode === 'clean') {
+      if (!pkg) {
+        throw new Error(
+          '读不出 APK 包名，无法清洁安装（清洁安装要先按包名卸载旧版本）。可改用「覆盖安装」。',
+        );
+      }
+      if (await deviceHasPackage(s, pkg)) {
+        log('info', '安装', `清洁安装：先卸载 ${pkg}，应用数据会一起清掉`);
+        const res = await runAdb(['-s', s, 'uninstall', pkg], { source: '安装', timeout: 90000 });
+        const text = (res.stdout + '\n' + res.stderr).trim();
+        if (/Failure|Error/i.test(text) || !res.ok || !/Success/i.test(text)) {
+          throw new Error(
+            `卸载旧版本失败：${text.replace(/^.*?Failure\s*/i, '').trim() || '未知原因'}`,
+          );
+        }
+        uninstalled = true;
+      } else {
+        log('info', '安装', `清洁安装：设备上没有 ${pkg}，直接全新安装`);
+      }
+    }
+
+    /* ---- 全新安装：设备上已有该包就必须拒绝 ----
+     * 不能只靠「不加 -r」实现：实测 Android 12 上 `adb install` 不带 -r 也会
+     * 直接覆盖已装应用（老版本才会报 INSTALL_FAILED_ALREADY_EXISTS），
+     * 语义随 ROM 变化，所以自己按包名判一次，保证行为确定。 */
+    if (mode === 'fresh' && pkg && (await deviceHasPackage(s, pkg))) {
+      throw new Error(
+        `设备 ${s} 上已存在 ${pkg}，已按「全新安装」的约定中止，没有动到旧版本。` +
+          '如需升级请用「覆盖安装」，如需清空数据重装请用「清洁安装」。',
+      );
+    }
+
+    /* ---- 组装安装命令 ---- */
     const args = ['-s', s, 'install'];
-    if (reinstall) args.push('-r');
+    if (mode === 'overwrite') args.push('-r');
     if (grantAll) args.push('-g');
     args.push(toPosixPath(apkPath));
 
     const res = await runAdb(args, { source: '安装', timeout: 5 * 60 * 1000 });
-
     const output = (res.stdout + '\n' + res.stderr).trim();
     if (/Failure|Error/i.test(output) || !res.ok) {
       const reason = output.replace(/^.*?Failure\s*/i, '').trim();
       throw new Error(reason || output || '安装失败');
     }
 
-    log('success', '安装', `安装成功：${basename(apkPath)}`);
-    return output;
+    /* ---- 装后复核 ---- */
+    let verified: boolean | undefined;
+    if (pkg) {
+      for (let i = 0; i < 5; i += 1) {
+        if (await deviceHasPackage(s, pkg)) {
+          verified = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      if (verified !== true) {
+        verified = false;
+        throw new Error(
+          `adb 报告安装成功，但在设备 ${s} 上查不到 ${pkg} —— 实际没有装上。` +
+            '常见原因：设备有多个用户 / 系统分身，装到了别的用户下；存储空间或权限受限；厂商安全策略拦截。' +
+            '可改用「清洁安装」再试一次。',
+        );
+      }
+      log('success', '安装', `安装成功并已复核：${who} → ${s}`);
+    } else {
+      log('success', '安装', `安装成功（读不出包名，未复核）：${basename(apkPath)} → ${s}`);
+    }
+
+    return {
+      serial: s,
+      packageName: pkg,
+      versionName: info.versionName,
+      versionCode: info.versionCode,
+      output,
+      uninstalled,
+      verified,
+    };
   } finally {
     // 无论成功、失败还是抛异常都必须释放，否则安装功能会被永久锁死
     installInFlight = null;

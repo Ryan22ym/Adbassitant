@@ -136,8 +136,13 @@ const api = {
   openPath: (path: string) => invoke(IPC.FILE_OPEN, path),
 
   /* APK */
-  installApk: (serial: string | undefined, apkPath: string, reinstall = true, grantAll = false) =>
-    invoke(IPC.APK_INSTALL, serial, apkPath, reinstall, grantAll),
+  /** mode: overwrite（-r，保留数据）/ clean（先卸载，清数据）/ fresh（不覆盖） */
+  installApk: (
+    serial: string | undefined,
+    apkPath: string,
+    mode: 'overwrite' | 'clean' | 'fresh' = 'overwrite',
+    grantAll = false,
+  ) => invoke(IPC.APK_INSTALL, serial, apkPath, mode, grantAll),
 
   /**
    * 取拖放进来的文件在磁盘上的真实路径。

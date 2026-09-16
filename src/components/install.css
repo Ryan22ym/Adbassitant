@@ -125,6 +125,39 @@
   color: var(--text-tertiary);
 }
 
+/* 弹窗里的「装到哪台 / 用什么方式」——多设备在线时这行信息是刚需 */
+.install-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.install-chip {
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.install-chip.ghost {
+  border-color: var(--border);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+}
+
+.install-chip.ok {
+  border-color: transparent;
+  background: var(--success-soft);
+  color: var(--success);
+}
+
 .install-detail {
   margin-top: 13px;
   max-height: 148px;
@@ -216,4 +249,16 @@
   flex: none;
   font-size: 11.5px;
   color: var(--text-tertiary);
+}
+
+/* 页面上的「将安装到」——和设备列表选中项保持一致，避免装错机器 */
+.apk-target {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.apk-target-serial {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }

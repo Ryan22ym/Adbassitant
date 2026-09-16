@@ -109,6 +109,31 @@ window.__dnd = {
     return el ? Array.from(el.files) : [];
   },
   veil: () => !!document.querySelector('.drop-veil'),
+  /**
+   * 切换「安装方式」。拖放安装读的是 store 里的 installMode，
+   * 所以点一下分段控件就够了（前提：页面在「安装 APK」标签页上）。
+   */
+  setMode(label) {
+    const box = document.querySelector('[data-install-mode]');
+    if (!box) return 'no-mode-box';
+    const btn = Array.from(box.querySelectorAll('.segmented-item')).find(
+      (b) => b.textContent.trim() === label,
+    );
+    if (!btn) return 'no-btn:' + Array.from(box.querySelectorAll('.segmented-item')).map((b) => b.textContent.trim()).join('|');
+    btn.click();
+    return 'ok';
+  },
+  modeInfo() {
+    const box = document.querySelector('[data-install-mode]');
+    if (!box) return null;
+    return {
+      options: Array.from(box.querySelectorAll('.segmented-item')).map((b) => b.textContent.trim()),
+      active: (box.querySelector('.segmented-item.active')?.textContent || '').trim(),
+      value: box.getAttribute('data-install-mode'),
+    };
+  },
+  /** 页面上的「将安装到 xxx · serial」 */
+  targetText: () => (document.querySelector('.apk-target')?.textContent || '').trim(),
   maskState() {
     const mask = document.querySelector('.install-mask');
     if (!mask) return null;
@@ -117,6 +142,7 @@ window.__dnd = {
       file: (mask.querySelector('.install-file')?.textContent || '').trim(),
       detail: (mask.querySelector('.install-detail')?.textContent || '').trim(),
       note: (mask.querySelector('.install-note')?.textContent || '').trim(),
+      chips: Array.from(mask.querySelectorAll('.install-chip')).map((c) => c.textContent.trim()),
       buttons: Array.from(mask.querySelectorAll('.install-actions .btn')).map((b) => b.textContent.trim()),
     };
   },
@@ -454,7 +480,116 @@ async function runChecks(page) {
   );
   await page.screenshot(path.join(OUT, 'drag-install-5-page-zone.png'));
 
+  /* ---------- 10. 安装方式三选一 + 目标设备必须可见 ---------- */
+  const modeInfo = await page.evalJS(`window.__dnd.modeInfo()`);
+  log('安装方式:', JSON.stringify(modeInfo));
+  record(
+    !!modeInfo &&
+      ['覆盖安装', '清洁安装', '全新安装'].every((t) => (modeInfo.options || []).includes(t)),
+    '页面提供三种安装方式（覆盖 / 清洁 / 全新）',
+    safe(JSON.stringify(modeInfo)),
+  );
+  record(
+    !!modeInfo && modeInfo.active === '覆盖安装',
+    '默认是覆盖安装（不破坏数据）',
+    String(modeInfo && modeInfo.active),
+  );
+
+  const targetText = await page.evalJS(`window.__dnd.targetText()`);
+  record(
+    !!targetText && targetText.includes(SERIAL),
+    '页面上标出了安装目标设备（含序列号）',
+    safe(targetText),
+  );
+
+  /* ---------- 11. 全新安装遇已装包：界面必须报失败 ---------- */
+  await page.evalJS(`window.__dnd.setMode('全新安装')`);
+  await sleep(250);
+  const switched = await page.evalJS(`window.__dnd.modeInfo()`);
+  record(switched && switched.active === '全新安装', '能切到「全新安装」', String(switched && switched.value));
+
+  const freshState = await dropAndWait(page, 120);
+  record(
+    !!(freshState && freshState.title.includes('安装失败') && /已存在/.test(freshState.detail || '')),
+    '全新安装遇已装包：界面报失败而不是假成功',
+    safe(JSON.stringify(freshState)),
+  );
+
+  // 失败弹窗不会自动关，先关掉再进下一步，否则下一轮会读到这个旧状态
+  await closeInstallMask(page);
+
+  /* ---------- 12. 清洁安装：先卸载再装，弹窗要写明数据被清 ---------- */
+  await page.evalJS(`window.__dnd.setMode('清洁安装')`);
+  await sleep(250);
+  const cleanState = await dropAndWait(page, 180);
+  record(
+    !!(cleanState && cleanState.title.includes('安装成功')),
+    '清洁安装成功',
+    safe(JSON.stringify(cleanState)),
+  );
+  record(
+    !!(cleanState && /已先卸载旧版本/.test(cleanState.detail || '')),
+    '清洁安装弹窗写明「已先卸载旧版本，应用数据已清除」',
+    safe(JSON.stringify(cleanState && cleanState.detail)),
+  );
+  record(
+    !!(cleanState && /已复核/.test(cleanState.detail || '')),
+    '弹窗写明装后已复核（设备上确有该包）',
+    safe(JSON.stringify(cleanState && cleanState.detail)),
+  );
+  record(
+    !!(cleanState && (cleanState.chips || []).some((c) => c.includes(SERIAL))),
+    '弹窗里标出了目标设备（含序列号）',
+    safe(JSON.stringify(cleanState && cleanState.chips)),
+  );
+  record(
+    !!(cleanState && (cleanState.chips || []).some((c) => c.includes('清洁安装'))),
+    '弹窗里标出了安装方式',
+    safe(JSON.stringify(cleanState && cleanState.chips)),
+  );
+  record(
+    !!(cleanState && (cleanState.chips || []).some((c) => c.includes('已复核'))),
+    '弹窗给出「已复核」标记',
+    safe(JSON.stringify(cleanState && cleanState.chips)),
+  );
+  await page.screenshot(path.join(OUT, 'drag-install-6-clean.png'));
+
   return page;
+}
+
+/** 用当前已挂载的 File 拖一次，等弹窗落到终态 */
+async function dropAndWait(page, rounds) {
+  await page.evalJS(`
+    (() => {
+      const files = window.__dnd.probe().slice(0, 1);
+      window.__dnd.fire(window, files, ['drop']);
+      return true;
+    })()
+  `);
+  for (let i = 0; i < rounds; i++) {
+    await sleep(500);
+    const s = await page.evalJS(`window.__dnd.maskState()`);
+    if (s && (s.title.includes('安装成功') || s.title.includes('安装失败'))) return s;
+  }
+  return null;
+}
+
+/** 关掉结果弹窗并等它真的消失（防止下一轮读到上一个任务的残留状态） */
+async function closeInstallMask(page) {
+  await page.evalJS(`
+    (() => {
+      const btn = Array.from(document.querySelectorAll('.install-actions .btn'))
+        .find((b) => b.textContent.trim() === '关闭' || b.textContent.trim() === '知道了');
+      if (btn) btn.click();
+      return true;
+    })()
+  `);
+  for (let i = 0; i < 20; i++) {
+    await sleep(200);
+    const st = await page.evalJS(`window.__dnd.maskState()`);
+    if (!st) return true;
+  }
+  return false;
 }
 
 /**

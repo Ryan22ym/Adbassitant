@@ -16,9 +16,17 @@ import { useApp, useCurrentDevice } from '@/store/app';
 import { call } from '@/lib/ipc';
 import { collectApks, installApkFiles } from '@/lib/install';
 import { formatBytes, fileName } from '@/lib/format';
-import type { ScreenResolution, AppInfo } from '@shared/types';
+import { deviceLabel } from '@/components/layout';
+import type { ScreenResolution, AppInfo, InstallMode } from '@shared/types';
 
 type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file';
+
+/** 三种安装方式的说明（界面提示 + 让用户明白数据会不会被清） */
+const MODE_HINT: Record<InstallMode, string> = {
+  overwrite: '保留应用数据，直接覆盖升级；与原包签名不一致时会失败。',
+  clean: '先卸载旧版本（数据一起清掉）再全新安装，适合覆盖装不上或想从干净状态开始。',
+  fresh: '不做覆盖：设备上已有该应用时直接报错，不会动到旧数据。',
+};
 
 export default function ToolsPage() {
   const [tab, setTab] = useState<Tab>('screenshot');
@@ -661,7 +669,9 @@ function ApkPanel() {
 
   const [apkPath, setApkPath] = useState('');
   const [apkSize, setApkSize] = useState<number | undefined>(undefined);
-  const [reinstall, setReinstall] = useState(true);
+  /** 安装方式放 store：整窗拖放与页面按钮/拖放区共用同一个值 */
+  const mode = useApp((s) => s.installMode);
+  const setMode = useApp((s) => s.setInstallMode);
   const [grantAll, setGrantAll] = useState(false);
   const [over, setOver] = useState(false);
   /** 上一次安装结果，弹窗自动关闭后仍留在页面上供回看 */
@@ -671,7 +681,9 @@ function ApkPanel() {
     if (!install || install.phase === 'installing') return;
     setLastResult(
       install.phase === 'success'
-        ? `安装成功：${install.fileName}\n${install.message ?? ''}`
+        ? `安装成功：${install.fileName}\n` +
+            (install.device ? `目标设备：${install.device}\n` : '') +
+            (install.message ?? '')
         : `安装失败：${install.message ?? ''}`,
     );
   }, [install]);
@@ -693,7 +705,7 @@ function ApkPanel() {
     if (!apkPath) return toast('warn', '请先选择 APK 文件');
     void installApkFiles(
       [{ path: apkPath, name: fileName(apkPath), size: apkSize }],
-      { reinstall, grantAll },
+      { mode, grantAll },
     );
   };
 
@@ -722,7 +734,7 @@ function ApkPanel() {
     setApkPath(apks[0].path);
     setApkSize(apks[0].size);
     setLastResult('');
-    await installApkFiles(apks, { reinstall, grantAll });
+    await installApkFiles(apks, { mode, grantAll });
   };
 
   return (
@@ -787,13 +799,22 @@ function ApkPanel() {
           )}
         </div>
 
+        <Field label="安装方式" hint={MODE_HINT[mode]}>
+          {/* data-install-mode 供验收脚本定位（页面里可能还有别的 Segmented） */}
+          <div data-install-mode={mode}>
+            <Segmented<InstallMode>
+              value={mode}
+              onChange={setMode}
+              options={[
+                { value: 'overwrite', label: '覆盖安装' },
+                { value: 'clean', label: '清洁安装' },
+                { value: 'fresh', label: '全新安装' },
+              ]}
+            />
+          </div>
+        </Field>
+
         <div className="row row-wrap" style={{ gap: 20 }}>
-          <Switch
-            checked={reinstall}
-            onChange={setReinstall}
-            label="覆盖安装（-r，保留数据）"
-            disabled={installing}
-          />
           <Switch
             checked={grantAll}
             onChange={setGrantAll}
@@ -801,6 +822,13 @@ function ApkPanel() {
             disabled={installing}
           />
         </div>
+
+        {mode === 'clean' && (
+          <Notice tone="warn">
+            清洁安装会先卸载设备上的旧版本，<b>应用数据（登录状态、本地缓存）会一并清除</b>，
+            且需要从 APK 里读出包名。
+          </Notice>
+        )}
 
         <div className="row">
           <Button
@@ -814,6 +842,21 @@ function ApkPanel() {
           {installing && <span className="text-dim">正在安装中，请勿重复操作…</span>}
         </div>
 
+        {/*
+          目标设备必须写出来。设备页/顶栏选的是哪台就装到哪台 —— 多台设备在线时
+          装错机器，光看「安装成功」是发现不了的。
+        */}
+        <div className="apk-target">
+          {current ? (
+            <>
+              将安装到：<b>{deviceLabel(current)}</b>
+              <span className="apk-target-serial"> · {current.serial}</span>
+            </>
+          ) : (
+            <span className="text-dim">未选择设备</span>
+          )}
+        </div>
+
         {lastResult && (
           <div className="output-block" style={{ maxHeight: 180 }}>
             {lastResult}
@@ -821,7 +864,9 @@ function ApkPanel() {
         )}
 
         <Notice tone="accent">
-          提示：把 APK 拖到本程序窗口任意位置也能安装，会弹出进度并防止重复安装；
+          安装完成后会按包名在设备上复核一遍 —— <b>只有设备上确实查到了这个包才会显示成功</b>，
+          避免「界面说成功了、手机上却没有」。目标设备以顶栏/设备页选中的那台为准（上方已标出）。
+          提示：把 APK 拖到本程序窗口任意位置也能安装，同样会弹出进度并防止重复安装；
           拖到投屏窗口则由 scrcpy 直接安装（无本程序弹窗）。其他文件请拖到投屏窗口，会自动存入
           Download 目录。
         </Notice>
