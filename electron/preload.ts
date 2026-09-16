@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 /**
  * IPC 通道常量
@@ -138,6 +138,22 @@ const api = {
   /* APK */
   installApk: (serial: string | undefined, apkPath: string, reinstall = true, grantAll = false) =>
     invoke(IPC.APK_INSTALL, serial, apkPath, reinstall, grantAll),
+
+  /**
+   * 取拖放进来的文件在磁盘上的真实路径。
+   *
+   * Electron 32 起移除了非标准的 `File.path`，拖放场景下渲染进程拿不到路径，
+   * 只能用官方替代品 webUtils.getPathForFile()。它必须在本层（preload）调用，
+   * 因为 webUtils 只有 preload / renderer 的原生侧才可用。
+   * 返回空串表示该 File 不是来自磁盘（例如从网页拖进来的虚拟文件）。
+   */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file) || '';
+    } catch {
+      return '';
+    }
+  },
 
   /* 应用 / Monkey */
   listApps: (serial?: string, includeSystem = true) => invoke(IPC.APP_LIST, serial, includeSystem),

@@ -22,7 +22,7 @@
 | **录屏** | 设备端 screenrecord；设备未内置时自动回退 scrcpy 录制通道，自动落地 MP4 |
 | **分辨率** | 查看物理/当前分辨率与 DPI，5 组预设 + 自定义，一键恢复默认 |
 | **Monkey** | 图形化稳定性测试，可选目标应用、事件数、节流、seed，实时输出日志 |
-| **安装 APK** | 选择本地 APK 安装，支持覆盖安装与自动授权 |
+| **安装 APK** | 选择本地 APK 安装，支持覆盖安装与自动授权；**支持把 APK 直接拖到程序窗口任意位置安装**，实时弹出进度（安装中 / 成功 / 失败），安装期间锁定不接受重复任务 |
 | **文件传输** | 批量 push 到设备、批量 pull 到电脑 |
 | **应用管理** 🆕 | 用户/系统/全部三态筛选 + 关键字搜索；详情（版本号/占用/安装时间/Activity 数/权限）；启动、强制停止、清除数据、提取 APK、启用停用、卸载；**常用应用收藏**（星标固定，跨设备/跨重启保留，一键启动） |
 | **实时 Logcat** 🆕 | 流式抓取（120ms 批量推送 + 20000 行环形缓冲）；级别/TAG 通配/关键字/进程/缓冲区多路过滤；快捷过滤（只看错误 / 闪退 ANR / Activity 启动）；暂停刷新、一键保存 |
@@ -499,6 +499,55 @@ python scripts/run-electron.py scripts/e2e-v1-device.cjs \
 判别法：如果命令「没有任何输出、但脚本自己的日志文件已经写完了」，
 就是这个问题，不是脚本逻辑错了。
 
+### ⚠️ Electron 32+ 拖放拿不到文件路径：`File.path` 已被移除
+
+`electron` 升到 32 之后，非标准的 `File.path` **被删掉了**，原本「拖进来一个文件 →
+读 `file.path` → 扔给 adb」的写法会拿到 `undefined`，表现为拖放没反应或报
+「文件不存在：undefined」。
+
+官方替代品是 `webUtils.getPathForFile(file)`，**必须在 preload 里转发**——
+`webUtils` 只在 Electron 的原生侧可用，渲染进程直接 `require('electron')` 拿不到：
+
+```ts
+// electron/preload.ts
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
+
+getPathForFile: (file: File) => {
+  try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
+},
+```
+
+两个容易踩的点：
+- 返回**空串**说明这个 `File` 不是来自磁盘（比如从压缩包里直接拖出来的虚拟文件），
+  一定要当成「不可用」处理，而不是当成文件名用；
+- 拖放到窗口上的 `dragenter` / `dragover` / `drop` 都必须 `preventDefault()`，
+  否则 Chromium 会把拖进来的文件当成导航，**整个界面被那个文件顶掉**。
+
+### ⚠️ 拖放区不要做在投屏窗口上
+
+投屏画面是 `scrcpy.exe` 自己的原生窗口（SDL2），不是我们的 `BrowserWindow`，
+**没有任何办法往里注入 UI**。所以「拖放 + 进度弹窗」只能做在本程序窗口上；
+拖到投屏窗口仍然是 scrcpy 自己的拖放功能（APK 自动安装、其他文件存 Download），
+但不会、也不可能有我们这边的弹窗。做需求前先确认拖放目标是哪一个。
+
+### 假 APK / adb 失败输出会污染验收脚本的 PASS/FAIL 判定
+
+`scripts/check-drag-install.cjs` 会故意用假 APK 走失败分支，adb 的报错里带
+`Failure [INSTALL_PARSE_FAILED_...]`。而 `run-electron.py` 是按「日志里有没有
+`FAIL` / `ERROR`」判成败的 —— 原始报错直接落盘会让**整个验收假失败**。
+脚本里统一用 `safe()` 把外部输出打码（`FAIL`→`F*IL`）后再写日志。
+新增验收脚本时只要会打印 adb / 异常原始输出，都要做同样的处理。
+
+### ⚠️ 安装版专项检查要先清残留进程（单实例锁）
+
+`--installed` 系列脚本（`check-drag-install.cjs` / `check-quick-mirror.cjs` /
+`check-about.cjs`）会 `spawn` 安装目录的 exe 再连 CDP。而主进程有
+`app.requestSingleInstanceLock()` —— **已经有实例在跑时，新起的那个会立刻退出**，
+表现为「安装版未能在预期时间内开出调试端点」（白等 45 秒）。
+
+跑之前一律先 `python scripts/_kill-our-processes.py`。
+（另外这些脚本自己会 `delete env.ELECTRON_RUN_AS_NODE`，否则 Electron 退化成纯 Node。）
+
 ---
 
 ## 环境要求
@@ -555,6 +604,24 @@ python scripts/find-scrcpy-pid.py
 
 # 验证 scrcpy 图标环境变量（独立起一个 scrcpy 读它的环境块）
 python scripts/verify-scrcpy-env.py
+```
+
+```bash
+# ---- 拖放安装（进度弹窗 + 防重复）新增 ----
+
+# 23 项：整窗拖放遮罩 / 非 APK 拒绝 / 真实路径解析 / 安装中·成功·失败三种弹窗
+#        / 安装中防重复（UI + 主进程互斥锁）/ 页面内拖放区
+# 需要一台在线设备：素材会自动从设备上拉一个真 APK（-r 重装必然成功）
+# 默认设备 emulator-5556、包 com.zidongdianji，可用 ADB_SERIAL / PULL_PKG 覆盖
+python scripts/run-electron.py scripts/check-drag-install.cjs \
+    --watch ui-shots/_draginstall.log --until "DRAG INSTALL CHECK DONE" --timeout 420
+# 或 npm run check:drag-install
+
+# 同一份用例打**安装版真身**（起 %LOCALAPPDATA%\Programs\ADBAssistant 的 exe 后用 CDP 连）
+# 日志走 ui-shots/_draginstall-installed.log
+# 注意：被测应用有单实例锁，跑之前先 python scripts/_kill-our-processes.py
+node scripts/check-drag-install.cjs --installed
+# 或 npm run check:drag-install:installed
 ```
 
 > Windows 下跑 electron 脚本前需先 `unset ELECTRON_RUN_AS_NODE`，

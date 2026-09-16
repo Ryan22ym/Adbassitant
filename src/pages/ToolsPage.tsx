@@ -14,6 +14,7 @@ import {
 } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
 import { call } from '@/lib/ipc';
+import { collectApks, installApkFiles } from '@/lib/install';
 import { formatBytes, fileName } from '@/lib/format';
 import type { ScreenResolution, AppInfo } from '@shared/types';
 
@@ -655,13 +656,28 @@ function MonkeyPanel() {
 function ApkPanel() {
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
+  const install = useApp((s) => s.install);
+  const installing = install?.phase === 'installing';
+
   const [apkPath, setApkPath] = useState('');
+  const [apkSize, setApkSize] = useState<number | undefined>(undefined);
   const [reinstall, setReinstall] = useState(true);
   const [grantAll, setGrantAll] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState('');
+  const [over, setOver] = useState(false);
+  /** 上一次安装结果，弹窗自动关闭后仍留在页面上供回看 */
+  const [lastResult, setLastResult] = useState('');
+
+  useEffect(() => {
+    if (!install || install.phase === 'installing') return;
+    setLastResult(
+      install.phase === 'success'
+        ? `安装成功：${install.fileName}\n${install.message ?? ''}`
+        : `安装失败：${install.message ?? ''}`,
+    );
+  }, [install]);
 
   const pick = async () => {
+    if (installing) return;
     const files = await call<string[]>(
       () =>
         window.adbApi.pickFiles(false, [{ name: 'Android 安装包', extensions: ['apk'] }]),
@@ -669,76 +685,145 @@ function ApkPanel() {
     );
     if (files?.[0]) {
       setApkPath(files[0]);
-      setResult('');
+      setApkSize(undefined);
     }
   };
 
-  const install = async () => {
-    if (!current) return toast('warn', '请先连接设备');
+  const installSelected = () => {
     if (!apkPath) return toast('warn', '请先选择 APK 文件');
-    setBusy(true);
-    setResult('');
-    try {
-      const r = await call<string>(() => window.adbApi.installApk(current.serial, apkPath, reinstall, grantAll), {
-        silent: true,
-      });
-      setResult(r || 'Success');
-      toast('success', '安装成功');
-    } catch (e) {
-      const msg = (e as Error).message;
-      setResult(`失败：${msg}`);
-      toast('error', '安装失败', msg);
-    } finally {
-      setBusy(false);
+    void installApkFiles(
+      [{ path: apkPath, name: fileName(apkPath), size: apkSize }],
+      { reinstall, grantAll },
+    );
+  };
+
+  /**
+   * 拖入的 APK 直接开装（与「拖动安装」语义一致），
+   * 页面上的「覆盖安装 / 自动授权」开关同样作用于拖放。
+   */
+  const handleDroppedFiles = async (files: File[]) => {
+    if (installing) {
+      toast('warn', '正在安装中，请稍候', '同一时间只允许一个安装任务');
+      return;
     }
+    if (files.length === 0) return;
+
+    const { apks, skipped } = collectApks(files);
+    if (apks.length === 0) {
+      toast(
+        'warn',
+        '请拖入 .apk 文件',
+        skipped > 0 ? `已忽略 ${skipped} 个非 APK 文件` : undefined,
+      );
+      return;
+    }
+    if (skipped > 0) toast('info', `已忽略 ${skipped} 个非 APK 文件`);
+
+    setApkPath(apks[0].path);
+    setApkSize(apks[0].size);
+    setLastResult('');
+    await installApkFiles(apks, { reinstall, grantAll });
   };
 
   return (
-    <Card title="安装 APK" subtitle="从电脑选择安装包并推送到设备安装">
+    <Card title="安装 APK" subtitle="选择或直接拖入安装包，安装过程会显示进度">
       <div className="col">
-        <Field label="APK 文件">
-          <div className="row">
-            <Input
-              readOnly
-              value={apkPath}
-              placeholder="尚未选择文件"
-              onClick={pick}
-              style={{ cursor: 'pointer' }}
-            />
-            <Button variant="default" onClick={pick} style={{ flex: 'none' }}>
-              浏览…
-            </Button>
+        <Field label="APK 文件" hint="拖进来即开始安装">
+          <div
+            data-dropzone="apk"
+            className={`apk-drop ${over ? 'over' : ''} ${installing ? 'is-busy' : ''}`}
+            onClick={pick}
+            onDragOver={(e) => {
+              // 安装中不 preventDefault → 光标显示禁止，drop 事件也不会触发
+              if (installing) return;
+              e.preventDefault();
+              e.stopPropagation();
+              if (!over) setOver(true);
+            }}
+            onDragLeave={() => setOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setOver(false);
+              void handleDroppedFiles(Array.from(e.dataTransfer?.files ?? []));
+            }}
+          >
+            <p className="apk-drop-title">
+              {installing ? '正在安装…' : '把 APK 拖到这里，或点击选择文件'}
+            </p>
+            <p className="apk-drop-hint">
+              {installing ? '装完才能开始下一个任务' : '松手即开始安装，并弹出进度'}
+            </p>
+
+            {apkPath && (
+              <div className="apk-drop-file">
+                <span className="apk-drop-file-name" title={apkPath}>
+                  {fileName(apkPath)}
+                </span>
+                {apkSize ? (
+                  <span className="apk-drop-file-size">{formatBytes(apkSize)}</span>
+                ) : null}
+              </div>
+            )}
           </div>
         </Field>
 
+        <div className="row">
+          <Button variant="default" size="sm" onClick={pick} disabled={installing}>
+            浏览…
+          </Button>
+          {apkPath && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={installing}
+              onClick={() => {
+                setApkPath('');
+                setApkSize(undefined);
+              }}
+            >
+              清除
+            </Button>
+          )}
+        </div>
+
         <div className="row row-wrap" style={{ gap: 20 }}>
-          <Switch checked={reinstall} onChange={setReinstall} label="覆盖安装（-r，保留数据）" />
+          <Switch
+            checked={reinstall}
+            onChange={setReinstall}
+            label="覆盖安装（-r，保留数据）"
+            disabled={installing}
+          />
           <Switch
             checked={grantAll}
             onChange={setGrantAll}
             label="自动授予全部权限（-g，Android 6+）"
+            disabled={installing}
           />
         </div>
 
         <div className="row">
           <Button
             variant="primary"
-            onClick={install}
-            loading={busy}
-            disabled={!current || !apkPath}
+            onClick={installSelected}
+            loading={installing}
+            disabled={!current || !apkPath || installing}
           >
             开始安装
           </Button>
+          {installing && <span className="text-dim">正在安装中，请勿重复操作…</span>}
         </div>
 
-        {result && (
+        {lastResult && (
           <div className="output-block" style={{ maxHeight: 180 }}>
-            {result}
+            {lastResult}
           </div>
         )}
 
         <Notice tone="accent">
-          提示：也可以把 APK 文件直接拖到投屏窗口中，实现快速安装。
+          提示：把 APK 拖到本程序窗口任意位置也能安装，会弹出进度并防止重复安装；
+          拖到投屏窗口则由 scrcpy 直接安装（无本程序弹窗）。其他文件请拖到投屏窗口，会自动存入
+          Download 目录。
         </Notice>
       </div>
     </Card>

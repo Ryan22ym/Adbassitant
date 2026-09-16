@@ -262,7 +262,8 @@ export default function MirrorPage() {
           <SC keys="Ctrl + O" desc="打开屏幕" />
           <SC keys="Ctrl + W" desc="关闭投屏窗口" />
           <SC keys="Ctrl + C / V" desc="双向剪贴板同步" />
-          <SC keys="拖放文件" desc="APK 自动安装，其他文件存入 Download" />
+          <SC keys="拖到投屏窗口" desc="APK 自动安装，其他文件存入 Download" />
+          <SC keys="拖到本程序窗口" desc="APK 安装并显示进度，防止重复安装" />
         </div>
       </Card>
     </>

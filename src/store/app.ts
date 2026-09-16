@@ -18,6 +18,31 @@ interface ToastItem {
   detail?: string;
 }
 
+/**
+ * 拖放安装任务的界面状态。
+ *
+ * 它同时承担两个职责：
+ * 1. 驱动「正在安装中 / 安装成功 / 安装失败」弹窗；
+ * 2. 作为渲染层的防重复依据 —— phase === 'installing' 时，拖放与安装按钮
+ *    都必须拒绝新任务（主进程还有一道 installApk 互斥锁兜底）。
+ */
+export interface InstallTask {
+  phase: 'installing' | 'success' | 'error';
+  /** 展示用文件名，多文件时为「名字（2/3）」 */
+  fileName: string;
+  /** 本地 APK 绝对路径 */
+  apkPath: string;
+  /** 文件大小（字节），拖放时由 File.size 提供，可能为空 */
+  sizeBytes?: number;
+  /** 成功时为 adb 输出，失败时为失败原因 */
+  message?: string;
+  /** 第几个 / 总共几个（多文件顺序安装时用） */
+  index?: number;
+  total?: number;
+  startedAt: number;
+  finishedAt?: number;
+}
+
 interface AppState {
   /* 设备 */
   devices: DeviceInfo[];
@@ -53,6 +78,13 @@ interface AppState {
   toasts: ToastItem[];
   toast: (tone: ToastItem['tone'], message: string, detail?: string) => void;
   dismissToast: (id: string) => void;
+
+  /* 拖放安装 */
+  install: InstallTask | null;
+  setInstall: (t: InstallTask | null) => void;
+  /** 是否正把文件拖在窗口上方（用于显示全窗拖放提示） */
+  dragActive: boolean;
+  setDragActive: (v: boolean) => void;
 }
 
 const MAX_LOGS = 3000;
@@ -136,6 +168,15 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
+
+  /* ---------------- 拖放安装 ---------------- */
+  install: null,
+  setInstall: (install) => set({ install }),
+
+  dragActive: false,
+  setDragActive: (dragActive) => {
+    if (get().dragActive !== dragActive) set({ dragActive });
+  },
 }));
 
 /* ------------------------------------------------------------------ */

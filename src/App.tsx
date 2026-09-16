@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
+import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
 import { IPC } from '@shared/types';
 
@@ -121,6 +122,8 @@ export default function App() {
           </div>
         </div>
       </div>
+      {/* 整窗拖放安装 + 安装进度弹窗（拖放区无法做在 scrcpy 的原生投屏窗口上） */}
+      <DragInstallHost />
       <ToastHost />
     </div>
   );

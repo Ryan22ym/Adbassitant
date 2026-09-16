@@ -181,6 +181,20 @@ export async function pullFiles(
 }
 
 /**
+ * 当前正在安装的文件名，null = 空闲。
+ *
+ * `adb install` 会独占 adb 通道并可能触发设备端的安装确认弹窗，两路并发
+ * （比如一边按钮点安装、一边又拖了个 APK 进来）会互相打断，表现为
+ * 「安装失败」或设备上弹两个确认框。这里做进程级互斥，保证同一时刻只有一个安装任务。
+ */
+let installInFlight: string | null = null;
+
+/** 是否已有安装任务在进行中（供 UI 侧查询） */
+export function isInstalling(): boolean {
+  return installInFlight !== null;
+}
+
+/**
  * APK 安装
  */
 export async function installApk(
@@ -189,31 +203,44 @@ export async function installApk(
   reinstall = true,
   grantAll = false,
 ): Promise<string> {
-  const s = await ensureDevice(serial);
-
-  if (!existsSync(apkPath)) throw new Error(`APK 不存在：${apkPath}`);
-  if (extname(apkPath).toLowerCase() !== '.apk') {
-    throw new Error('所选文件不是 .apk 文件');
+  if (installInFlight !== null) {
+    throw new Error(`正在安装 ${installInFlight}，请等它完成后再试`);
   }
 
-  const size = safeSize(apkPath);
-  log('info', '安装', `正在安装 ${basename(apkPath)}（${formatBytesFallback(size)}）…`);
+  // 同步占位：ensureDevice / runAdb 里有多处 await，若等拿到设备再上锁，
+  // 两个并发请求会在锁之前双双通过检查。basename 是同步的，先占住再进流程。
+  installInFlight = basename(apkPath) || 'APK';
 
-  const args = ['-s', s, 'install'];
-  if (reinstall) args.push('-r');
-  if (grantAll) args.push('-g');
-  args.push(toPosixPath(apkPath));
+  try {
+    const s = await ensureDevice(serial);
 
-  const res = await runAdb(args, { source: '安装', timeout: 5 * 60 * 1000 });
+    if (!existsSync(apkPath)) throw new Error(`APK 不存在：${apkPath}`);
+    if (extname(apkPath).toLowerCase() !== '.apk') {
+      throw new Error('所选文件不是 .apk 文件');
+    }
 
-  const output = (res.stdout + '\n' + res.stderr).trim();
-  if (/Failure|Error/i.test(output) || !res.ok) {
-    const reason = output.replace(/^.*?Failure\s*/i, '').trim();
-    throw new Error(reason || output || '安装失败');
+    const size = safeSize(apkPath);
+    log('info', '安装', `正在安装 ${basename(apkPath)}（${formatBytesFallback(size)}）…`);
+
+    const args = ['-s', s, 'install'];
+    if (reinstall) args.push('-r');
+    if (grantAll) args.push('-g');
+    args.push(toPosixPath(apkPath));
+
+    const res = await runAdb(args, { source: '安装', timeout: 5 * 60 * 1000 });
+
+    const output = (res.stdout + '\n' + res.stderr).trim();
+    if (/Failure|Error/i.test(output) || !res.ok) {
+      const reason = output.replace(/^.*?Failure\s*/i, '').trim();
+      throw new Error(reason || output || '安装失败');
+    }
+
+    log('success', '安装', `安装成功：${basename(apkPath)}`);
+    return output;
+  } finally {
+    // 无论成功、失败还是抛异常都必须释放，否则安装功能会被永久锁死
+    installInFlight = null;
   }
-
-  log('success', '安装', `安装成功：${basename(apkPath)}`);
-  return output;
 }
 
 /* ------------------------------------------------------------------ */

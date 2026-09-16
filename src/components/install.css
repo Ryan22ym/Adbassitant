@@ -1,0 +1,219 @@
+/* ==================================================================
+   拖放安装 —— 整窗拖放提示 + 安装进度弹窗
+   ================================================================== */
+
+/* ---------------- 拖动文件到窗口上方时的全屏提示 ---------------- */
+
+.drop-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 8500;
+  /* 必须穿透：否则它自己会变成 drop 事件的 target，导致拖放区判定失效 */
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(37, 99, 235, 0.08);
+  animation: fadeIn 0.12s ease both;
+}
+
+.drop-veil-card {
+  border: 2px dashed var(--accent);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  padding: 22px 34px;
+  text-align: center;
+}
+
+.drop-veil-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.drop-veil-hint {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* ---------------- 安装进度弹窗 ---------------- */
+
+.install-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 20, 28, 0.45);
+  animation: fadeIn 0.14s ease both;
+}
+
+.install-card {
+  width: 384px;
+  max-width: calc(100vw - 48px);
+  padding: 24px 22px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.install-badge {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-full);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.install-badge.installing {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.install-badge.success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.install-badge.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.install-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.install-title.installing {
+  color: var(--text-primary);
+}
+
+.install-title.success {
+  color: var(--success);
+}
+
+.install-title.error {
+  color: var(--danger);
+}
+
+.install-file {
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.install-size {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.install-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.install-detail {
+  margin-top: 13px;
+  max-height: 148px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+
+.install-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* ---------------- 「安装 APK」页内的专用拖放区 ---------------- */
+
+.apk-drop {
+  padding: 20px 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast);
+}
+
+.apk-drop:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.apk-drop.over {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.apk-drop.is-busy {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.apk-drop-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.apk-drop-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.apk-drop-file {
+  margin-top: 10px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  text-align: left;
+}
+
+.apk-drop-file-name {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apk-drop-file-size {
+  margin-left: auto;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
