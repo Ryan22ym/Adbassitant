@@ -665,7 +665,10 @@ function ApkPanel() {
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
   const install = useApp((s) => s.install);
+  const pendingInstall = useApp((s) => s.pendingInstall);
   const installing = install?.phase === 'installing';
+  /** 「占用中」= 正在装 或 正等用户选定目标设备；两者都不允许再开新任务 */
+  const busy = installing || pendingInstall !== null;
 
   const [apkPath, setApkPath] = useState('');
   const [apkSize, setApkSize] = useState<number | undefined>(undefined);
@@ -689,7 +692,7 @@ function ApkPanel() {
   }, [install]);
 
   const pick = async () => {
-    if (installing) return;
+    if (busy) return;
     const files = await call<string[]>(
       () =>
         window.adbApi.pickFiles(false, [{ name: 'Android 安装包', extensions: ['apk'] }]),
@@ -702,6 +705,12 @@ function ApkPanel() {
   };
 
   const installSelected = () => {
+    if (busy) {
+      return toast(
+        'warn',
+        installing ? '正在安装中，请稍候' : '请先选择安装到哪台设备',
+      );
+    }
     if (!apkPath) return toast('warn', '请先选择 APK 文件');
     void installApkFiles(
       [{ path: apkPath, name: fileName(apkPath), size: apkSize }],
@@ -711,11 +720,15 @@ function ApkPanel() {
 
   /**
    * 拖入的 APK 直接开装（与「拖动安装」语义一致），
-   * 页面上的「覆盖安装 / 自动授权」开关同样作用于拖放。
+   * 页面上的「安装方式 / 自动授权」开关同样作用于拖放。
    */
   const handleDroppedFiles = async (files: File[]) => {
-    if (installing) {
-      toast('warn', '正在安装中，请稍候', '同一时间只允许一个安装任务');
+    if (busy) {
+      toast(
+        'warn',
+        installing ? '正在安装中，请稍候' : '请先选择安装到哪台设备',
+        '同一时间只允许一个安装任务',
+      );
       return;
     }
     if (files.length === 0) return;
@@ -743,11 +756,11 @@ function ApkPanel() {
         <Field label="APK 文件" hint="拖进来即开始安装">
           <div
             data-dropzone="apk"
-            className={`apk-drop ${over ? 'over' : ''} ${installing ? 'is-busy' : ''}`}
+            className={`apk-drop ${over ? 'over' : ''} ${busy ? 'is-busy' : ''}`}
             onClick={pick}
             onDragOver={(e) => {
-              // 安装中不 preventDefault → 光标显示禁止，drop 事件也不会触发
-              if (installing) return;
+              // 占用中不 preventDefault → 光标显示禁止，drop 事件也不会触发
+              if (busy) return;
               e.preventDefault();
               e.stopPropagation();
               if (!over) setOver(true);
@@ -761,10 +774,14 @@ function ApkPanel() {
             }}
           >
             <p className="apk-drop-title">
-              {installing ? '正在安装…' : '把 APK 拖到这里，或点击选择文件'}
+              {installing
+                ? '正在安装…'
+                : pendingInstall
+                  ? '请先选择安装到哪台设备'
+                  : '把 APK 拖到这里，或点击选择文件'}
             </p>
             <p className="apk-drop-hint">
-              {installing ? '装完才能开始下一个任务' : '松手即开始安装，并弹出进度'}
+              {busy ? '完成当前任务后才能开始下一个' : '松手即开始安装，并弹出进度'}
             </p>
 
             {apkPath && (
@@ -781,14 +798,14 @@ function ApkPanel() {
         </Field>
 
         <div className="row">
-          <Button variant="default" size="sm" onClick={pick} disabled={installing}>
+          <Button variant="default" size="sm" onClick={pick} disabled={busy}>
             浏览…
           </Button>
           {apkPath && (
             <Button
               variant="ghost"
               size="sm"
-              disabled={installing}
+              disabled={busy}
               onClick={() => {
                 setApkPath('');
                 setApkSize(undefined);
@@ -819,7 +836,7 @@ function ApkPanel() {
             checked={grantAll}
             onChange={setGrantAll}
             label="自动授予全部权限（-g，Android 6+）"
-            disabled={installing}
+            disabled={busy}
           />
         </div>
 
@@ -835,16 +852,17 @@ function ApkPanel() {
             variant="primary"
             onClick={installSelected}
             loading={installing}
-            disabled={!current || !apkPath || installing}
+            disabled={!current || !apkPath || busy}
           >
             开始安装
           </Button>
           {installing && <span className="text-dim">正在安装中，请勿重复操作…</span>}
+          {pendingInstall && <span className="text-dim">请先在上方弹窗里选择装到哪台设备…</span>}
         </div>
 
         {/*
-          目标设备必须写出来。设备页/顶栏选的是哪台就装到哪台 —— 多台设备在线时
-          装错机器，光看「安装成功」是发现不了的。
+          目标设备必须写出来。多台设备在线时，装错机器光看「安装成功」是发现不了的，
+          所以这一行是常驻信息；真正开装前还会再问一次（见下方提示）。
         */}
         <div className="apk-target">
           {current ? (
@@ -865,7 +883,9 @@ function ApkPanel() {
 
         <Notice tone="accent">
           安装完成后会按包名在设备上复核一遍 —— <b>只有设备上确实查到了这个包才会显示成功</b>，
-          避免「界面说成功了、手机上却没有」。目标设备以顶栏/设备页选中的那台为准（上方已标出）。
+          避免「界面说成功了、手机上却没有」。但只要有多台设备同时在线，
+          <b>开装前一定会先问你装到哪台</b>：装到别的设备上时，装后复核同样会通过
+          （包确实装上了，只是不在你要的那台上），所以这一步不能省。
           提示：把 APK 拖到本程序窗口任意位置也能安装，同样会弹出进度并防止重复安装；
           拖到投屏窗口则由 scrcpy 直接安装（无本程序弹窗）。其他文件请拖到投屏窗口，会自动存入
           Download 目录。

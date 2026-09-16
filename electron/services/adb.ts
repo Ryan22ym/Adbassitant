@@ -337,7 +337,12 @@ export async function listDevices(deep = true): Promise<DeviceInfo[]> {
       model: props['model'],
       product: props['product'],
       device: props['device'],
-      isEmulator: /emulator|sdk_gphone|vbox/i.test(props['model'] || serial),
+      isEmulator: looksLikeEmulator(
+        serial,
+        props['model'],
+        props['product'],
+        props['device'],
+      ),
     };
 
     devices.push(device);
@@ -375,6 +380,25 @@ function normalizeState(s: string): DeviceInfo['state'] {
 }
 
 /**
+ * 判断一台设备是不是模拟器。
+ *
+ * ⚠️ 只看 `model` 是不行的：常见的模拟器（雷电 / MuMu / AOSP 定制镜像）会把
+ * model 伪装成真机型号（我们的两个模拟器就报 `PGT_AN00` / `SM_S9210`），
+ * 于是模拟器被判成「手机」，界面上「手机 / 模拟器」标签错误、
+ * 「默认优先物理设备」这类按 isEmulator 做的决策全部失效。
+ *
+ * 所以：serial 前缀是硬判据（AOSP 模拟器固定 `emulator-xxxx`），
+ * 其余字段只做补充。
+ */
+function looksLikeEmulator(serial: string, ...fields: (string | undefined)[]): boolean {
+  if (/^emulator-/i.test(serial)) return true;
+  const text = fields.filter(Boolean).join(' ');
+  return /emulator|sdk_gphone|vbox|genymotion|bluestacks|nox_|mumu|ldplayer|microvirt|andyos/i.test(
+    text,
+  );
+}
+
+/**
  * 批量读取设备属性（一次 shell 调用，快）
  */
 async function getDeviceProps(serial: string): Promise<Partial<DeviceInfo>> {
@@ -397,7 +421,7 @@ async function getDeviceProps(serial: string): Promise<Partial<DeviceInfo>> {
     sdk: Number.isFinite(sdk) ? sdk : undefined,
     product: lines[4] || undefined,
     device: lines[5] || undefined,
-    isEmulator: /emulator|sdk_gphone|vbox/i.test((lines[1] || '') + serial),
+    isEmulator: looksLikeEmulator(serial, lines[0], lines[1], lines[4], lines[5]),
   };
 }
 

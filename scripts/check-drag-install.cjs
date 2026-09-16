@@ -134,6 +134,45 @@ window.__dnd = {
   },
   /** 页面上的「将安装到 xxx · serial」 */
   targetText: () => (document.querySelector('.apk-target')?.textContent || '').trim(),
+  /**
+   * 「装到哪台设备」弹窗的状态。多台设备在线时它必须出现 ——
+   * 不允许应用自己挑一台就开装。
+   */
+  pickInfo() {
+    const mask = document.querySelector('[data-pick-device]');
+    if (!mask) return null;
+    return {
+      title: (mask.querySelector('.install-title')?.textContent || '').trim(),
+      file: (mask.querySelector('.install-file')?.textContent || '').trim(),
+      chips: Array.from(mask.querySelectorAll('.install-chip')).map((c) => c.textContent.trim()),
+      note: (mask.querySelector('.install-note')?.textContent || '').trim(),
+      buttons: Array.from(mask.querySelectorAll('.install-actions .btn')).map((b) => b.textContent.trim()),
+      devices: Array.from(mask.querySelectorAll('[data-install-device]')).map((b) => ({
+        serial: b.getAttribute('data-install-device'),
+        kind: (b.querySelector('.install-device-kind')?.textContent || '').trim(),
+        name: (b.querySelector('.install-device-name')?.textContent || '').trim(),
+        cur: (b.querySelector('.install-device-serial')?.textContent || '').includes('当前'),
+      })),
+    };
+  },
+  /** 在选设备弹窗里点某台设备 */
+  pickDevice(serial) {
+    const btn = document.querySelector('[data-install-device="' + serial + '"]');
+    if (!btn) return 'no-btn';
+    btn.click();
+    return 'ok';
+  },
+  /** 选设备弹窗里点「取消」 */
+  pickCancel() {
+    const mask = document.querySelector('[data-pick-device]');
+    if (!mask) return 'no-mask';
+    const b = Array.from(mask.querySelectorAll('.install-actions .btn')).find(
+      (x) => x.textContent.trim() === '取消',
+    );
+    if (!b) return 'no-cancel';
+    b.click();
+    return 'ok';
+  },
   maskState() {
     const mask = document.querySelector('.install-mask');
     if (!mask) return null;
@@ -171,6 +210,17 @@ async function runChecks(page) {
     if (n > 0) break;
     await sleep(500);
   }
+
+  /* ---------- 0. 默认设备必须落在物理设备上（这次的 bug 本体） ---------- */
+  const expectedDefault = firstPhysicalSerial();
+  const defaultSerial = await page.evalJS(
+    `(document.querySelector('.device-select') || {}).value || ''`,
+  );
+  record(
+    !!expectedDefault && defaultSerial === expectedDefault,
+    '启动后默认选中物理设备（不是 adb 列表里的模拟器）',
+    `default=${defaultSerial} expected=${expectedDefault}`,
+  );
 
   /* 固定选到模拟器，避免把测试包装到真机上（真机可能有安装确认弹窗） */
   const picked = await page.evalJS(`
@@ -315,8 +365,11 @@ async function runChecks(page) {
       return true;
     })()
   `);
-  let sawInstalling = null;
+  /* 多台设备在线时会先弹「装到哪台设备」—— 点掉之后才看得到进度弹窗 */
+  const rp3 = await resolvePick(page);
+  let sawInstalling = rp3.mask;
   for (let i = 0; i < 40; i++) {
+    if (sawInstalling && sawInstalling.title.includes('正在安装中')) break;
     await sleep(250);
     const s = await page.evalJS(`window.__dnd.maskState()`);
     if (s && s.title.includes('正在安装中')) { sawInstalling = s; break; }
@@ -392,6 +445,7 @@ async function runChecks(page) {
       return true;
     })()
   `);
+  await resolvePick(page);
   let failed = null;
   for (let i = 0; i < 60; i++) {
     await sleep(400);
@@ -430,7 +484,7 @@ async function runChecks(page) {
       const files = window.__dnd.probe().filter((f) => /real-app\\.apk$/i.test(f.name));
       const r = window.__dnd.fire(el, files, ['dragenter', 'dragover', 'drop']);
       await new Promise((res) => setTimeout(res, 300));
-      return { r, veil: window.__dnd.veil(), mask: window.__dnd.maskState() };
+      return { r, veil: window.__dnd.veil() };
     })()
   `);
   record(
@@ -438,10 +492,14 @@ async function runChecks(page) {
     '页面内拖放区接管拖放：不再显示整窗遮罩',
     safe(JSON.stringify(zoneDrop.r)),
   );
+  /* 页面内拖放区走的是同一个入口，所以同样要先穿过「装到哪台设备」那一屏 */
+  const rp7 = await resolvePick(page);
+  record(rp7.sawPick, '页面内拖放区拖入后同样先问「装到哪台设备」', `sawPick=${rp7.sawPick}`);
+  const zoneMask = rp7.mask || (await page.evalJS(`window.__dnd.maskState()`));
   record(
-    !!(zoneDrop.mask && zoneDrop.mask.title.includes('正在安装中')),
+    !!(zoneMask && zoneMask.title.includes('正在安装中')),
     '页面内拖放区拖入后同样弹出安装进度',
-    safe(JSON.stringify(zoneDrop.mask)),
+    safe(JSON.stringify(zoneMask)),
   );
 
   let zoneDone = null;
@@ -552,13 +610,125 @@ async function runChecks(page) {
     '弹窗给出「已复核」标记',
     safe(JSON.stringify(cleanState && cleanState.chips)),
   );
+  /* ---------- 13. 多台设备在线：必须先问「装到哪台」---------- */
+  await page.evalJS(`window.__dnd.setMode('覆盖安装')`);
+  await sleep(250);
+
+  const fired = await dropAndWait(page, 40, null);
+  const pick = fired && fired.pendingPick ? fired.pick : null;
+  log('选设备弹窗:', safe(JSON.stringify(pick)));
+
+  record(
+    !!pick,
+    '多台设备在线时拖放不直接开装，而是先问装到哪台',
+    safe(JSON.stringify(fired)),
+  );
+  record(
+    !!(pick && Array.isArray(pick.devices) && pick.devices.length >= 2),
+    '选设备弹窗列出了全部在线设备',
+    safe(`devices=${pick && pick.devices && pick.devices.length}`),
+  );
+
+  const options = await page.evalJS(
+    `Array.from(document.querySelectorAll('.device-select option')).map((o) => o.value)`,
+  );
+  record(
+    !!(pick && (pick.devices || []).every((d) => options.includes(d.serial))),
+    '弹窗里的设备都来自设备列表（没有凭空造设备）',
+    safe(JSON.stringify({ listed: (pick && pick.devices || []).map((d) => d.serial), options })),
+  );
+
+  /* 物理设备必须排在模拟器前面 —— 否则默认那一行就是模拟器，等于没修 */
+  const kinds = ((pick && pick.devices) || []).map((d) => d.kind);
+  const firstPhone = kinds.indexOf('手机');
+  const firstEmu = kinds.indexOf('模拟器');
+  record(
+    firstEmu === -1 || (firstPhone !== -1 && firstPhone < firstEmu),
+    '物理设备排在模拟器前面（第一行永远是手机）',
+    safe(kinds.join(' | ')),
+  );
+  record(
+    !!(pick && (pick.devices || []).some((d) => d.cur)),
+    '选设备弹窗标出了「当前」设备',
+    safe(JSON.stringify((pick && pick.devices) || [])),
+  );
+  record(
+    !!(pick && /real-app\.apk/.test(pick.file || '')),
+    '选设备弹窗写明了要装哪个文件',
+    safe(pick && pick.file),
+  );
+  record(
+    !!(pick && (pick.buttons || []).includes('取消')),
+    '选设备弹窗可以取消',
+    safe(JSON.stringify(pick && pick.buttons)),
+  );
+  await page.screenshot(path.join(OUT, 'drag-install-7-pick-device.png'));
+
+  /* 取消后不得开装 */
+  await page.evalJS(`window.__dnd.pickCancel()`);
+  await sleep(700);
+  const afterCancel = {
+    pick: await page.evalJS(`window.__dnd.pickInfo()`),
+    mask: await page.evalJS(`window.__dnd.maskState()`),
+  };
+  record(
+    !afterCancel.pick && !afterCancel.mask,
+    '点「取消」后不安装（弹窗关闭且没有进度弹窗）',
+    safe(JSON.stringify(afterCancel)),
+  );
+
+  /* ---------- 14. 选定设备后才开装，并把选择同步为当前设备 ---------- */
+  await page.evalJS(`
+    (() => {
+      const files = window.__dnd.probe().slice(0, 1);
+      window.__dnd.fire(window, files, ['drop']);
+      return true;
+    })()
+  `);
+  let pick2 = null;
+  for (let i = 0; i < 40; i++) {
+    await sleep(400);
+    pick2 = await page.evalJS(`window.__dnd.pickInfo()`);
+    if (pick2) break;
+  }
+  record(!!pick2, '再次拖放仍会先问目标设备（不记忆、不自作主张）', safe(pick2 && pick2.title));
+
+  await page.evalJS(`window.__dnd.pickDevice(${JSON.stringify(SERIAL)})`);
+  let chosen = null;
+  for (let i = 0; i < 180; i++) {
+    await sleep(500);
+    const s = await page.evalJS(`window.__dnd.maskState()`);
+    if (s && (s.title.includes('安装成功') || s.title.includes('安装失败'))) {
+      chosen = s;
+      break;
+    }
+  }
+  record(
+    !!(chosen && chosen.title.includes('安装成功') && (chosen.chips || []).some((c) => c.includes(SERIAL))),
+    '在弹窗里选定设备后才开装，且装到该设备',
+    safe(JSON.stringify(chosen)),
+  );
+  const targetAfter = await page.evalJS(`window.__dnd.targetText()`);
+  record(
+    !!targetAfter && targetAfter.includes(SERIAL),
+    '选择结果写回当前设备（页面同步显示）',
+    safe(targetAfter),
+  );
+  await page.screenshot(path.join(OUT, 'drag-install-8-picked.png'));
+
   await page.screenshot(path.join(OUT, 'drag-install-6-clean.png'));
 
   return page;
 }
 
-/** 用当前已挂载的 File 拖一次，等弹窗落到终态 */
-async function dropAndWait(page, rounds) {
+/**
+ * 用当前已挂载的 File 拖一次，等弹窗落到终态。
+ *
+ * 多台设备在线时会先弹「装到哪台设备」，默认按 autoPick 指定的设备点下去 ——
+ * 既覆盖了这道新增的步骤，也让下面的用例继续测「安装过程」本身。
+ * autoPick 传 null 则遇到选设备弹窗就原样返回（供专门测这一步的用例使用）。
+ */
+async function dropAndWait(page, rounds, autoPick = SERIAL) {
   await page.evalJS(`
     (() => {
       const files = window.__dnd.probe().slice(0, 1);
@@ -568,16 +738,81 @@ async function dropAndWait(page, rounds) {
   `);
   for (let i = 0; i < rounds; i++) {
     await sleep(500);
+    const pick = await page.evalJS(`window.__dnd.pickInfo()`);
+    if (pick) {
+      if (!autoPick) return { pendingPick: true, pick };
+      await page.evalJS(`window.__dnd.pickDevice(${JSON.stringify(autoPick)})`);
+      continue;
+    }
     const s = await page.evalJS(`window.__dnd.maskState()`);
     if (s && (s.title.includes('安装成功') || s.title.includes('安装失败'))) return s;
   }
   return null;
 }
 
+/**
+ * 第一台在线的**物理**设备序列号（模拟器的 serial 一律以 emulator- 开头）。
+ *
+ * 用来断言应用的默认选择：多台设备在线时，默认目标必须是手机而不是模拟器。
+ * 取不到（只有模拟器在线）时返回 null，对应用例会被跳过式判失败并在详情里说明。
+ */
+function firstPhysicalSerial() {
+  try {
+    const out = execFileSync(ADB, ['devices'], { encoding: 'utf8', timeout: 20000 });
+    const serials = out
+      .split(/\r?\n/)
+      .slice(1)
+      .map((l) => l.trim().split(/\s+/))
+      .filter((a) => a[1] === 'device')
+      .map((a) => a[0]);
+    return serials.find((s) => !/^emulator-/.test(s)) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 拖一次并穿过「选设备」那一屏。
+ *
+ * 多台设备在线时，拖放不会直接开装，而是先弹「装到哪台设备？」。
+ * 这个 helper 负责把那一屏点掉（选 serial 那台），再等进度弹窗出现，
+ * 返回 { sawPick, mask } —— sawPick 可以用来断言「确实问了」。
+ */
+async function resolvePick(page, serial = SERIAL) {
+  let sawPick = false;
+  for (let i = 0; i < 24; i++) {
+    await sleep(250);
+    const st = await page.evalJS(
+      `({ pick: window.__dnd.pickInfo(), mask: window.__dnd.maskState() })`,
+    );
+    if (st.pick) {
+      await page.evalJS(`window.__dnd.pickDevice(${JSON.stringify(serial)})`);
+      sawPick = true;
+      break;
+    }
+    // 单设备场景不会出现这一屏，直接就有进度弹窗了
+    if (st.mask) return { sawPick: false, mask: st.mask };
+  }
+  if (!sawPick) return { sawPick: false, mask: null };
+
+  for (let i = 0; i < 24; i++) {
+    await sleep(250);
+    const mask = await page.evalJS(`window.__dnd.maskState()`);
+    if (mask) return { sawPick: true, mask };
+  }
+  return { sawPick: true, mask: null };
+}
+
 /** 关掉结果弹窗并等它真的消失（防止下一轮读到上一个任务的残留状态） */
 async function closeInstallMask(page) {
   await page.evalJS(`
     (() => {
+      const pick = document.querySelector('[data-pick-device]');
+      if (pick) {
+        const c = Array.from(pick.querySelectorAll('.install-actions .btn'))
+          .find((b) => b.textContent.trim() === '取消');
+        if (c) c.click();
+      }
       const btn = Array.from(document.querySelectorAll('.install-actions .btn'))
         .find((b) => b.textContent.trim() === '关闭' || b.textContent.trim() === '知道了');
       if (btn) btn.click();
@@ -587,7 +822,8 @@ async function closeInstallMask(page) {
   for (let i = 0; i < 20; i++) {
     await sleep(200);
     const st = await page.evalJS(`window.__dnd.maskState()`);
-    if (!st) return true;
+    const pk = await page.evalJS(`window.__dnd.pickInfo()`);
+    if (!st && !pk) return true;
   }
   return false;
 }

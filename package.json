@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -32,6 +32,7 @@
     "test:mirror:installed": "node scripts/e2e-mirror-installed.cjs",
     "check:drag-install": "python scripts/run-electron.py scripts/check-drag-install.cjs --watch ui-shots/_draginstall.log --until \"DRAG INSTALL CHECK DONE\" --timeout 600",
     "check:drag-install:installed": "node scripts/check-drag-install.cjs --installed",
+    "check:device-order": "node scripts/check-device-order.cjs",
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
     "check:install-modes": "python scripts/run-electron.py scripts/check-install-modes.cjs --watch ui-shots/_installmodes.log --until \"INSTALL MODES CHECK DONE\" --timeout 600"
   },

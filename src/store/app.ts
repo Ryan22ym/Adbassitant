@@ -55,6 +55,29 @@ export interface InstallTask {
   finishedAt?: number;
 }
 
+/** 一个待安装的 APK（只放渲染层需要的最少信息） */
+export interface InstallFile {
+  /** 本地绝对路径 */
+  path: string;
+  /** 展示用文件名 */
+  name: string;
+  /** 文件大小（字节），拖放时可由 File.size 得到 */
+  size?: number;
+}
+
+/**
+ * 已接下、但还没确定装到哪台设备的安装请求。
+ *
+ * 多台设备同时在线时，安装目标是个必须由用户回答的问题：
+ * 谁也没法从「拖了一个 APK 进来」推断出用户想装到手机还是模拟器。
+ * 交给用户点一下，比默默挑一台然后显示「安装成功」安全得多。
+ */
+export interface PendingInstall {
+  files: InstallFile[];
+  mode: InstallMode;
+  grantAll: boolean;
+}
+
 interface AppState {
   /* 设备 */
   devices: DeviceInfo[];
@@ -104,6 +127,12 @@ interface AppState {
   /** 是否正把文件拖在窗口上方（用于显示全窗拖放提示） */
   dragActive: boolean;
   setDragActive: (v: boolean) => void;
+  /**
+   * 等待用户指定目标设备的安装请求（null = 没有）。
+   * 多台设备在线时先落到这里，由界面向用户问「装到哪台」，不猜。
+   */
+  pendingInstall: PendingInstall | null;
+  setPendingInstall: (p: PendingInstall | null) => void;
 }
 
 const MAX_LOGS = 3000;
@@ -118,9 +147,11 @@ export const useApp = create<AppState>((set, get) => ({
     const { currentSerial } = get();
     const online = devices.filter((d) => d.state === 'device');
     let next = currentSerial;
-    // 当前设备掉线时自动切换到第一个在线设备
+    // 当前设备掉线时自动切换：优先物理设备。
+    // 取 online[0] 是不行的 —— 列表顺序就是 adb 的返回顺序，模拟器常排在前面，
+    // 于是「插着手机却一路装到模拟器上」，界面上还显示安装成功。
     if (!currentSerial || !online.some((d) => d.serial === currentSerial)) {
-      next = online[0]?.serial;
+      next = (online.find((d) => !d.isEmulator) ?? online[0])?.serial;
     }
     // 设备列表与当前选择都未变化时跳过，避免触发无意义的重渲染
     const prev = get().devices;
@@ -199,6 +230,9 @@ export const useApp = create<AppState>((set, get) => ({
   setDragActive: (dragActive) => {
     if (get().dragActive !== dragActive) set({ dragActive });
   },
+
+  pendingInstall: null,
+  setPendingInstall: (pendingInstall) => set({ pendingInstall }),
 }));
 
 /* ------------------------------------------------------------------ */
