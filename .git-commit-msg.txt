@@ -1,0 +1,48 @@
+feat: v1.0.16 - 应用内增量更新全链路真机跑通（外部助手 + 自动回滚）
+
+从 v1.0.7 的设计落地到真机成功升级，全部走完：选包 → 校验 → 应用退出 →
+外部助手替换 app.asar → 自动重启 → 渲染层握手确认；新版启动异常（含白屏）
+30 秒内自动回滚。
+
+体积账：全量安装包 84.1 MB，小更新包 180.6 KB（1/477）。
+
+新增
+- electron/services/update-core.ts  纯逻辑（指纹 / 版本比较 / manifest 校验 / zip 核对 /
+  暂存改名 / 路径映射），刻意不 import electron，普通 Node 可直接 require 来测
+- electron/services/update.ts       编排：本机快照 → 准备 → 应用 → 回滚 → 启动握手
+- electron/services/zip.ts          手写 zip 读写；新增 mapRel 用于改写落盘物理名
+- electron/services/pe-version.ts   读 PE FileVersion（便携版身份与版本校验）
+- electron/assets/update-helper.ps1 外部更新助手
+- scripts/make-update.py            生成小包 + runtime-vX.json 差分基准
+- scripts/make-bad-patch.cjs        造「校验能过、起不来」的坏包，专测自动回滚
+- scripts/check-update.cjs          A 纯逻辑 / B 助手沙箱 / C 产物 / D 安装版界面（共 92 项）
+- scripts/check-asar-stage.cjs      真 Electron 里钉 asar shim 那条坑
+- scripts/check-helper-launch.{cjs,py}  真 Electron 里钉「助手能启动、能活过宿主退出」
+- scripts/e2e-update-apply.cjs      真机两阶段端到端（正常 + 回滚）
+- scripts/copy-assets.cjs           把 electron/assets/** 复制到 dist-electron/assets/
+- 关于页 UpdatePanel：选包 / 版本对比 / 立即更新并重启 / 回滚到 vX
+
+修的坑（四条都是「本地检查全绿、真机才炸」）
+1. Electron 把任何 basename 以 .asar 结尾的普通文件当 asar 容器 → 写 app.asar 抛
+   Invalid package（纯 Node 无此 shim）→ 暂存时物理名加 .__asar，逻辑名不动
+2. manifest 的 electronVersion 不能取 package.json 的区间（^33.3.1 实际是 33.4.11）
+   → 改取 node_modules/electron/dist/version
+3. 打包后「找不到更新助手脚本」→ 候选路径少算一层（dist-electron/electron/services/
+   要往上两层才是 dist-electron/assets/）
+4. 🔴 助手被应用的作业对象连坐：应用在带 KILL_ON_JOB_CLOSE 的 job 里
+   （LimitFlags=0x3C00），直接 spawn 的助手会被连坐杀掉（能写首行日志、宿主一退
+   就没了）；detached:true 则让 PowerShell 退出码 0 但一行都不执行。
+   → 改走 `cmd /c start "" /b powershell -File <staging>\update-helper.ps1`，
+     并在退出前等助手落下第一行日志（20 秒；等不到就撤销本次更新并删 job.json）。
+     脚本落地必须带 UTF-8 BOM（PS 5.1 读无 BOM 的 .ps1 会按 GBK 解，中文注释乱码）
+5. 助手脚本 `Start-Process -ArgumentList @()` 抛「参数验证」错（生产里 launchArgs
+   恒为空数组）→ 助手恰好死在「启动新版」那一步，catch 把刚换好的文件又还原，
+   表现成「更新了一趟、版本没变」。沙箱以前一直给非空 launchArgs，故新增 B6 用例
+
+验收（本机安装版 = v1.0.16）
+- e2e 正常 v1.0.15 → v1.0.16：9/0（健康握手成功，重启后 v1.0.16）
+- e2e 回滚 v1.0.15 + 坏包 1.0.16：9/0（30s 健康超时 → 还原 → 重启仍是 v1.0.15）
+- check:update --installed：102/0；本地 A-D：92/0
+- check:helper-launch 6/0；check:asar-stage 5/0；check-apk-parse 9/0；
+  check:device-order 9/0；check-install-modes 21/0；check:drag-install:installed 47/0；
+  check:quick-mirror:installed 9/0；关于页全通过

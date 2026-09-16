@@ -72,6 +72,15 @@ const IPC = {
   LOG_LIST_ALL: 'log:listAll',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+
+  /* 增量更新（v1.0.7） */
+  UPDATE_CONTEXT: 'update:context',
+  UPDATE_PREPARE: 'update:prepare',
+  UPDATE_APPLY: 'update:apply',
+  UPDATE_CANCEL: 'update:cancel',
+  UPDATE_ROLLBACK: 'update:rollback',
+  UPDATE_HANDSHAKE: 'update:handshake',
+  UPDATE_OPEN_DIR: 'update:openDir',
   PUSH_LOG: 'push:log',
   PUSH_MIRROR_STATUS: 'push:mirrorStatus',
   PUSH_RECORD_STATUS: 'push:recordStatus',
@@ -219,6 +228,17 @@ const api = {
   /* 设置 */
   getSettings: () => invoke(IPC.SETTINGS_GET),
   setSettings: (patch: any) => invoke(IPC.SETTINGS_SET, patch),
+
+  /* 增量更新（v1.0.7） */
+  updateContext: () => invoke(IPC.UPDATE_CONTEXT),
+  /** 选择并校验小更新包（只接受 zip），返回 { ok, reason, manifest, ... } */
+  prepareUpdate: (zipPath: string) => invoke(IPC.UPDATE_PREPARE, zipPath),
+  applyUpdate: () => invoke(IPC.UPDATE_APPLY),
+  cancelUpdate: () => invoke(IPC.UPDATE_CANCEL),
+  rollbackUpdate: () => invoke(IPC.UPDATE_ROLLBACK),
+  /** 渲染层挂载后调用一次：落健康标记 + 回读本次更新结果 */
+  updateHandshake: () => invoke(IPC.UPDATE_HANDSHAKE),
+  openUpdateDir: () => invoke(IPC.UPDATE_OPEN_DIR),
 
   /* 事件订阅，返回取消函数 */
   on: (channel: string, cb: (payload: any) => void) => {

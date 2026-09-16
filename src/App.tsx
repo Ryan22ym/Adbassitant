@@ -4,6 +4,7 @@ import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
 import { IPC } from '@shared/types';
+import type { UpdateResult } from '@shared/types';
 
 import DevicePage from './pages/DevicePage';
 import MirrorPage from './pages/MirrorPage';
@@ -41,6 +42,13 @@ export default function App() {
     let alive = true;
 
     (async () => {
+      /*
+       * 更新握手必须尽早发出：更新助手正靠「健康标记」判断新版是不是真的起来了
+       * （主进程活着但白屏也算失败），等超时就会自动回滚。
+       * 所以这里只发起、不await，等其它初始化跑完再收结果。
+       */
+      const handshake = window.adbApi.updateHandshake();
+
       const res = await window.adbApi.getSettings();
       if (alive && res.ok && res.data) {
         setSettings(res.data);
@@ -62,6 +70,20 @@ export default function App() {
       const devRes = await window.adbApi.listDevices();
       if (alive && devRes.ok && devRes.data) {
         useApp.getState().setDevices(devRes.data);
+      }
+
+      // 收更新结果：成功 / 失败已回滚 / 上次没走完
+      const up = await handshake;
+      if (alive && up?.ok && up.data) {
+        const r = up.data as UpdateResult;
+        const st = useApp.getState();
+        if (r.ok) {
+          st.toast('success', `已更新到 v${r.to ?? '新版本'}`, '文件已替换完成，本次为更新后的首次启动');
+        } else if (r.rolledBack) {
+          st.toast('error', '更新失败，已自动回滚', r.error ?? '');
+        } else {
+          st.toast('warn', '更新未完成', r.error ?? '');
+        }
       }
     })();
 

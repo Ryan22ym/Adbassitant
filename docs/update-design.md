@@ -1,7 +1,8 @@
-# 增量更新方案（v1.0.7 / develop 分支）
+# 增量更新方案（v1.0.7 起 / develop 分支）
 
 > 目标：小更新不再重装 84 MB 安装包；应用内一键完成，重启即新版本。
-> 状态：设计定稿，待实现。所有关键机制均已本机实测，来源标注在「依据」列。
+> 状态：**已实现并实跑通过**（v1.0.7 落地功能，v1.0.9 完成本机 1.0.7 → 1.0.9 真实增量更新）。
+> 所有关键机制均已本机实测，来源标注在「依据」列；实现过程中新踩的两条坑见文末 §7。
 
 ---
 
@@ -197,3 +198,110 @@ interface UpdateSource {
 | 便携版所在目录不可写 | prepare 阶段先探测写权限，提前给出明确提示 |
 | 用户中途手动退出应用 | pending.json 未清 → 下次启动视为「上次更新未完成」，提示并保留回滚入口 |
 | adb server 仍持有旧 adb.exe 映像 | 替换后 `adb kill-server`，下次调用自然重启新 server |
+
+---
+
+## 7. 实现期新踩的两条坑（比设计文档里的任何一条都更值得记）
+
+### 7.1 🔴 Electron 把「叫 `*.asar` 的普通文件」当成 asar 容器
+
+解压小包到 `%TEMP%\adba-update-<ts>\` 时，里面那个文件必然叫 `app.asar` ——
+**只有在真 Electron 里才炸**：`解压更新包失败：Invalid package …\app.asar`。
+
+根因：Electron 的 asar fs shim 只要 basename **以 `.asar` 结尾**（大小写不敏感）
+就不当普通文件，转去开归档；`writeFileSync` 与 `openSync+writeSync` 两条路都被拦
+（换底层 API 没用）。本机探针 `scripts/_probe-asar-write.cjs` 实测（Electron 33.4.11）：
+`app.asar` ❌ / `fd.asar` ❌ / `upper.ASAR` ❌ / `payload.asar.new` ✅ / `x.asar.txt` ✅。
+
+**为什么阴**：纯 Node 下根本没有这个 shim → `check-update.cjs` 的 A/B/C 段
+（普通 Node 跑）**全绿**，真身必炸。这条彻底否定了「纯逻辑段过了就等于能跑」。
+
+**对策**：逻辑名（`manifest.files[].path`、`job.json` 的目标路径）保持不变，
+只把**暂存目录里的物理名**改掉（`app.asar → app.asar.__asar`），由
+`update-core.ts` 的 `stageRel()` / `stagePathOf()` 统一负责，`extractZip` 多一个
+`mapRel` 参数。助手是 PowerShell（无 shim），拿到的 src/dest 都从 job.json 里读，
+所以完全不受影响。
+
+**钉住它的检查**：`npm run check:asar-stage`（真 Electron 里解压真实小包，5 秒）
++ `check-update.cjs --installed` + `e2e-update-apply.cjs`。
+
+### 7.2 `electronVersion` 不能取 `package.json` 里的区间
+
+`devDependencies.electron` 写的是 `^33.3.1`，npm 实际装的是 **33.4.11**。
+`make-update.py` 原来 `.lstrip('^~')` 直接拿声明值，于是小包自称 33.3.1、
+应用报 `process.versions.electron = 33.4.11` → 被自己的校验规则拒收：
+「更新包基于 Electron 33.3.1 构建，当前程序是 Electron 33.4.11」。
+
+**对策**：`resolve_electron_version()` 优先读 `node_modules/electron/dist/version`
+（实际打包进程序的运行时），其次 `node_modules/electron/package.json`，
+最后才退回声明值。`check-update.cjs` 产物侧加了 3 条断言钉住（取值来源、不是区间、
+runtime json 与 manifest 一致）。
+
+### 7.3 打包后「找不到更新助手脚本」：候选路径少算一层目录
+
+`tsc` 把 `electron/services/update.ts` 输出到 `dist-electron/electron/services/update.js`，
+而 `scripts/copy-assets.cjs` 把脚本复制到 `dist-electron/assets/` —— 从 services 上去是**两层**。
+写成一层时 dev 下靠 `cwd` 那条兜底照样能跑，**打包后** asar 里只有 `dist-electron/**`
+（已确认 `dist-electron/assets/update-helper.ps1` 在 asar 内，9633 B），于是点「立即更新」
+直接报「启动更新助手失败：找不到更新助手脚本（update-helper.ps1）」。
+
+**对策**：候选路径抽成 `helperScriptCandidates(here, cwd)`（`update-core.ts`，纯函数、可测），
+顺序为 `dist-electron/assets` → 旧布局 → `cwd/dist-electron/assets` → `cwd/electron/assets`；
+`check-update.cjs` 用真实的 `dist-electron` 布局算一遍，断言「至少一条命中磁盘」。
+
+顺带确认了一件事：脚本正文最终是经 `-EncodedCommand`（UTF-16LE + base64）交给 PowerShell 的，
+**不需要磁盘上存在真实 .ps1**（PowerShell 也读不了 asar 内部），所以脚本留在 asar 里完全没问题。
+
+> v1.0.13 起改成「脚本落到暂存目录 + `-File` 运行」：少了一次几十 KB 的 base64 中转，
+> 也顺手把「落地必须带 UTF-8 BOM」这条钉住了（详见 §7.6）。
+
+### 7.4 输出目录被僵尸句柄锁住 = 该目录报废（这轮撞了三次）
+- 输出目录一旦被泄漏句柄锁住，**该版本就无法重建** → 直接**换 `--out` 并顺位 +1 版本号**，
+  不要在同名目录里硬撑（同名目录里可能还躺着上一轮的旧安装包，最脏）。
+- 本机这轮实际发生：`out-v1.0.8` / `out-v1.0.9` / `out-v1.0.10` 三个目录的
+  `resources/app.asar` 先后全部进入 `ERROR_SHARING_VIOLATION(32)`，于是版本顺位到
+  **v1.0.11（含全部修复，全量安装）→ v1.0.12（增量实跑目标）**。
+  旧目录已放 `_已作废_重启后删除.md`，重启后删除。
+
+### 7.6 🔴 更新助手在应用的作业对象里 —— 宿主一退就被连坐（v1.0.13 修）
+
+**症状**：点了「立即更新并重启」，应用退出了，然后**什么都没有发生**：
+`helper.log` 一行没有、新版本没起来、自动回滚也没触发。不报错、不崩、日志空白。
+
+**根因**：应用进程处在一个带 `KILL_ON_JOB_CLOSE` 的作业对象里
+（`scripts/_probe-job.cjs` 实测 `LimitFlags=0x3C00`）。直接 `spawn()` 出来的助手
+就在同一个作业里，宿主机 `app.exit(0)` 之后它被连坐杀掉。
+它甚至不是立刻死 —— 助手能写得出前几行日志，看起来一切正常，宿主一关它就没了。
+
+**五种启动方式的实测对照**（`scripts/_probe-spawn5.cjs` 五种方式对照 + `scripts/_probe-spawn6.cjs` 20 秒长任务存活，真 Electron）：
+
+| 启动方式 | 真能执行 | 活过宿主退出 |
+|---|---|---|
+| 直接 `spawn(ps, …)` | ✅ | ❌ 被连坐 |
+| 直接 `spawn(ps, …, { detached: true })` | ❌ 静默不执行（退出码 0，一行不干） | — |
+| `spawn(ps, …, { stdio: 'ignore' })` | ✅ | ❌ 同样被连坐 |
+| **`cmd /c start "" /b ps -File …`** | ✅ | ✅ 20 秒长任务 10/10 存活 |
+| `explorer.exe <bootstrap.cmd>` | ✅（无作业环境下） | ✅ |
+
+顺带排除的两条路：`Win32_Process.Create`（CIM/WMI 代建）在本机**恒定返回 8 = 未知失败**；
+`schtasks` 落在本机安全策略的程序黑名单里，不可用。
+
+**对策**：`cmd /c start "" /b` + 退出前等助手落第一行日志 + 脚本落地带 BOM。
+三者缺一都会退回「静默失败」那一类。见 README「🔴 更新助手必须由系统「代建」」。
+
+### 7.7 一句话记住这次踩坑的形状
+
+**本地检查全绿，真机必炸** —— 到 v1.0.13 为止一共撞了四条：
+
+| 坑 | 为什么本地检查看不出来 |
+|---|---|
+| `*.asar` 被当容器 | 纯 Node 没有 asar fs shim |
+| `electronVersion` 取区间值 | 只有真机 `process.versions.electron` 才是实际运行时 |
+| 助手脚本路径少一层 | 沙箱检查自带脚本路径，从没走过「解析」这条线 |
+| 助手被作业对象连坐 | 沙箱检查是**直接起 PowerShell**（不在作业里），从没走过「启动」这条线 |
+
+所以验收链条必须是：纯逻辑（A）→ 助手沙箱（B）→ 产物（C）→ **安装版界面（D）** →
+**真机 e2e 增量更新（含回滚）**，再加一条 **`check:helper-launch`（助手启动链路，真 Electron）**。
+少任何一环，上表里至少有一条会漏。
+
+

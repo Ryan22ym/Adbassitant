@@ -28,6 +28,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MIRROR = os.path.join(ROOT, 'eb-mirror')
 PORT = 8731
+DEFAULT_OUT = 'build-output'
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -128,7 +129,23 @@ def main():
         with open(log, 'wb') as f:
             f.write(r.stdout)
         print(f'完整日志：{log}')
-        sys.exit(r.returncode)
+        if r.returncode != 0:
+            sys.exit(r.returncode)
+
+        # 打包成功后顺手产出增量更新小包（失败不影响打包结果）
+        out_dir = args.out or DEFAULT_OUT
+        try:
+            print()
+            mk = subprocess.run(
+                [sys.executable, os.path.join(ROOT, 'scripts', 'make-update.py'), '--out', out_dir],
+                cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            print(mk.stdout.decode('utf-8', errors='replace'))
+            if mk.returncode != 0:
+                print(f'[update] 小包生成失败（退出码 {mk.returncode}），不影响本次打包')
+        except Exception as e:  # noqa: BLE001
+            print(f'[update] 小包生成异常：{e}')
+
+        sys.exit(0)
     finally:
         httpd.shutdown()
         print('[mirror] 服务已停止')

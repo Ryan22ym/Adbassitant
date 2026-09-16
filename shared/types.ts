@@ -543,6 +543,15 @@ export const IPC = {
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
 
+  /* 增量更新（v1.0.7） */
+  UPDATE_CONTEXT: 'update:context',
+  UPDATE_PREPARE: 'update:prepare',
+  UPDATE_APPLY: 'update:apply',
+  UPDATE_CANCEL: 'update:cancel',
+  UPDATE_ROLLBACK: 'update:rollback',
+  UPDATE_HANDSHAKE: 'update:handshake',
+  UPDATE_OPEN_DIR: 'update:openDir',
+
   /* 主进程 -> 渲染进程 推送 */
   PUSH_LOG: 'push:log',
   PUSH_MIRROR_STATUS: 'push:mirrorStatus',
@@ -570,4 +579,114 @@ export interface EnvCheckItem {
 export interface EnvCheckResult {
   items: EnvCheckItem[];
   allOk: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* 增量更新（v1.0.7）                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 更新包形态
+ * - asar     ：安装版小包（只替换 resources/app.asar，必要时附 bin 差量）
+ * - portable ：便携版整包（替换单文件 portable exe 本体）
+ */
+export type UpdateKind = 'asar' | 'portable';
+
+/** 本机形态：dev = 未打包（开发模式，更新入口禁用） */
+export type LocalKind = UpdateKind | 'dev';
+
+/** 小包 manifest.json 的固定 schema 版本；不认识的 schema 一律拒绝 */
+export const UPDATE_SCHEMA = 1;
+
+/**
+ * 产品身份。必须与 electron-builder.json 的 productName / appId 一致，
+ * 用来拒绝「装错产品」的更新包（脚本 scripts/make-update.py 从配置里读同一份值写进 manifest）。
+ */
+export const UPDATE_PRODUCT_NAME = 'ADB桌面助手';
+export const UPDATE_APP_ID = 'com.xiaoyang.adbassistant';
+
+export interface UpdateFileEntry {
+  /** zip 内相对路径（全 ASCII）：app.asar / bin/xxx / portable/app.exe */
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+export interface UpdateManifest {
+  schema: number;
+  productName: string;
+  appId: string;
+  /** 目标版本（必须 > 当前版本） */
+  version: string;
+  builtAt: string;
+  electronVersion: string;
+  /**
+   * 安装本包**之前**目标机应有的 resources/bin 指纹。
+   * 与当前安装不一致 → 说明运行库对不上（换了 Electron 或改了 adb/scrcpy），必须装全量包。
+   */
+  baseRuntimeHash: string;
+  /** 安装本包**之后**的 resources/bin 指纹（无 bin 差量时与 base 相同） */
+  resultRuntimeHash: string;
+  kind: UpdateKind;
+  files: UpdateFileEntry[];
+}
+
+/** 「关于」页展示的本机更新环境 */
+export interface UpdateContext {
+  version: string;
+  kind: LocalKind;
+  packaged: boolean;
+  electronVersion: string;
+  /** 当前安装的 resources/bin 指纹 */
+  runtimeHash: string;
+  /** 会被替换的主目标路径（安装版 = app.asar，便携版 = 那个 exe） */
+  targetPath: string;
+  /** 目标是否可写（提前发现只读目录 / U 盘写保护 / 便携版所在目录不可写） */
+  targetWritable: boolean;
+  /** 是否允许走增量更新；false 时看 disabledReason */
+  canUpdate: boolean;
+  disabledReason?: string;
+  /** 是否有可回滚的备份 */
+  hasBackup: boolean;
+  /** 备份对应的版本号 */
+  backupVersion?: string;
+  /** 更新目录（便于用户查看日志/备份） */
+  updateDir: string;
+}
+
+/** prepareUpdate 的返回值：通过校验才能拿到 stageDir */
+export interface UpdateInfo {
+  /** 是否可用（全部校验通过） */
+  ok: boolean;
+  /** 被拒绝时的原因（面向用户，直接展示） */
+  reason?: string;
+  /** 通过但有风险时的提醒（例如包含 bin 变更） */
+  warning?: string;
+  zipPath: string;
+  zipSize: number;
+  /** 解压暂存目录（ok 时才有） */
+  stageDir?: string;
+  manifest?: UpdateManifest;
+  /** 将被替换的文件数与总字节 */
+  fileCount?: number;
+  totalBytes?: number;
+  /** 会新增/覆盖运行库文件时的清单 */
+  runtimeFiles?: string[];
+}
+
+/** helper 落盘、新版启动后回读的更新结果 */
+export interface UpdateResult {
+  ok: boolean;
+  /** apply = 应用更新 / restore = 回滚 */
+  mode?: 'apply' | 'restore';
+  from?: string;
+  to?: string;
+  /** ISO 时间 */
+  at?: string;
+  /** 失败原因 */
+  error?: string;
+  /** 是否已经自动还原回旧版本 */
+  rolledBack?: boolean;
+  /** helper 日志路径 */
+  logPath?: string;
 }

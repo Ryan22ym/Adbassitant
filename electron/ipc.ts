@@ -73,6 +73,15 @@ import {
 import { listFavorites, toggleFavorite, removeFavorite } from './services/favorites';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog } from './services/logger';
 import { getSettings, saveSettings, resolveDir } from './services/settings';
+import {
+  applyUpdate,
+  cancelUpdate,
+  getUpdateContext,
+  openUpdateDir,
+  prepareUpdate,
+  rollbackUpdate,
+  updateHandshake,
+} from './services/update';
 import { checkEnv } from './env-check';
 import { setLogSink } from './services/adb';
 import { setMirrorStatusSink } from './services/mirror';
@@ -584,6 +593,21 @@ export function registerIpc() {
     IPC.SETTINGS_SET,
     wrap((_e, patch: Partial<AppSettings>) => saveSettings(patch)),
   );
+
+  /* ---------------- 增量更新（v1.0.7） ---------------- */
+
+  ipcMain.handle(IPC.UPDATE_CONTEXT, wrap(() => getUpdateContext()));
+
+  ipcMain.handle(
+    IPC.UPDATE_PREPARE,
+    wrap((_e, zipPath: string) => prepareUpdate(zipPath)),
+  );
+
+  ipcMain.handle(IPC.UPDATE_APPLY, wrap(() => applyUpdate()));
+  ipcMain.handle(IPC.UPDATE_CANCEL, wrap(() => cancelUpdate()));
+  ipcMain.handle(IPC.UPDATE_ROLLBACK, wrap(() => rollbackUpdate()));
+  ipcMain.handle(IPC.UPDATE_HANDSHAKE, wrap(() => updateHandshake()));
+  ipcMain.handle(IPC.UPDATE_OPEN_DIR, wrap(() => openUpdateDir()));
 }
 
 /* ------------------------------------------------------------------ */

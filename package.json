@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.6",
+  "version": "1.0.16",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -11,7 +11,7 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5273 && tsc -p tsconfig.electron.json && cross-env NODE_ENV=development electron .",
     "build:renderer": "vite build",
-    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/copy-assets.cjs",
     "build": "npm run build:renderer && npm run build:electron",
     "dist": "npm run build && electron-builder",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -33,6 +33,11 @@
     "check:drag-install": "python scripts/run-electron.py scripts/check-drag-install.cjs --watch ui-shots/_draginstall.log --until \"DRAG INSTALL CHECK DONE\" --timeout 600",
     "check:drag-install:installed": "node scripts/check-drag-install.cjs --installed",
     "check:device-order": "node scripts/check-device-order.cjs",
+    "check:update": "python scripts/run-electron.py scripts/check-update.cjs --watch ui-shots/_update.log --until \"UPDATE CHECK DONE\" --timeout 900",
+    "check:update:installed": "node scripts/check-update.cjs --installed --expect-version 1.0.16",
+    "check:asar-stage": "python scripts/run-electron.py scripts/check-asar-stage.cjs --watch ui-shots/_asar-stage.log --until \"ASAR STAGE CHECK DONE\" --timeout 300",
+    "check:helper-launch": "python scripts/check-helper-launch.py",
+    "make:update": "python scripts/make-update.py --out out-v1.0.16",
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
     "check:install-modes": "python scripts/run-electron.py scripts/check-install-modes.cjs --watch ui-shots/_installmodes.log --until \"INSTALL MODES CHECK DONE\" --timeout 600"
   },

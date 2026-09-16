@@ -29,6 +29,7 @@
 | **弱网模拟** 🆕 | 对标 clumsy，上行/下行独立配置 7 个参数（带宽/延迟/抖动/丢包/错报/乱序/重复包）；**免 Root：本地代理 + `adb reverse`**（详见下方）；6 个内置档位 + 自定义预设持久化；持续时长与倒计时；设备能力探测（Root/tc/ifb/代理/写设置权限）；已 Root 可切 `tc/netem` 内核级 |
 | **命令终端** | 执行任意 adb 命令，16 个常用命令快捷入口，↑/↓ 翻阅历史 |
 | **运行日志** | 实时记录全部命令与结果，按级别筛选、关键字搜索、一键导出 txt |
+| **软件更新** 🆕 | **应用内增量更新**：选一个小更新包（约 150 KB）→ 应用退出 → 外部助手替换 `app.asar` → 自动重启成新版；**新版启动异常（含白屏）自动回滚**；安装版走 asar 小包、便携版走整包换 exe；校验不过一律提示改用完整安装包（详见下方） |
 | **设置** | 主题切换、默认保存目录、环境自检 |
 
 ### 弱网模拟说明
@@ -108,6 +109,69 @@ put 之后 0 条。**结果就是「ping 通、DNS 通，但所有 App 都上不
 > 断言残留期有连接、清理后 0 连接。实测 **16/16 通过**。
 
 启动前 `probeDevice()` 会实测这些能力（Root / tc / ifb / 接口 / SDK / 能否写设置），UI 如实展示。
+
+---
+
+### 增量更新说明（v1.0.7）
+
+小更新不再重装整个安装包。体积账：全量安装包 **84.1 MB**，而本项目自己的代码
+（`dist/` + `dist-electron/` + `package.json` 打成 `app.asar`）只有 **541 KB**，
+压缩后约 **156 KB** —— 剩下的全是 Electron 运行时和 adb / scrcpy 二进制。
+
+| | 包体 | 用户操作 |
+| --- | --- | --- |
+| 全量安装包 | 84.1 MB | 下载 → 双击 → 下一步 → 安装 → 手动启动 |
+| 安装版增量 | ~156 KB zip | 应用内选包 → 「立即更新并重启」→ 自动重启成新版 |
+| 便携版 | 整包换 exe（约 84 MB） | 同上，替换对象是那个单文件 exe |
+
+**为什么必须用一个外部的 PowerShell 助手**
+
+运行期间 `resources/app.asar` 被独占锁定（实测 `os.replace` → WinError 5、
+`rename` → WinError 32），连「再起一个自己的实例来替换」都不行 —— 那个实例
+同样会锁住 asar。所以只能交给系统自带的 PowerShell（不落地任何自制 exe，
+避免被杀软拦）。脚本先落到暂存目录（带 UTF-8 BOM，见下方踩坑），再 `-File` 运行。
+**但「谁来启动它」是有讲究的，见「🔴 更新助手必须由系统代建」那条。**
+流程：
+
+```
+应用：prepareUpdate(zip)  解压到 %TEMP%\adba-update-<ts>\ → 逐项校验
+     → applyUpdate()      停投屏/Logcat/弱网 + adb kill-server → 写 job.json
+                          → cmd /c start 代建助手 → 等它落下第一行日志 → app.exit(0)
+助手：等主进程退出 → 等目标文件解锁 → 备份 → 写 .new 再原子替换
+     → 启动新版 → 轮询「健康标记」（最多 30 秒）
+        ├─ 出现 → 成功（保留备份，界面出现「回滚到 vX」）
+        └─ 没有 → 杀新版进程 → 还原备份 → 启动旧版 → 写 last-error
+新版：渲染层就绪后发一次 IPC 握手 → 主进程落健康标记 → 读结果 → toast 提示
+```
+
+**「启动成功」的判据是渲染层握手，不是「主进程活着」** —— 否则主进程活着但
+白屏（渲染层崩）会被判成成功，那正是最需要回滚的情况。
+
+**校验规则**（任一条不满足 → 明确拒绝，提示改用完整安装包，绝不硬来）
+
+`schema` · `productName` / `appId` · 目标版本必须更新 · Electron 版本一致 ·
+`resources/bin` 指纹一致（`adb` / `scrcpy` 有变化就得走全量）· 每个文件的
+SHA-256 与字节数 · 包形态与本机一致（安装版 ↔ 便携版不能混用）· 目标目录可写。
+
+便携版整包是**完整替换**，自带运行时，所以不受 Electron / 运行库约束；
+它换的是程序本体，因此改为读 exe 内嵌的 PE 版本资源做身份与版本校验
+（`electron/services/pe-version.ts`，手写，不依赖 PowerShell 的本地化字符串）。
+
+**产物**（`python scripts/build.py --out out-vX` 会自动追加这一步）
+
+```
+out-vX/update/ADB桌面助手-vX-patch.zip            安装版小包（manifest.json + app.asar [+ bin 差量]）
+out-vX/update/ADB桌面助手-vX-portable-patch.zip   便携版整包
+out-vX/update/runtime-vX.json                     本版运行库指纹，供下一版做差分基准
+out-vX/update/*.sha256                            包自身摘要（为第二阶段「服务器下载」预留）
+```
+
+`runtime-vX.json` 就是「下一个小包的差分基准」：`bin` 里没变的文件不会进包。
+所以同一版第一次生成的包会偏大（没有基准，只能全带），从第二版起才是纯增量。
+
+运行期文件（`%APPDATA%\adb-assistant\update\`）：`pending.json`（更新在途）、
+`health.ok`（握手标记）、`result.json`（助手结论）、`helper.log`（助手日志）、
+`backup/<stamp>/`（上一次更新的备份，只保留最近一份）。
 
 ---
 
@@ -233,6 +297,11 @@ electron-builder 删除时直接报"拒绝访问"。
 python scripts/build.py --out out-v1.1
 ADB_OUT_DIR=out-v1.1 node scripts/e2e-packaged.cjs
 ```
+
+⚠️ **别小看这条**：`app.asar` 一被锁住，那个输出目录就**再也 rebuild 不了**（连
+`win-unpacked` 改名都报 `ERROR_ACCESS_DENIED(5)`）。此时目录里如果还躺着**上一轮的
+安装包**，就是最脏的状态 —— 名字对、内容是旧代码。**不要往里面再打包，也不要拿它发版**：
+换个 `--out`（或顺手把版本号 +1，让新目录名天然区分开），重启后再删旧目录。
 
 ### ⚠️ 绝对不要关闭 `signAndEditExecutable`
 
@@ -645,6 +714,118 @@ isEmulator: /emulator|sdk_gphone|vbox/i.test(props['model'] || serial)
 
 `npm run check:device-order` 钉这两条：浅查 / 深查的判定都要与
 「serial 是否以 `emulator-` 开头」一致，且两条路径结果必须相同。
+
+---
+
+### 🔴 Electron 把「叫 `*.asar` 的普通文件」当成 asar 容器，写它会抛 `Invalid package`
+
+增量更新要把小包解压到 `%TEMP%\adba-update-<ts>\`，里面必然有一个文件叫
+**`app.asar`** —— 于是**只有在真 Electron 里才炸**：
+
+```
+解压更新包失败：Invalid package C:\Users\…\Temp\adba-update-1789552702468\app.asar
+```
+
+Electron 的 asar fs shim 判断「这是不是一个 asar 容器」**只看 basename 是不是以
+`.asar` 结尾**（**大小写不敏感**），是就不当普通文件，转去开归档 → 文件还不存在 /
+不是归档，抛 `Invalid package`。
+
+本机探针 `scripts/_probe-asar-write.cjs`（Electron 33.4.11）实测：
+
+| 操作 | 结果 |
+|---|---|
+| `writeFileSync` → `a.bin` | ✅ |
+| `writeFileSync` → `app.asar` | ❌ `Invalid package` |
+| `openSync` + `writeSync` → `fd.asar` | ❌ `Invalid package`（**fd 层也被拦，换 API 没用**） |
+| `writeFileSync` → `upper.ASAR` | ❌ `Invalid package`（大小写不敏感） |
+| `writeFileSync` → `payload.asar.new` / `x.asar.txt` | ✅（只看结尾） |
+| 目录名带 `.asar`，往里写普通文件 | ✅ |
+
+**为什么特别阴**：纯 Node 下**完全没有这个 shim**。所以 `check-update.cjs` 的
+A/B/C 段（普通 Node 跑）**全绿**，一到真安装版就必炸 —— 这也是为什么
+`check-update.cjs --installed` 和 e2e 不能省。
+
+**对策**：**逻辑名不动，只改暂存时的物理文件名**。
+
+```ts
+// electron/services/update-core.ts
+export const STAGE_ASAR_SFX = '.__asar';
+export function stageRel(logical: string): string {      // app.asar → app.asar.__asar
+  const segs = logical.split('/');
+  const i = segs.length - 1;
+  if (/\.asar$/i.test(segs[i])) segs[i] = segs[i] + STAGE_ASAR_SFX;
+  return segs.join('/');
+}
+```
+
+`manifest.files[].path`、写进 `job.json` 的目标路径、交给 PowerShell 助手替换的
+`resources\app.asar` 全部保持原名（助手是 PowerShell，没有这个 shim）；
+只有 `extractZip(..., mapRel)` 落盘那一下改名。
+
+`npm run check:asar-stage` 专门钉这条：**在真 Electron 里**把真实小包解压到临时目录，
+断言「解压不抛错 + 暂存目录里没有任何以 `.asar` 结尾的路径 + 内容 sha256 与 manifest 逐项一致」，
+开头还有一个自证探针（确认当前运行时确实有 shim），避免误用 node 跑出「假 PASS」。5 秒出结果。
+
+---
+
+### 🔴 更新助手必须由系统「代建」，不能直接 spawn —— 它在应用的作业对象里，会被连坐杀掉
+
+**症状**：点了「立即更新并重启」，应用确实退出了，然后**什么都没发生** ——
+`%APPDATA%\adb-assistant\update\helper.log` 一行都没有、新版本没起来、
+自动回滚也没触发。不报错、不崩、日志空白，最难查的那一类。
+
+**根因**：应用进程处在一个**带 `KILL_ON_JOB_CLOSE` 的作业对象**里。
+本机探针 `scripts/_probe-job.cjs`（真 Electron）实测：
+
+```
+pid=38460 inJob=True LimitFlags=0x3C00 [KILL_ON_JOB_CLOSE,BREAKAWAY_OK,SILENT_BREAKAWAY_OK,DIE_ON_UNHANDLED_EXCEPTION]
+```
+
+作业对象里所有进程「一荣俱荣、一损俱损」：宿主 `app.exit(0)` 之后，
+同作业的子进程会被**连坐杀掉**。而直接 `spawn()` 出来的助手恰恰就在同一个作业里。
+更坑的是它**不是立刻死** —— 助手能写得出前几行日志，看起来一切正常，
+等你把宿主关掉它才消失，于是「更新到一半没了」。
+
+**为什么 `detached: true` 也不是解药**：那是 `DETACHED_PROCESS`，
+PowerShell 会**退出码 0 但一行都不执行**（连它自己的日志都不写），比被杀掉还难查。
+`stdio: 'ignore'` 之外的花样也别用：给了 pipe 却不读，子进程写满缓冲区就卡死。
+
+**对策**：让助手由 **ShellExecute 代建**，这样它不属于应用的作业对象。
+
+```ts
+// electron/services/update.ts
+const child = spawn(
+  join(sysRoot, 'System32', 'cmd.exe'),
+  ['/c', 'start', '', '/b', ps, '-NoProfile', '-NonInteractive',
+   '-ExecutionPolicy', 'Bypass', '-File', scriptPath],   // scriptPath = 暂存目录里的 update-helper.ps1
+  { stdio: 'ignore', cwd: tmpdir() },
+);
+```
+
+本机探针 `scripts/_probe-spawn5.cjs（五种启动方式对照）+ scripts/_probe-spawn6.cjs（20 秒长任务存活）`（真 Electron）实测五种启动方式：
+
+| 启动方式 | 真能执行 | 活过宿主退出 |
+|---|---|---|
+| 直接 `spawn(ps, …)` | ✅ | ❌ 被连坐（写得出首行日志，宿主一退就没了） |
+| 直接 `spawn(ps, …, {detached:true})` | ❌ 静默不执行 | — |
+| `spawn(ps, …, {stdio:'ignore'})` | ✅ | ❌ 同样被连坐 |
+| **`cmd /c start "" /b ps -File …`** | ✅ | ✅ 20 秒长任务 10/10 tick 全活 |
+| `explorer.exe <bootstrap.cmd>` | ✅（无作业环境下） | ✅ |
+
+**还有两个配套细节，少一个都会踩坑**：
+
+1. **退出前必须等助手落下第一行日志**。`cmd /c start` 是异步交接，
+   中间那个 `cmd.exe` 自己还在作业里；宿主退得太早会把它连坐掉，
+   助手于是永远起不来。等到了再退，这一环就是确定性的（`waitHelperStarted()`，
+   超时 20 秒；等不到就撤掉本次更新并删掉 `job.json`，让「迟到的助手」立刻自杀，不动任何文件）。
+2. **助手脚本要落地成 `.ps1` 再 `-File` 跑，且必须带 UTF-8 BOM**。
+   无 BOM 时 PowerShell 5.1 会按 GBK 解，脚本里的中文注释变乱码，
+   严重时把引号吃掉、整个脚本解析失败（同样表现为「静默不执行」）。
+
+`npm run check:helper-launch` 专门钉这条：**在真 Electron 里**走一遍生产代码的
+`spawnHelperForCheck()`，等助手落首行日志后 `app.exit(0)`；宿主死掉之后再断言
+助手仍然把 `result.json`（`ok:true`）跑出来了 —— 因为助手的 `job.pid` 就是宿主，
+它必须先看到宿主消失才会往下走，所以「结果存在」本身就是「没被连坐」的硬证据。6 项，约 8 秒。
 
 ---
 
