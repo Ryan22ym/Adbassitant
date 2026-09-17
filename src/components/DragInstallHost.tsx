@@ -97,7 +97,7 @@ export default function DragInstallHost() {
           <div className="drop-veil-card">
             <p className="drop-veil-title">松开鼠标即可安装</p>
             <p className="drop-veil-hint">
-              支持 .apk 与 .aab，可一次拖多个，按顺序安装；其他文件会被忽略。
+              支持 .apk、.aab 与 .apks，可一次拖多个，按顺序安装；其他文件会被忽略。
               多台设备在线时，会先问一下装到哪台
             </p>
           </div>
@@ -137,7 +137,7 @@ async function handleWindowDrop(files: File[]) {
     st.toast(
       'warn',
       '没有可安装的文件',
-      '拖放安装只支持 .apk 与 .aab；其他文件可拖到投屏窗口，会自动存入设备 Download 目录',
+      '拖放安装只支持 .apk、.aab 与 .apks；其他文件可拖到投屏窗口，会自动存入设备 Download 目录',
     );
     return;
   }
@@ -168,6 +168,7 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
   const label =
     pending.files.length > 1 ? `${firstName} 等 ${pending.files.length} 个文件` : firstName;
   const hasAab = pending.files.some((f) => (f.kind ?? kindOf(f.path)) === 'aab');
+  const hasApks = pending.files.some((f) => (f.kind ?? kindOf(f.path)) === 'apks');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -221,6 +222,13 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
               AAB 要先按所选设备的配置拆包，比 APK 慢一些
             </>
           )}
+          {hasApks && !hasAab && (
+            <>
+              <br />
+              APKS 是已经拆好的产物，不用再拆包，但它是给特定设备拆的 ——
+              装到别的设备上可能不匹配
+            </>
+          )}
         </p>
 
         <div className="install-actions">
@@ -240,26 +248,29 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
 function InstallDialog({ task }: { task: InstallTask }) {
   const installing = task.phase === 'installing';
   const isSuccess = task.phase === 'success';
-  const isAab = (task.kind ?? kindOf(task.apkPath)) === 'aab';
-
+  const kind = task.kind ?? kindOf(task.apkPath);
+  const isAab = kind === 'aab';
+  const isApks = kind === 'apks';
   /**
-   * AAB 安装期间把 bundletool 的输出实时显示出来。
+   * 这两种包都会走 bundletool（Java 进程），输出需要实时显示。
    *
-   * 拆包一个大 bundle 要十几秒到几十秒，界面只有一个转圈的话，
-   * 用户完全无法区分「在干活」和「卡死了」。
+   * 拆包一个大 bundle 要十几秒到几十秒、装一组 split 也要好几秒，
+   * 界面只有一个转圈的话，用户完全无法区分「在干活」和「卡死了」。
    */
+  const streams = isAab || isApks;
+
   const [lines, setLines] = useState<string[]>([]);
   const tailRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
-    if (!installing || !isAab) return undefined;
+    if (!installing || !streams) return undefined;
     setLines([]);
     const off = window.adbApi.on('push:aabOutput', (p: { line?: string }) => {
       if (!p?.line) return;
       setLines((prev) => [...prev.slice(-120), p.line as string]);
     });
     return off;
-  }, [installing, isAab]);
+  }, [installing, streams]);
 
   useEffect(() => {
     if (tailRef.current) tailRef.current.scrollTop = tailRef.current.scrollHeight;
@@ -278,14 +289,16 @@ function InstallDialog({ task }: { task: InstallTask }) {
   const title = installing
     ? isAab
       ? '正在安装 AAB…'
-      : '正在安装中…'
+      : isApks
+        ? '正在安装 APKS…'
+        : '正在安装中…'
     : isSuccess
       ? '安装成功'
       : '安装失败';
 
   return (
     <div className="install-mask" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="install-card fade-in" data-install-kind={isAab ? 'aab' : 'apk'}>
+      <div className="install-card fade-in" data-install-kind={isAab ? 'aab' : isApks ? 'apks' : 'apk'}>
         <div className={`install-badge ${task.phase}`}>
           {installing ? <Spinner size={22} /> : isSuccess ? '✓' : '×'}
         </div>
@@ -300,6 +313,11 @@ function InstallDialog({ task }: { task: InstallTask }) {
         {isAab && installing && (
           <p className="install-note">
             AAB 需要先按目标设备的配置拆包（首次较慢，之后同一台设备会复用缓存）
+          </p>
+        )}
+        {isApks && installing && (
+          <p className="install-note">
+            APKS 是已经拆好的产物，这次不再拆包，直接按 split 安装
           </p>
         )}
 
@@ -317,7 +335,7 @@ function InstallDialog({ task }: { task: InstallTask }) {
 
         {installing ? (
           <>
-            {isAab && lines.length > 0 && (
+            {streams && lines.length > 0 && (
               <pre className="install-detail install-stream" ref={tailRef}>
                 {lines.join('\n')}
               </pre>

@@ -343,9 +343,9 @@
   font-size: 11.5px;
 }
 
-/* ---------------- AAB 相关 ---------------- */
+/* ---------------- AAB / APKS 相关 ---------------- */
 
-/* 拖放区里那个 APK / AAB 小标签 */
+/* 拖放区里那个 APK / AAB / APKS 小标签 */
 .install-kind-chip {
   flex: none;
   padding: 1px 6px;
@@ -369,6 +369,13 @@
   border-color: var(--border-strong);
   background: var(--bg-inset);
   color: var(--text-primary);
+}
+
+/* APKS：是「拆好的产物」，用绿色系跟 AAB 的原料感区分开 */
+.install-kind-chip.apks {
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: var(--success);
 }
 
 /* AAB 拆包过程的实时输出流：比 install-detail 矮一点，给提示文字留位置 */

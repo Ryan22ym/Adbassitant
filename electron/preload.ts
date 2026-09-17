@@ -39,6 +39,10 @@ const IPC = {
   AAB_OPEN_TOOL_DIR: 'aab:openToolDir',
   AAB_CACHE_LIST: 'aab:cacheList',
   AAB_CACHE_CLEAR: 'aab:cacheClear',
+  /* 拆包与安装分离 */
+  AAB_CONVERT: 'aab:convert',
+  AAB_SAVE_APKS: 'aab:saveApks',
+  APKS_INSTALL: 'apks:install',
   /* AAB 签名 */
   AAB_SIGNING_GET: 'aab:signingGet',
   AAB_SIGNING_SET: 'aab:signingSet',
@@ -186,6 +190,35 @@ const api = {
   /** AAB 拆包产物缓存 */
   aabCache: () => invoke(IPC.AAB_CACHE_LIST),
   clearAabCache: () => invoke(IPC.AAB_CACHE_CLEAR),
+
+  /*
+   * 拆包与安装分离（v1.0.19）
+   * 拆包只做本机计算，产物可另存、可复用；装的时候不必再拆一次。
+   */
+  /** 仅拆包：AAB → 缓存里的 .apks（不另存、不安装） */
+  convertBundle: (
+    serial: string | undefined,
+    aabPath: string,
+    signing?: Record<string, unknown>,
+    useCache = true,
+  ) => invoke(IPC.AAB_CONVERT, serial, aabPath, signing, useCache),
+  /**
+   * 拆包并另存：先弹保存框（用户取消返回 null），再把产物写到指定路径。
+   * defaultName 是保存框里的建议文件名。
+   */
+  saveApks: (
+    serial: string | undefined,
+    aabPath: string,
+    defaultName?: string,
+    signing?: Record<string, unknown>,
+  ) => invoke(IPC.AAB_SAVE_APKS, serial, aabPath, defaultName, signing),
+  /** 安装一份现成的 .apks（本工具拆出来的产物，跳过拆包） */
+  installApks: (
+    serial: string | undefined,
+    apksPath: string,
+    mode: 'overwrite' | 'clean' | 'fresh' = 'overwrite',
+    grantAll = false,
+  ) => invoke(IPC.APKS_INSTALL, serial, apksPath, mode, grantAll),
 
   /**
    * AAB 拆包签名。

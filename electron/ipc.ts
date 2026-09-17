@@ -53,6 +53,8 @@ import {
 } from './services/files';
 import {
   installBundle,
+  installApksFile,
+  convertBundle,
   inspectAabEnv,
   downloadBundletool,
   bundletoolJarPath,
@@ -435,6 +437,98 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.AAB_CACHE_LIST, wrap(() => listBundleCache()));
   ipcMain.handle(IPC.AAB_CACHE_CLEAR, wrap(() => clearBundleCache()));
+
+  /*
+   * 拆包与安装分离（v1.0.19）
+   * ------------------------------------------------------------
+   * 「AAB → .apks」是一个独立的动作：不碰设备侧状态（不卸载、不安装），
+   * 只按目标设备的配置拆一次，产物既可当场另存，也留在缓存里供反复安装。
+   * 这样同一份包换设备 / 重装时不用再跑几十秒的拆包。
+   */
+
+  /** 仅拆包：AAB → 缓存目录里的 .apks（不另存、不安装） */
+  ipcMain.handle(
+    IPC.AAB_CONVERT,
+    wrap(
+      (
+        _e,
+        serial: string | undefined,
+        aabPath: string,
+        signing?: Partial<AabSigningConfig>,
+        useCache = true,
+      ) =>
+        convertBundle(aabPath, {
+          serial: serial || '',
+          signing,
+          useCache,
+          onLine: (line) => send(IPC.PUSH_AAB_OUTPUT, { line }),
+        }),
+    ),
+  );
+
+  /**
+   * 拆包并「另存为」：先弹保存框让用户定路径，再拆包写过去。
+   *
+   * 保存框必须在主进程弹（渲染进程拿不到本机绝对路径），
+   * 而且要在真正跑 bundletool 之前 —— 用户取消时不该白等几十秒。
+   */
+  ipcMain.handle(
+    IPC.AAB_SAVE_APKS,
+    wrap(
+      async (
+        e,
+        serial: string | undefined,
+        aabPath: string,
+        defaultName: string | undefined,
+        signing?: Partial<AabSigningConfig>,
+      ) => {
+        if (!existsSync(aabPath)) throw new Error(`文件不存在：${aabPath}`);
+
+        const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+        const suggested =
+          (defaultName || '').trim() ||
+          `${basename(aabPath).replace(/\.aab$/i, '')}.apks`;
+
+        const r = await dialog.showSaveDialog(win as BrowserWindow, {
+          title: '导出拆包产物',
+          defaultPath: join(resolveDir('pull'), suggested),
+          filters: [{ name: 'APKS 拆包产物', extensions: ['apks'] }],
+        });
+        // 取消返回 null，由渲染层当作「用户放弃」，不弹错误
+        if (r.canceled || !r.filePath) return null;
+
+        const conv = await convertBundle(aabPath, {
+          serial: serial || '',
+          outPath: r.filePath,
+          signing,
+          useCache: true,
+          onLine: (line) => send(IPC.PUSH_AAB_OUTPUT, { line }),
+        });
+        log('success', 'AAB', `拆包产物已导出：${conv.apksPath}`);
+        return conv;
+      },
+    ),
+  );
+
+  /** 装一份现成的 .apks（不再拆包） */
+  ipcMain.handle(
+    IPC.APKS_INSTALL,
+    wrap(
+      (
+        _e,
+        serial: string | undefined,
+        apksPath: string,
+        mode: InstallMode = 'overwrite',
+        grantAll = false,
+      ) =>
+        installApksFile(apksPath, {
+          serial: serial || '',
+          mode,
+          grantAll,
+          onLine: (line) => send(IPC.PUSH_AAB_OUTPUT, { line }),
+        }),
+    ),
+  );
 
   /* AAB 签名：换签名会改 key hash，三方登录 / 推送全靠它 */
   ipcMain.handle(IPC.AAB_SIGNING_GET, wrap(() => getSigningInfo()));

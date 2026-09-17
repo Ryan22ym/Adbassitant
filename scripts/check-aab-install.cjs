@@ -3,11 +3,12 @@
  *
  *   node scripts/check-aab-install.cjs
  *
- * 覆盖四段：
+ * 覆盖五段：
  *   A. 环境与工具链    —— Java 11+ / bundletool jar / 随包调试密钥库
  *   B. AAB 文件识别    —— protobuf manifest 解析、bundle 判定、非法输入
  *   C. 真机安装全链路  —— build-apks(device-spec) → install-apks → pm path 复核
  *   D. 缓存与安装方式  —— 命中缓存、按设备隔离、fresh 中止、clean 卸载
+ *   E. 拆包与安装分离  —— convertBundle 另存 .apks、装现成 .apks、缓存外产物
  *
  * 为什么要测这些（都是踩过的坑）：
  *   - AAB 的 manifest 是 protobuf，不是 AXML，既有解析器读不出包名；
@@ -17,7 +18,9 @@
  *     自己找 adb，找不到就 `Unable to find the requested device`。
  *     正解是拆成 get-device-spec → build-apks --device-spec；
  *   - 装 apks 会按「文件指纹 + 设备」缓存，但设备侧的 fresh/clean 判断
- *     不能因为命中缓存就跳过（否则第二次装的行为和第一次不一致）。
+ *     不能因为命中缓存就跳过（否则第二次装的行为和第一次不一致）；
+ *   - 「拆包」与「安装」是两件事：拆一次可以反复装，产物能落盘复用。
+ *     装现成 .apks 时不能再偷偷拆包（否则用户以为装 apks 比装 aab 还慢）。
  *
  * 素材：~/Downloads 下的任意 .aab（可用 AAB_FILE 指定），目标设备默认
  * 取 ADB_SERIAL 或第一台在线设备。
@@ -35,8 +38,15 @@ const LOG = path.join(OUT, '_aab-install.log');
 const ADB = path.join(ROOT, 'bin', 'adb.exe');
 const KS = path.join(ROOT, 'bin', 'bundletool', 'debug.keystore');
 
-const { installBundle, inspectAabEnv, listBundleCache, clearBundleCache, bundletoolJarPath } =
-  require('../dist-electron/electron/services/aab.js');
+const {
+  installBundle,
+  installApksFile,
+  convertBundle,
+  inspectAabEnv,
+  listBundleCache,
+  clearBundleCache,
+  bundletoolJarPath,
+} = require('../dist-electron/electron/services/aab.js');
 const { readAabInfo } = require('../dist-electron/electron/services/apk.js');
 
 let rows = [];
@@ -283,6 +293,168 @@ async function tryInstall(file, opts) {
   if (cleanTry.result) {
     record(cleanTry.result.uninstalled === true, 'clean 模式确实先卸载了旧版本', String(cleanTry.result.uninstalled));
     record(cleanTry.result.verified === true, 'clean 模式装后复核通过', String(cleanTry.result.verified));
+  }
+
+  /* ================= E. 拆包与安装分离 ================= */
+
+  /* --- E1. convertBundle 只拆包：产物落缓存，不改设备状态 --- */
+  const purgeE = clearBundleCache();
+  log(`E: purged ${purgeE.removed} dirs`);
+
+  const convLines = [];
+  const tConv = Date.now();
+  let conv;
+  try {
+    conv = await convertBundle(sample, {
+      serial: target,
+      onLine: (l) => convLines.push(l),
+    });
+  } catch (e) {
+    conv = { error: e.message };
+  }
+  const convSec = ((Date.now() - tConv) / 1000).toFixed(1);
+
+  record(!conv.error && !!conv.apksPath, 'E1 仅拆包成功（不安装）', safe(conv.error || ''));
+  if (conv.apksPath) {
+    log(`E1 convert: ${JSON.stringify({ ...conv, apksPath: conv.apksPath })}`);
+    record(fs.existsSync(conv.apksPath), 'E1 产物 .apks 已落盘', conv.apksPath);
+    record(fs.statSync(conv.apksPath).size > 1024, 'E1 产物不是空壳', MB(fs.statSync(conv.apksPath).size));
+    record(conv.rebuilt === true, 'E1 冷启动确实重新拆了包', `rebuilt=${conv.rebuilt}`);
+    record(conv.fromCache === false, 'E1 冷启动未命中缓存', `fromCache=${conv.fromCache}`);
+    record(typeof conv.buildMs === 'number' && conv.buildMs > 0, 'E1 记录了拆包耗时', `${conv.buildMs}ms`);
+    record(conv.packageName === pkgFromFile, 'E1 读出的包名与 AAB 一致', String(conv.packageName));
+    record(conv.savedToOutPath === false, 'E1 未指定 outPath 时产物留在缓存里', String(conv.savedToOutPath));
+    // 关键：拆包绝不能碰设备状态 —— 设备上此刻应该没有这个包（前面 clean 之后又装过，先卸掉）
+    adb(['-s', target, 'uninstall', pkgFromFile]);
+    record(
+      !adb(['-s', target, 'shell', 'pm', 'path', pkgFromFile]).includes('package:'),
+      'E1 拆包不会把应用装上（设备状态未被改动）',
+    );
+    // 记账文件必须写下来，否则装现成 .apks 时读不出包名
+    const srcFile = path.join(path.dirname(conv.apksPath), 'source.aab.txt');
+    record(fs.existsSync(srcFile), 'E1 产物目录记下了源 AAB 路径', fs.existsSync(srcFile) ? fs.readFileSync(srcFile, 'utf8').trim() : '缺失');
+  }
+
+  /* --- E2. convertBundle 第二次命中缓存：不重拆 --- */
+  const conv2 = await convertBundle(sample, { serial: target }).catch((e) => ({ error: e.message }));
+  record(!conv2.error, 'E2 第二次拆包调用成功', safe(conv2.error || ''));
+  if (conv2.apksPath) {
+    record(conv2.fromCache === true, 'E2 第二次命中拆包缓存', `fromCache=${conv2.fromCache}`);
+    record(conv2.rebuilt === false, 'E2 命中缓存时不重新拆包', `rebuilt=${conv2.rebuilt}`);
+    record(!conv2.buildMs, 'E2 命中缓存时拆包耗时为 0', `buildMs=${conv2.buildMs}`);
+  }
+
+  /* --- E3. 另存 outPath：产物复制到用户指定路径 --- */
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aab-save-'));
+  const outFile = path.join(outDir, 'saved.apks');
+  const conv3 = await convertBundle(sample, { serial: target, outPath: outFile }).catch((e) => ({
+    error: e.message,
+  }));
+  record(!conv3.error, 'E3 另存到指定路径成功', safe(conv3.error || ''));
+  if (!conv3.error) {
+    record(fs.existsSync(outFile), 'E3 另存的文件存在', MB(fs.existsSync(outFile) ? fs.statSync(outFile).size : 0));
+    record(conv3.apksPath === outFile, 'E3 返回的路径就是另存路径', conv3.apksPath);
+    record(conv3.savedToOutPath === true, 'E3 标记为已另存', String(conv3.savedToOutPath));
+    record(conv3.fromCache === true, 'E3 另存走的是缓存产物（没重拆）', `fromCache=${conv3.fromCache}`);
+    // 先写 .part 再改名：中间态不该留下
+    record(!fs.existsSync(outFile + '.part'), 'E3 没有留下 .part 半成品');
+  }
+
+  /* --- E4. 装现成的 .apks：不再拆包，直接 install-multiple --- */
+  const apkLines = [];
+  let inst;
+  try {
+    inst = await installApksFile(conv.apksPath, {
+      serial: target,
+      mode: 'overwrite',
+      onLine: (l) => apkLines.push(l),
+    });
+  } catch (e) {
+    inst = { error: e.message };
+  }
+  record(!inst.error && !!inst.serial, 'E4 安装现成 .apks 成功', safe(inst.error || ''));
+  if (inst.serial) {
+    log(`E4 install apks: ${JSON.stringify({ ...inst, output: undefined })}`);
+    record(inst.fromApks === true, 'E4 结果标记为来自 .apks', String(inst.fromApks));
+    record(inst.fromBundle === false, 'E4 不是来自 bundle（没走拆包）', String(inst.fromBundle));
+    record(inst.verified === true, 'E4 装后复核通过（靠 source.aab.txt 反查包名）', String(inst.verified));
+    record(inst.packageName === pkgFromFile, 'E4 复核用包名与 AAB 一致', String(inst.packageName));
+    const paths = adb(['-s', target, 'shell', 'pm', 'path', pkgFromFile]);
+    const got = paths.split(/\r?\n/).filter((x) => x.startsWith('package:'));
+    record(got.length >= 2, 'E4 同样是 split 多包（.apks 特征）', `${got.length} 个 apk`);
+    // 「装 .apks 不再拆包」是本功能的核心承诺：输出里不该有 build-apks 的痕迹
+    const joined = apkLines.join('\n');
+    record(
+      !/build-apks|拆包完成|device-spec/i.test(joined),
+      'E4 安装现成 .apks 时没有再拆包',
+      apkLines.length ? `${apkLines.length} 行输出` : '无输出',
+    );
+  }
+
+  /* --- E5. 不指定设备必须拒绝（拆包与装 apks 都是） --- */
+  const convNoSerial = await convertBundle(sample, { serial: '' }).catch((e) => ({ error: e.message }));
+  record(
+    !!convNoSerial.error && /必须明确指定目标设备/.test(convNoSerial.error),
+    'E5 拆包不指定设备被拒',
+    safe(convNoSerial.error),
+  );
+  const apksNoSerial = await installApksFile(conv.apksPath, { serial: '' }).catch((e) => ({
+    error: e.message,
+  }));
+  record(
+    !!apksNoSerial.error && /必须明确指定目标设备/.test(apksNoSerial.error),
+    'E5 装 .apks 不指定设备被拒',
+    safe(apksNoSerial.error),
+  );
+
+  /* --- E6. 非 .apks 扩展名被拒 --- */
+  const badApks = await installApksFile(sample, { serial: target }).catch((e) => ({ error: e.message }));
+  record(
+    !!badApks.error && /不是 \.apks/.test(badApks.error),
+    'E6 用 .aab 冒充 .apks 被拒',
+    safe(badApks.error),
+  );
+
+  /* --- E7. fresh / clean 语义在 .apks 路径上同样成立 --- */
+  const apksFresh = await installApksFile(conv.apksPath, {
+    serial: target,
+    mode: 'fresh',
+  }).catch((e) => ({ error: e.message }));
+  const apksFreshBlocked =
+    (!!apksFresh.error && /已存在/.test(apksFresh.error)) ||
+    (apksFresh.result && /已存在/.test(apksFresh.result.output || ''));
+  record(!!apksFreshBlocked, 'E7 fresh 模式对已装应用中止（.apks 路径）', safe(apksFresh.error || 'ok'));
+
+  const apksClean = await installApksFile(conv.apksPath, {
+    serial: target,
+    mode: 'clean',
+  }).catch((e) => ({ error: e.message }));
+  record(!apksClean.error && !!apksClean.serial, 'E7 clean 模式安装成功（.apks 路径）', safe(apksClean.error || ''));
+  if (apksClean.serial) {
+    record(apksClean.uninstalled === true, 'E7 clean 确实先卸载了旧版本', String(apksClean.uninstalled));
+    record(apksClean.verified === true, 'E7 clean 装后复核通过', String(apksClean.verified));
+  }
+
+  /* --- E8. 缓存外的 .apks：能装，但不冒充「本工具拆的」 --- */
+  // 把刚才另存的文件（在 %TEMP%\aab-save-xxx\，不在拆包缓存根目录下）当外部产物
+  const outSide = path.join(outDir, 'outside.apks');
+  fs.copyFileSync(conv.apksPath, outSide);
+  // 外层目录里没有 source.aab.txt 之外的元数据也一并去掉，模拟「从别处来的」
+  let outside;
+  try {
+    outside = await installApksFile(outSide, { serial: target, mode: 'overwrite' });
+  } catch (e) {
+    outside = { error: e.message };
+  }
+  record(!outside.error && !!outside.serial, 'E8 缓存外的 .apks 也能装', safe(outside.error || ''));
+  if (outside.serial) {
+    record(outside.fromApks === true, 'E8 标记为来自 .apks', String(outside.fromApks));
+  }
+
+  try {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
   }
 
   finish();

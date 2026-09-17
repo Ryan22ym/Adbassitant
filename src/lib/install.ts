@@ -10,27 +10,31 @@ import { call } from '@/lib/ipc';
 import { INSTALL_MODE_LABEL, type InstallMode, type InstallResult } from '@shared/types';
 
 /**
- * 拖放 / 按钮安装的统一入口（APK 与 AAB 共用）。
+ * 拖放 / 按钮安装的统一入口（APK / AAB / APKS 共用）。
  *
  * 不管是「拖到窗口」还是「安装安装包页点按钮」，都必须走这里，原因：
  * 1. 防重复 —— 同一时刻只允许一个安装任务（后面还有主进程互斥锁兜底）；
  * 2. 进度反馈 —— 安装中 / 成功 / 失败三种状态都写进 store，由同一个弹窗渲染；
  * 3. **目标设备必须落实** —— 多台设备在线时不允许猜（见 installApkFiles）。
  *
- * 两种包走的是**完全不同的后端通道**：
- *   apk → ipc `apk:install`（adb install）
- *   aab → ipc `aab:install`（bundletool 拆包 + install-multiple）
+ * 三种包走的是**不同的后端通道**：
+ *   apk  → ipc `apk:install`（adb install）
+ *   aab  → ipc `aab:install`（bundletool 拆包 + install-multiple）
+ *   apks → ipc `apks:install`（已有拆包产物，直接 install-multiple）
  * 分叉点在 runInstall()。对外接口与防重复逻辑完全一致。
  */
 
 export type { InstallFile };
 
 /** 可安装的扩展名（拖放与文件选择都用它） */
-export const INSTALL_EXTS = ['.apk', '.aab'] as const;
+export const INSTALL_EXTS = ['.apk', '.aab', '.apks'] as const;
 
 /** 按扩展名判断安装包类型；认不出来返回 undefined */
 export function kindOf(pathOrName: string): InstallKind | undefined {
   const lower = (pathOrName || '').toLowerCase();
+  // .apks 要排在 .apk 前面判：'x.apks'.endsWith('.apk') 是 false，
+  // 但顺序写反了早晚会在别的后缀上踩坑，索性按「长的优先」写死。
+  if (lower.endsWith('.apks')) return 'apks';
   if (lower.endsWith('.apk')) return 'apk';
   if (lower.endsWith('.aab')) return 'aab';
   return undefined;
@@ -103,7 +107,7 @@ export function pathOfDroppedFile(file: File): string {
   return (file as File & { path?: string }).path || '';
 }
 
-/** 从拖放事件的 File 列表里挑出 APK / AAB，并解析出磁盘路径 */
+/** 从拖放事件的 File 列表里挑出 APK / AAB / APKS，并解析出磁盘路径 */
 export function collectApks(files: File[]): { apks: InstallFile[]; skipped: number } {
   const apks: InstallFile[] = [];
   let skipped = 0;
@@ -230,7 +234,7 @@ export async function startInstallOn(serial: string): Promise<void> {
   await runInstall(pending.files, pending.mode, pending.grantAll, device);
 }
 
-/** 真正执行安装（目标设备已确定）。APK 与 AAB 在这里分流。 */
+/** 真正执行安装（目标设备已确定）。APK / AAB / APKS 在这里分流。 */
 async function runInstall(
   files: InstallFile[],
   mode: InstallMode,
@@ -278,10 +282,16 @@ async function runInstall(
                 ),
               { silent: true },
             )
-          : await call<InstallResult>(
-              () => window.adbApi.installApk(device.serial, file.path, mode, grantAll),
-              { silent: true },
-            );
+          : kind === 'apks'
+            ? await call<InstallResult>(
+                // 现成的拆包产物：不再拆包，直接 install-multiple
+                () => window.adbApi.installApks(device.serial, file.path, mode, grantAll),
+                { silent: true },
+              )
+            : await call<InstallResult>(
+                () => window.adbApi.installApk(device.serial, file.path, mode, grantAll),
+                { silent: true },
+              );
 
       // 中间文件安装成功不改变 phase，继续装下一个（弹窗仍显示「正在安装中」）
       if (i === total - 1) {
@@ -323,6 +333,13 @@ function successMessage(r?: InstallResult, kind: InstallKind = 'apk'): string {
     else if (r.buildMs) parts.push(`拆包 ${(r.buildMs / 1000).toFixed(1)}s`);
     if (r.installMs) parts.push(`安装 ${(r.installMs / 1000).toFixed(1)}s`);
     lines.push(`AAB 安装：bundletool 拆包 → install-multiple${parts.length ? `（${parts.join(' / ')}）` : ''}`);
+  } else if (r.fromApks) {
+    // 现成的拆包产物：这次没有拆包这一步，把「省掉了什么」讲清楚
+    lines.push(
+      `APKS 安装：直接 install-multiple（复用已有拆包产物，未再拆包${
+        r.installMs ? ` / 安装 ${(r.installMs / 1000).toFixed(1)}s` : ''
+      }）`,
+    );
   }
 
   if (r.packageName) {
@@ -330,8 +347,14 @@ function successMessage(r?: InstallResult, kind: InstallKind = 'apk'): string {
   }
   if (r.uninstalled) lines.push('清洁安装：已先卸载旧版本，应用数据已清除');
   if (r.verified === true) lines.push(`已复核：${r.serial} 上确实存在该包`);
-  else if (r.verified === undefined)
-    lines.push(`提示：读不出 ${kind === 'aab' ? 'AAB' : 'APK'} 包名，本次未做装后复核`);
+  else if (r.verified === undefined) {
+    const label = kind === 'aab' ? 'AAB' : kind === 'apks' ? 'APKS' : 'APK';
+    lines.push(
+      kind === 'apks'
+        ? '提示：这份 .apks 没有来源记录（不是本工具拆的），本次未做装后复核'
+        : `提示：读不出 ${label} 包名，本次未做装后复核`,
+    );
+  }
 
   return lines.join('\n') || 'Success';
 }

@@ -243,6 +243,8 @@ export interface InstallResult {
   verified?: boolean;
   /** 是否来自 AAB（走了 bundletool 拆包再用 install-multiple 安装） */
   fromBundle?: boolean;
+  /** 是否来自一份现成的 .apks（直接装已有产物，没有再拆包） */
+  fromApks?: boolean;
   /** AAB：拆包是否复用了本机缓存 */
   fromCache?: boolean;
   /** AAB：拆包耗时（毫秒） */
@@ -253,17 +255,19 @@ export interface InstallResult {
 
 /**
  * 可安装的文件类型。
- *  - apk：Android 安装包，`adb install` 直接装
- *  - aab：Android App Bundle，必须先由 bundletool 拆成一组 APK 再安装
+ *  - apk ：Android 安装包，`adb install` 直接装
+ *  - aab ：Android App Bundle，必须先由 bundletool 拆成一组 APK 再安装
+ *  - apks：拆包产物（bundletool build-apks 的输出），直接 install-multiple 装
  */
-export type InstallKind = 'apk' | 'aab';
+export type InstallKind = 'apk' | 'aab' | 'apks';
 
-/** APK / AAB 通用的安装方式选择项（AAB 的按钮更少，是 bundletool 的能力限制） */
-export const INSTALL_KINDS: InstallKind[] = ['apk', 'aab'];
+/** APK / AAB / APKS 通用的安装方式选择项（AAB 的按钮更少，是 bundletool 的能力限制） */
+export const INSTALL_KINDS: InstallKind[] = ['apk', 'aab', 'apks'];
 
 export const INSTALL_KIND_LABEL: Record<InstallKind, string> = {
   apk: 'APK 安装包',
   aab: 'AAB 应用束',
+  apks: 'APKS 拆包产物',
 };
 
 /**
@@ -627,6 +631,10 @@ export const IPC = {
   AAB_OPEN_TOOL_DIR: 'aab:openToolDir',
   AAB_CACHE_LIST: 'aab:cacheList',
   AAB_CACHE_CLEAR: 'aab:cacheClear',
+  /* 拆包与安装分离：AAB → .apks（可另存、可复用），.apks 直接安装 */
+  AAB_CONVERT: 'aab:convert',
+  AAB_SAVE_APKS: 'aab:saveApks',
+  APKS_INSTALL: 'apks:install',
   /* AAB 签名（解决三方登录 / 推送的 key hash 失配问题） */
   AAB_SIGNING_GET: 'aab:signingGet',
   AAB_SIGNING_SET: 'aab:signingSet',

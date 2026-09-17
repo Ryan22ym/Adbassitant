@@ -36,10 +36,16 @@ const MODE_HINT: Record<InstallMode, string> = {
   fresh: '不做覆盖：设备上已有该应用时直接报错，不会动到旧数据。',
 };
 
-/** AAB 的提示略有不同：它要先拆包，且签名与已装版本不一致时只能清洁安装 */
+/** AAB / APKS 的提示略有不同：它们走 bundletool，签名与已装版本不一致时只能清洁安装 */
 const AAB_MODE_HINT: Record<InstallMode, string> = {
   overwrite: '保留应用数据，直接覆盖升级。拆包时用的签名必须与设备上已装版本一致，否则会失败。',
   clean: '先卸载旧版本（数据一起清掉）再安装。签名换了、覆盖装不上时用这个。',
+  fresh: '不做覆盖：设备上已有该应用时直接报错，不会动到旧数据。',
+};
+
+const APKS_MODE_HINT: Record<InstallMode, string> = {
+  overwrite: '保留应用数据，直接覆盖升级。产物里的签名必须与设备上已装版本一致，否则会失败。',
+  clean: '先卸载旧版本（数据一起清掉）再安装。覆盖装不上时用这个。',
   fresh: '不做覆盖：设备上已有该应用时直接报错，不会动到旧数据。',
 };
 
@@ -690,6 +696,8 @@ function ApkPanel() {
   /** 安装方式放 store：整窗拖放与页面按钮/拖放区共用同一个值 */
   const mode = useApp((s) => s.installMode);
   const setMode = useApp((s) => s.setInstallMode);
+  /** 拆包签名也放 store（SigningPanel 里改），拆包/安装共用同一份 */
+  const installSigning = useApp((s) => s.installSigning);
   const [grantAll, setGrantAll] = useState(false);
   const [over, setOver] = useState(false);
   /** 上一次安装结果，弹窗自动关闭后仍留在页面上供回看 */
@@ -698,6 +706,13 @@ function ApkPanel() {
   /** 当前选中的包类型（按扩展名），决定文案、安装方式和是否需要 AAB 环境 */
   const kind: InstallKind = kindOf(apkPath) ?? 'apk';
   const isAab = kind === 'aab';
+  const isApks = kind === 'apks';
+  /** AAB 与 APKS 都要 bundletool（拆包 / install-apks），环境要求一样 */
+  const needsBundleTool = isAab || isApks;
+
+  /** 「另存 .apks」进行中 —— 与安装互斥，避免同时跑两个 bundletool */
+  const [converting, setConverting] = useState(false);
+  const [convertMsg, setConvertMsg] = useState('');
 
   /**
    * AAB 环境（Java 11+ 与 bundletool）。
@@ -717,9 +732,9 @@ function ApkPanel() {
   };
 
   useEffect(() => {
-    if (isAab) void refreshAabEnv();
+    if (needsBundleTool) void refreshAabEnv();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAab]);
+  }, [needsBundleTool]);
 
   useEffect(() => {
     if (!install || install.phase === 'installing') return;
@@ -737,15 +752,17 @@ function ApkPanel() {
     const files = await call<string[]>(
       () =>
         window.adbApi.pickFiles(false, [
-          { name: 'Android 安装包', extensions: ['apk', 'aab'] },
+          { name: 'Android 安装包', extensions: ['apk', 'aab', 'apks'] },
           { name: 'APK 安装包', extensions: ['apk'] },
           { name: 'AAB 应用束', extensions: ['aab'] },
+          { name: 'APKS 拆包产物', extensions: ['apks'] },
         ]),
       { silent: true },
     );
     if (files?.[0]) {
       setApkPath(files[0]);
       setApkSize(undefined);
+      setConvertMsg('');
     }
   };
 
@@ -757,8 +774,8 @@ function ApkPanel() {
       );
     }
     if (!apkPath) return toast('warn', '请先选择安装包文件');
-    if (isAab && !aabReady) {
-      return toast('warn', 'AAB 安装环境未就绪', aabReason);
+    if (needsBundleTool && !aabReady) {
+      return toast('warn', isApks ? 'APKS 安装环境未就绪' : 'AAB 安装环境未就绪', aabReason);
     }
     void installApkFiles(
       [{ path: apkPath, name: fileName(apkPath), size: apkSize, kind }],
@@ -767,7 +784,50 @@ function ApkPanel() {
   };
 
   /**
-   * 拖入的 APK 直接开装（与「拖动安装」语义一致），
+   * 仅拆包：按当前设备的配置把 AAB 拆成 .apks 并另存。
+   *
+   * 这是「拆包与安装分开」的那一半：产物落成磁盘上的一个文件后，
+   * 之后想装几次、装到哪台（同型号）设备，都不用再跑一遍拆包。
+   * 拆包不改设备状态，所以这里不占用安装流程（但两者不能同时跑）。
+   */
+  const convertAndSave = async () => {
+    if (!apkPath || busy || converting) return;
+    if (!current) return toast('warn', '请先选择设备', '拆包要按目标设备的配置挑 split');
+    if (!aabReady) return toast('warn', 'AAB 拆包环境未就绪', aabReason);
+
+    setConverting(true);
+    setConvertMsg('正在按设备配置拆包…');
+    try {
+      const r = await call<{ apksPath: string; fromCache: boolean } | null>(
+        () =>
+          window.adbApi.saveApks(
+            current.serial,
+            apkPath,
+            undefined,
+            installSigning as unknown as Record<string, unknown>,
+          ),
+        { silent: true },
+      );
+      // null = 用户在保存框里点了取消，不是错误
+      if (!r) {
+        setConvertMsg('');
+      } else {
+        setConvertMsg(
+          `${r.fromCache ? '复用了已有拆包产物' : '拆包完成'}，已导出到：\n${r.apksPath}`,
+        );
+        toast('success', '拆包产物已导出', r.apksPath);
+      }
+    } catch (e) {
+      const msg = (e as Error).message || '拆包失败';
+      setConvertMsg(`拆包失败：${msg}`);
+      toast('error', '拆包失败', msg);
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  /**
+   * 拖入的安装包直接开装（与「拖动安装」语义一致），
    * 页面上的「安装方式 / 自动授权」开关同样作用于拖放。
    */
   const handleDroppedFiles = async (files: File[]) => {
@@ -785,7 +845,7 @@ function ApkPanel() {
     if (apks.length === 0) {
       toast(
         'warn',
-        '请拖入 .apk 或 .aab 文件',
+        '请拖入 .apk、.aab 或 .apks 文件',
         skipped > 0 ? `已忽略 ${skipped} 个非安装包文件` : undefined,
       );
       return;
@@ -801,12 +861,12 @@ function ApkPanel() {
   return (
     <Card
       title="安装安装包"
-      subtitle="支持 APK 与 AAB；选择或直接拖入，安装过程会显示进度"
+      subtitle="支持 APK、AAB 与 APKS；选择或直接拖入，安装过程会显示进度"
     >
       <div className="col">
-        {isAab && <AabEnvNotice />}
+        {needsBundleTool && <AabEnvNotice />}
 
-        <Field label="安装包文件" hint="APK / AAB，拖进来即开始安装">
+        <Field label="安装包文件" hint="APK / AAB / APKS，拖进来即开始安装">
           <div
             data-dropzone="apk"
             className={`apk-drop ${over ? 'over' : ''} ${busy ? 'is-busy' : ''}`}
@@ -830,10 +890,12 @@ function ApkPanel() {
               {installing
                 ? isAab
                   ? '正在安装 AAB…'
-                  : '正在安装…'
+                  : isApks
+                    ? '正在安装 APKS…'
+                    : '正在安装…'
                 : pendingInstall
                   ? '请先选择安装到哪台设备'
-                  : '把 APK / AAB 拖到这里，或点击选择文件'}
+                  : '把 APK / AAB / APKS 拖到这里，或点击选择文件'}
             </p>
             <p className="apk-drop-hint">
               {busy ? '完成当前任务后才能开始下一个' : '松手即开始安装，并弹出进度'}
@@ -841,8 +903,8 @@ function ApkPanel() {
 
             {apkPath && (
               <div className="apk-drop-file">
-                <span className={`install-kind-chip ${isAab ? 'aab' : 'apk'}`}>
-                  {isAab ? 'AAB' : 'APK'}
+                <span className={`install-kind-chip ${isAab ? 'aab' : isApks ? 'apks' : 'apk'}`}>
+                  {isAab ? 'AAB' : isApks ? 'APKS' : 'APK'}
                 </span>
                 <span className="apk-drop-file-name" title={apkPath}>
                   {fileName(apkPath)}
@@ -859,14 +921,31 @@ function ApkPanel() {
           <Button variant="default" size="sm" onClick={pick} disabled={busy}>
             浏览…
           </Button>
+          {/*
+            仅拆包：AAB → .apks，产物另存到磁盘。
+            这是「拆包与安装分开」的入口 —— 同一份包要反复装时才值得先导出。
+          */}
+          {isAab && (
+            <Button
+              variant="default"
+              size="sm"
+              data-convert-apks="1"
+              onClick={() => void convertAndSave()}
+              loading={converting}
+              disabled={busy || converting || !current || !aabReady}
+            >
+              仅拆包并另存为 .apks
+            </Button>
+          )}
           {apkPath && (
             <Button
               variant="ghost"
               size="sm"
-              disabled={busy}
+              disabled={busy || converting}
               onClick={() => {
                 setApkPath('');
                 setApkSize(undefined);
+                setConvertMsg('');
               }}
             >
               清除
@@ -874,7 +953,13 @@ function ApkPanel() {
           )}
         </div>
 
-        <Field label="安装方式" hint={isAab ? AAB_MODE_HINT[mode] : MODE_HINT[mode]}>
+        {convertMsg && (
+          <pre className="output-block" data-convert-result="1" style={{ maxHeight: 120 }}>
+            {convertMsg}
+          </pre>
+        )}
+
+        <Field label="安装方式" hint={isAab ? AAB_MODE_HINT[mode] : isApks ? APKS_MODE_HINT[mode] : MODE_HINT[mode]}>
           {/* data-install-mode 供验收脚本定位（页面里可能还有别的 Segmented） */}
           <div data-install-mode={mode}>
             <Segmented<InstallMode>
@@ -905,7 +990,7 @@ function ApkPanel() {
           </Notice>
         )}
 
-        {isAab && <SigningPanel busy={busy} />}
+        {isAab && <SigningPanel busy={busy || converting} />}
 
         {isAab && mode === 'overwrite' && (
           <Notice tone="accent">
@@ -915,16 +1000,25 @@ function ApkPanel() {
           </Notice>
         )}
 
+        {isApks && (
+          <Notice tone="accent">
+            这是<b>已经拆好的产物</b>（bundletool build-apks 的输出），安装时不会再拆包，
+            所以装得比 AAB 快。但它<b>是按特定设备（ABI / 屏幕 / SDK）挑好 split 的</b> ——
+            本工具拆出来的会直接匹配，从别处拿来的若无对应来源记录，装后无法按包名复核。
+          </Notice>
+        )}
+
         <div className="row">
           <Button
             variant="primary"
             onClick={installSelected}
             loading={installing}
-            disabled={!current || !apkPath || busy || (isAab && !aabReady)}
+            disabled={!current || !apkPath || busy || converting || (needsBundleTool && !aabReady)}
           >
             开始安装
           </Button>
           {installing && <span className="text-dim">正在安装中，请勿重复操作…</span>}
+          {converting && <span className="text-dim">正在拆包，请勿重复操作…</span>}
           {pendingInstall && <span className="text-dim">请先在上方弹窗里选择装到哪台设备…</span>}
         </div>
 
@@ -950,6 +1044,11 @@ function ApkPanel() {
         )}
 
         <Notice tone="accent">
+          <b>拆包与安装是两件事</b>：AAB 要按目标设备的配置先拆成 .apks 才能装。
+          同一份 AAB 要反复装（换机器、反复重装）时，可以先点
+          <b>「仅拆包并另存为 .apks」</b>导出一次产物，之后直接拖这个 .apks 进来装，
+          省掉每次几十秒的拆包。产物留在本机的缓存里，同一个 AAB + 同一颗设备第二次起自动复用。
+          <br />
           安装完成后会按包名在设备上复核一遍 —— <b>只有设备上确实查到了这个包才会显示成功</b>，
           避免「界面说成功了、手机上却没有」。但只要有多台设备同时在线，
           <b>开装前一定会先问你装到哪台</b>：装到别的设备上时，装后复核同样会通过
@@ -1020,7 +1119,8 @@ function AabEnvNotice() {
       <div data-aab-env="ready">
         <Notice tone="success">
           <b>AAB 安装环境已就绪</b>：{env.javaDesc}，bundletool {env.bundletoolVersion}。
-          AAB 会先按目标设备的配置拆包，再以 install-multiple 安装（同一台设备第二次起复用缓存）。
+          AAB 会先按目标设备的配置拆包，再以 install-multiple 安装（同一台设备第二次起复用缓存）；
+          想只拆包不安装，可用下方的「仅拆包并另存为 .apks」。
         </Notice>
       </div>
     );

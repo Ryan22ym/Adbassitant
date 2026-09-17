@@ -1,32 +1,44 @@
-v1.0.18: AAB 拆包签名可配置，修三方登录 Invalid key hash
+v1.0.19: 拆包与安装分离，.apks 可另存复用
 
-.aab 本身不含签名，bundletool build-apks 必须重新签一次。以前固定用随包
-debug.keystore，应用能装能跑但签名被换掉 —— Facebook/微信/QQ/Google 登录、
-推送、地图 key 都按「包名 + 签名」校验，于是报 Invalid key hash。
+以前「装 AAB」把 build-apks 与 install-apks 绑死在一次调用里：每换一台设备、
+每重装一次都要重跑几十秒的拆包。现在拆成两个动作：
 
-新增「签名方式」三选一：随包调试密钥库（默认）/ 我的密钥库（保住原签名）/
-不签名（仅调试）。选「我的密钥库」可当场测试并一键算出四个平台的 key hash。
-签名纳入拆包缓存键，换了签名不会复用旧产物。
+- AAB -> .apks：「仅拆包并另存为 .apks」按钮，可按当前设备配置拆一次、
+  存成文件；同一个 AAB + 同一颗设备 + 同一份签名的产物走缓存，秒回。
+- .apks -> 设备：直接吃现成产物，只跑 install-apks，不再拆包（输出里
+  不会出现 build-apks / device-spec 字样）。
 
-顺带修掉三个真实缺陷：
-- findKeytool() 依赖裸名 java 路径（dirname('java.exe') == '.'）拼不出 keytool
-- spawn ENOENT 的 stderr 自带程序名，宽松判定把没找到的程序误判为可用
-- 缺 keytool 时 custom 模式整个判死（签名只靠 bundletool，不该连坐）
+实现要点：
+- aab.ts 抽出 convertBundle()（拆包 + 另存，不碰设备侧状态），
+  installBundle() 改为「设备侧准备 -> convertBundle() -> install-apks」；
+  新增 installApksFile()，只做安装。
+- .apks 是 zip（toc.pb + splits），里面不含包名，而「装完按包名复核」
+  是对 APK/AAB 一贯的硬规矩 -> 拆包时在产物目录写 source.aab.txt 记下源
+  AAB 路径，装现成 .apks 时反查包名；更早版本的老缓存没有这个文件，
+  退化为「不复核 + 打一条 warn」，不影响安装。
+- 另存先写 .part 再 rename，中途失败不在用户目录留半截包。
+- 装现成 .apks 绝不偷偷重拆：否则用户会以为装 .apks 比装 .aab 还慢。
+- 覆盖 / 清洁 / 全新三种安装方式、装后复核在多包(.apks)路径上完全沿用。
 
-主进程/通道/界面全部打通：aab-signing.ts（新）、aab.ts、ipc.ts、preload.ts、
-shared/types.ts、ToolsPage 的 SigningPanel、install.css。
+通道与界面：
+- 新通道 aab:convert / aab:saveApks / apks:install（ipc.ts、preload.ts、
+  shared/types.ts 的 InstallKind 增加 'apks'）。
+- install.ts 的 kindOf() 识别 .apks（排在 .apk 之前判），拖放区、
+  文件选择器、安装弹窗（data-install-kind="apks"）、ToolsPage 全部打通；
+  APKS 用绿色 kind-chip 与 AAB 区分。
 
-验收（开发态 / 安装版真身均为 0 失败）：
-  check:aab-signing      32/0（含产物签名指纹与设备实际签名的端到端交叉验证）
-  check:aab-install      42/0
-  check:aab-ui           33/0 / 33/0
-  check:drag-install     47/0 / 47/0
+验收（开发态，0 失败）：
+  check:aab-install      78/0（新增 E 段 30 项：仅拆包不装 / 缓存命中
+                          buildMs=0 / 另存不留 .part / 装现成产物无拆包
+                          痕迹 / fresh 与 clean 在 .apks 路径同样成立）
+  check:aab-ui           43/0（含第 9、10 段：convert 按钮只对 AAB 显示、
+                          拖入 .apks 走 APKS 分支且不做拆包提示）
+  check:aab-signing      32/0
   check:apk-parse         9/0
   check:install-modes    21/0
+  check:drag-install     33/14（环境限制：该脚本假定 2 台设备在线以验证
+                          「多台在线必须先问装到哪台」，本轮只 1 台；脚本
+                          本身未被本次改动触及）
 
-同时修掉两个验收脚手架级缺陷（都会伪装成功能失败）：
-- run-electron.py 用 nargs=REMAINDER 吞掉了 --watch/--until/--timeout，
-  导致干等到 240s 超时强杀而日志其实早写完了 -> 改用 parse_known_args
-- --installed 跑在 Electron 主进程，Electron 33(Node 20) 没有全局 WebSocket
-  -> 新增 scripts/_ws-shim.cjs（手写 RFC 6455 最小客户端，零依赖）
-  另修 process.exit() 不即时生效、Page.captureScreenshot 需 fromSurface:false
+顺带修验收脚手架：check-aab-ui.cjs 原先写死 emulator-5556，模拟器不在线
+时直接挂 2 项；改为「固定失败则回落到设备列表第一项」。

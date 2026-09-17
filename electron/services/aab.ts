@@ -1,5 +1,5 @@
 /**
- * AAB（Android App Bundle）安装。
+ * AAB（Android App Bundle）安装 与 拆包。
  *
  * 为什么 AAB 不能像 APK 那样直接装
  * ---------------------------------------------------------------
@@ -9,17 +9,30 @@
  *     bundletool build-apks  →  一套按目标设备拆好的 APK（base.apk + *.apk）
  *     bundletool install-apks →  用 adb install-multiple 把它们一起装上去
  *
- * 为什么走 `install-apks` 而不是自己 `adb install-multiple`
+ * 「拆包」与「安装」是两件事
  * ---------------------------------------------------------------
- * install-apks 内部会自己算设备 spec、挑出该装的 split、按正确顺序调用
- * install-multiple，并且用的是同目录下的 adb（bundletool 自己是 Java，
- * 不必让我们去拼参数）。这也正是 Google 文档给出的调试流程。
+ * 上面两步的输入完全不同：build-apks 吃「AAB + 一台设备的规格」，产出
+ * .apks 文件；install-apks 吃「.apks + 一台在线的设备」。把它们绑在一起
+ * 意味着每换一台设备/每重装一次都要重跑几十秒的拆包。
+ * 于是拆成两个可独立调用的函数：
+ *     convertBundle()  →  AAB → .apks（可另存，可复用）
+ *     installBundle()  →  走 convertBundle() 拿产物，再 install-apks
+ * installBundle 只是 convertBundle 的第一个消费者。
+ *
+ * 为什么装 .apks 仍走 `install-apks` 而不是自己解 zip
+ * ---------------------------------------------------------------
+ * 自己解 .apks 再 `adb install-multiple` 要求我们复刻 bundletool 的
+ * 「挑哪些 split / 什么顺序 / 何时用 install-multi-package」逻辑，
+ * 且 .apks 里的 toc.pb 是 protobuf，解析成本高、还容易跟不上版本。
+ * 只装「本工具自己产的 .apks」时没有任何理由放弃 install-apks；
+ * 这条约束由缓存目录的命名（含文件指纹 + 设备 key）天然保证。
  *
  * 缓存
  * ---------------------------------------------------------------
  * build-apks 是纯本机计算，但一个 200MB 的 bundle 要跑十几秒到几十秒，
  * 而「装到另一台设备」往往要连装好几次。所以在临时目录里按
- * 「文件内容指纹 + 目标设备」缓存 apks 产物，第二次起直接复用。
+ * 「文件内容指纹 + 目标设备 + 签名标签」缓存 apks 产物，第二次起直接复用。
+ * 签名必须进缓存键：换了签名却吃旧产物等于白改（装上去的还是旧 key hash 的包）。
  *
  * 工具链
  * ---------------------------------------------------------------
@@ -31,6 +44,7 @@ import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import {
   createWriteStream,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -43,7 +57,7 @@ import {
   readSync,
   closeSync,
 } from 'fs';
-import { basename, join } from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { adbPath, binDir, log, runAdb } from './adb';
 import { readAabInfo } from './apk';
@@ -476,6 +490,231 @@ function cachedApksDir(file: string, key: string, signTag = 'nosign'): string {
   return join(cacheRoot(), `${fingerprint(file)}-${key}-${signTag}`);
 }
 
+/**
+ * 产物目录里记着「我是从哪个 .aab 拆出来的」的文件名。
+ *
+ * .apks 本身不含包名（toc.pb 是 protobuf，不值得为它引入解析器），
+ * 而「装完按包名复核」是我们对 APK/AAB 一贯的硬规矩 —— 所以拆包时
+ * 顺手把源 AAB 的路径写在这里，装现成 .apks 时就有据可查。
+ */
+const APKS_SOURCE_FILE = 'source.aab.txt';
+
+/* ------------------------------------------------------------------ */
+/* 拆包（AAB → .apks，不碰设备侧状态）                                 */
+/* ------------------------------------------------------------------ */
+
+export interface BundleConvertOptions {
+  /** 目标设备（必填 —— 拆包要按它的屏幕/ABI/SDK 挑 split） */
+  serial: string;
+  /** 输出路径（默认写进缓存目录的 app.apks；另存给用户时传他的路径） */
+  outPath?: string;
+  /** 输出已存在时是否覆盖 */
+  overwrite?: boolean;
+  /** 是否允许使用上一次的拆包产物（默认允许） */
+  useCache?: boolean;
+  /** 本次拆包使用的签名配置（不传则用用户设置里那份） */
+  signing?: Partial<AabSigningConfig>;
+  /** 输出一行日志（往界面推） */
+  onLine?: (line: string) => void;
+}
+
+export interface BundleConvertResult {
+  /** 产物 .apks 的绝对路径 */
+  apksPath: string;
+  /** 本次工作的缓存目录（含 device-spec.json） */
+  cacheDir: string;
+  /** 读出来的包名（读不出为 undefined） */
+  packageName?: string;
+  versionName?: string;
+  versionCode?: number;
+  /** 源 AAB 的字节数 */
+  sizeBytes: number;
+  /** 是否复用了上一次的产物 */
+  fromCache: boolean;
+  /** 是否真的重新拆了包（复用缓存时为 false） */
+  rebuilt: boolean;
+  /** 拆包耗时（毫秒；复用缓存时为 0） */
+  buildMs: number;
+  /** 签名描述（给界面/日志看） */
+  signingDesc: string;
+  /** 产物是否直接落在用户指定的 outPath 上 */
+  savedToOutPath: boolean;
+}
+
+/**
+ * 把 AAB 拆成 .apks（针对指定设备）。
+ *
+ * 只做「本机计算 + 取一次 device spec」，不改设备上的任何状态：
+ * 不卸载、不安装、不判断覆盖/清洁/全新。装与不装由调用方决定。
+ *
+ * 缓存命中时的产物落在缓存目录里（source）；调用方要另存时我们复制一份
+ * 到 outPath。反向（产物本就在 outPath）时直接返回，不重复复制。
+ */
+export async function convertBundle(
+  aabPath: string,
+  options: BundleConvertOptions,
+): Promise<BundleConvertResult> {
+  const serial = options.serial;
+  if (!serial) throw new Error('拆包必须明确指定目标设备（要按它的配置挑 split）');
+
+  const say = (line: string) => {
+    options.onLine?.(line);
+  };
+
+  if (!existsSync(aabPath)) throw new Error(`文件不存在：${aabPath}`);
+  const lower = basename(aabPath).toLowerCase();
+  const ext = lower.slice(lower.lastIndexOf('.'));
+  if (ext !== '.aab') throw new Error('所选文件不是 .aab 文件');
+
+  /* ---- 0. 先认文件：不是真正的 app bundle 就别浪费 bundletool 的时间 ---- */
+  const info = readAabInfo(aabPath);
+  const pkg = info.packageName;
+  const size = statSync(aabPath).size;
+
+  /* ---- 1. 运行时 ---- */
+  const rt = await resolveAabRuntime();
+  if (!rt.ready) throw new Error(rt.reason || 'AAB 拆包环境不完整（需要 Java 11+ 与 bundletool）');
+  say(`Java：${describeJava(rt.java)}`);
+  say(`bundletool：${basename(rt.jar!)}`);
+
+  /* ---- 2. 签名 ---- */
+  const signing = await signingArgs(options.signing);
+  if (!signing.ok) {
+    throw new Error(
+      `签名配置不可用：${signing.reason || signing.desc}。` +
+        '可在安装页的「签名方式」里改用随包调试密钥库，或指定自己的密钥库。',
+    );
+  }
+  say(`签名：${signing.desc}`);
+
+  /* ---- 3. 缓存目录 ---- */
+  const key = await deviceKey(serial);
+  const cacheDir = cachedApksDir(aabPath, key, signingKeyTag(signing.args));
+  const cachedFile = join(cacheDir, 'app.apks');
+  const specFile = join(cacheDir, 'device-spec.json');
+  const cacheHit = options.useCache !== false && existsSync(cachedFile);
+
+  let buildMs = 0;
+  if (cacheHit) {
+    say(`复用上次的拆包产物：${cacheDir}`);
+    log('info', 'AAB', '复用上次的拆包产物（同一个 AAB、同一颗设备、同一份签名）');
+  } else {
+    /* ---- 4. build-apks ---- */
+    try {
+      rmSync(cacheDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+    mkdirSync(cacheDir, { recursive: true });
+
+    say(`正在为这台设备拆包（${(size / 1024 / 1024).toFixed(1)} MB，首次较慢）…`);
+    log('info', 'AAB', `bundletool build-apks（device-spec=${serial}｜${signing.desc}）`);
+
+    // 把本次签名写进产物目录，方便下次诊断「这份缓存是哪个签名拆的」
+    try {
+      writeFileSync(join(cacheDir, 'signing.txt'), signing.desc, 'utf8');
+    } catch {
+      /* ignore */
+    }
+
+    // 记下源 AAB 的路径：装现成的 .apks 时靠它反查包名做装后复核
+    try {
+      writeFileSync(join(cacheDir, APKS_SOURCE_FILE), resolve(aabPath), 'utf8');
+    } catch {
+      /* ignore */
+    }
+
+    const started = Date.now();
+    // 先取设备规格（缓存命中则零成本），build 阶段就完全不用碰 adb 了
+    await ensureDeviceSpec(serial, rt.java!.path, rt.jar!, specFile, (l) => say(l));
+
+    const build = await runJava(
+      rt.java!.path,
+      [
+        '-jar',
+        rt.jar!,
+        'build-apks',
+        `--bundle=${aabPath}`,
+        `--output=${cachedFile}`,
+        `--device-spec=${specFile}`,
+        // 必须显式带上密钥库，否则产出的是未签名 APK，安装阶段直接被拒
+        ...signing.args,
+        '--overwrite',
+      ],
+      (l) => say(l),
+      // 200MB+ 的 bundle 在慢机器上可能跑好几分钟，给足余量
+      10 * 60 * 1000,
+    );
+    buildMs = Date.now() - started;
+
+    if (build.code !== 0 || !existsSync(cachedFile)) {
+      const reason = pickErrorLine(build.stderr, build.stdout);
+      // 产物目录清掉，避免一个半成品缓存一直挂着（device-spec 也一起清，
+      // 免得设备换了配置还一直用旧的规格文件）
+      try {
+        rmSync(cacheDir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        `拆包失败（bundletool build-apks）：${reason || '未知原因'}` +
+          (/unsigned|not signed|签名/i.test(reason)
+            ? '。这个 AAB 没有签名或签名方式不受支持，请用 bundletool 直接产出的 .aab，' +
+              '或改用已经签好名的 APK。'
+            : ''),
+      );
+    }
+    say(`拆包完成（${((Date.now() - started) / 1000).toFixed(1)}s）`);
+    log('success', 'AAB', `拆包完成，产物 ${cachedFile}`);
+  }
+
+  /* ---- 5. 另存（只有用户给了 outPath 且跟缓存不是同一个文件时才复制） ---- */
+  const outPath = options.outPath;
+  let apksPath = cachedFile;
+  let savedToOutPath = false;
+
+  if (outPath) {
+    if (resolve(outPath) !== resolve(cachedFile)) {
+      if (existsSync(outPath) && options.overwrite === false) {
+        throw new Error(`目标文件已存在：${outPath}`);
+      }
+      mkdirSync(dirname(outPath), { recursive: true });
+      // 先写 .part 再改名：中途失败不会在用户目录里留一个看起来正常的半截包
+      const part = `${outPath}.part`;
+      try {
+        rmSync(part, { force: true });
+      } catch {
+        /* ignore */
+      }
+      copyFileSync(cachedFile, part);
+      try {
+        rmSync(outPath, { force: true });
+      } catch {
+        /* ignore */
+      }
+      renameSync(part, outPath);
+      say(`已保存到：${outPath}`);
+      log('success', 'AAB', `已另存拆包产物：${outPath}`);
+    }
+    apksPath = outPath;
+    savedToOutPath = true;
+  }
+
+  return {
+    apksPath,
+    cacheDir,
+    packageName: pkg,
+    versionName: info.versionName,
+    versionCode: info.versionCode,
+    sizeBytes: size,
+    fromCache: cacheHit,
+    rebuilt: !cacheHit,
+    buildMs,
+    signingDesc: signing.desc,
+    savedToOutPath,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* 安装                                                                */
 /* ------------------------------------------------------------------ */
@@ -502,7 +741,9 @@ export interface BundleInstallOptions {
 
 export interface BundleInstallResult extends InstallResult {
   /** AAB 里读出的信息 */
-  fromBundle: true;
+  fromBundle: boolean;
+  /** 是否来自一份现成的 .apks（没有再拆包） */
+  fromApks?: boolean;
   /** build-apks 是否复用了缓存 */
   fromCache?: boolean;
   /** build-apks 耗时（毫秒） */
@@ -519,6 +760,9 @@ export interface BundleInstallResult extends InstallResult {
  * 与 installApk 保持同样的「两条硬规矩」：
  *  1. 目标设备由参数明确指定（调用方保证不猜）；
  *  2. 装完按包名 `pm path` 复核 —— bundletool 说 Success 不等于设备上真有这个包。
+ *
+ * 拆包那一段全部交给 convertBundle()，这里只负责设备侧的状态变更
+ * （clean 的卸载、fresh 的拦截、install-apks、装后复核）。
  */
 export async function installBundle(
   aabPath: string,
@@ -537,53 +781,22 @@ export async function installBundle(
   const ext = basename(aabPath).toLowerCase().slice(basename(aabPath).lastIndexOf('.'));
   if (ext !== '.aab') throw new Error('所选文件不是 .aab 文件');
 
-  /* ---- 0. 先认文件：不是真正的 app bundle 就别浪费 bundletool 的时间 ---- */
-  const info = readAabInfo(aabPath);
-  const pkg = info.packageName;
   const size = statSync(aabPath).size;
+  const pkg = readAabInfo(aabPath).packageName;
 
   log(
     'info',
     'AAB',
-    `目标设备 ${serial}｜${INSTALL_MODE_LABEL[mode]}：${pkg ?? basename(aabPath)}` +
-      `${info.versionName ? ` v${info.versionName}` : ''}（${(size / 1024 / 1024).toFixed(1)} MB）`,
+    `目标设备 ${serial}｜${INSTALL_MODE_LABEL[mode]}：${pkg ?? basename(aabPath)}（${(size / 1024 / 1024).toFixed(1)} MB）`,
   );
-
-  /* ---- 1. 运行时 ---- */
-  const rt = await resolveAabRuntime();
-  if (!rt.ready) throw new Error(rt.reason || 'AAB 安装环境不完整（需要 Java 11+ 与 bundletool）');
-  say(`Java：${describeJava(rt.java)}`);
-  say(`bundletool：${basename(rt.jar!)}`);
-
-  /* ---- 2. 签名 ---- */
-  /*
-   * 签名必须在拆包之前定下来，并且参与缓存目录的命名 ——
-   * 换了签名却复用旧产物，等于白改（装上去的还是旧 key hash 的包，
-   * 而用户会以为「我已经换签名了怎么还不行」）。
-   */
-  const signing = await signingArgs(options.signing);
-  if (!signing.ok) {
-    throw new Error(
-      `签名配置不可用：${signing.reason || signing.desc}。` +
-        '可在安装页的「签名方式」里改用随包调试密钥库，或指定自己的密钥库。',
-    );
-  }
-  say(`签名：${signing.desc}`);
-
-  /* ---- 3. 设备侧准备 ---- */
-  const key = await deviceKey(serial);
-  const apksDir = cachedApksDir(aabPath, key, signingKeyTag(signing.args));
-  const apksFile = join(apksDir, 'app.apks');
-  const specFile = join(apksDir, 'device-spec.json');
-  const cacheHit = options.useCache !== false && existsSync(apksFile);
 
   /*
    * 设备侧的准备工作跟「有没有拆包缓存」无关，必须每次都做 ——
    * 否则「第二次装到同一台设备」会命中缓存，跳过 fresh 的拦截与 clean 的卸载，
-   * 变成一个行为不一致的覆盖安装。
+   * 变成一个行为不一致的覆盖安装。所以先做设备侧判断，再拆包。
    */
 
-  /* 清洁安装：先按包名卸掉旧版本（每次都要，不能因为命中缓存就跳过） */
+  /* 清洁安装：先按包名卸掉旧版本 */
   if (mode === 'clean') {
     if (!pkg) {
       throw new Error(
@@ -607,7 +820,7 @@ export async function installBundle(
     }
   }
 
-  /* 全新安装：设备上已经有了就直接中止（每次都要，同上） */
+  /* 全新安装：设备上已经有了就直接中止 */
   if (mode === 'fresh' && pkg && (await deviceHasPackage(serial, pkg))) {
     throw new Error(
       `设备 ${serial} 上已存在 ${pkg}，已按「全新安装」的约定中止，没有动到旧版本。` +
@@ -615,74 +828,22 @@ export async function installBundle(
     );
   }
 
-  let buildMs = 0;
-  if (cacheHit) {
-    say(`复用上次的拆包产物：${apksDir}`);
-    log('info', 'AAB', '复用上次的拆包产物（同一个 AAB、同一颗设备）');
-  } else {
-    /* ---- 4. build-apks ---- */
-    try {
-      rmSync(apksDir, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-    mkdirSync(apksDir, { recursive: true });
+  /* ---- 拆包（内部处理缓存；每一步都往界面推日志） ---- */
+  const conv = await convertBundle(aabPath, {
+    serial,
+    useCache: options.useCache,
+    signing: options.signing,
+    onLine: options.onLine,
+  });
 
-    say(`正在为这台设备拆包（${(size / 1024 / 1024).toFixed(1)} MB，首次较慢）…`);
-    log('info', 'AAB', `bundletool build-apks（device-spec=${serial}｜${signing.desc}）`);
+  // 拆包失败时 convertBundle 已把半成品目录清掉，这里只接住结果
+  const apksFile = conv.apksPath;
+  const apksDir = conv.cacheDir;
 
-    // 把本次签名写进产物目录，方便下次诊断「这份缓存是哪个签名拆的」
-    try {
-      writeFileSync(join(apksDir, 'signing.txt'), signing.desc, 'utf8');
-    } catch {
-      /* ignore */
-    }
+  const rt = await resolveAabRuntime();
+  if (!rt.ready) throw new Error(rt.reason || 'AAB 安装环境不完整（需要 Java 11+ 与 bundletool）');
 
-    const started = Date.now();
-    // 先取设备规格（缓存命中则零成本），build 阶段就完全不用碰 adb 了
-    await ensureDeviceSpec(serial, rt.java!.path, rt.jar!, specFile, (l) => say(l));
-
-    const build = await runJava(
-      rt.java!.path,
-      [
-        '-jar',
-        rt.jar!,
-        'build-apks',
-        `--bundle=${aabPath}`,
-        `--output=${apksFile}`,
-        `--device-spec=${specFile}`,
-        // 必须显式带上密钥库，否则产出的是未签名 APK，安装阶段直接被拒
-        ...signing.args,
-        '--overwrite',
-      ],
-      (l) => say(l),
-      // 200MB+ 的 bundle 在慢机器上可能跑好几分钟，给足余量
-      10 * 60 * 1000,
-    );
-    buildMs = Date.now() - started;
-
-    if (build.code !== 0 || !existsSync(apksFile)) {
-      const reason = pickErrorLine(build.stderr, build.stdout);
-      // 产物目录清掉，避免一个半成品缓存一直挂着（device-spec 也一起清，
-      // 免得设备换了配置还一直用旧的规格文件）
-      try {
-        rmSync(apksDir, { recursive: true, force: true });
-      } catch {
-        /* ignore */
-      }
-      throw new Error(
-        `拆包失败（bundletool build-apks）：${reason || '未知原因'}` +
-          (/unsigned|not signed|签名/i.test(reason)
-            ? '。这个 AAB 没有签名或签名方式不受支持，请用 bundletool 直接产出的 .aab，' +
-              '或改用已经签好名的 APK。'
-            : ''),
-      );
-    }
-    say(`拆包完成（${((Date.now() - started) / 1000).toFixed(1)}s）`);
-    log('success', 'AAB', `拆包完成，产物 ${apksFile}`);
-  }
-
-  /* ---- 4. install-apks ---- */
+  /* ---- install-apks ---- */
   // install-apks 支持 --adb，显式指到随包的 adb，避免它去 PATH 上找错一个
   const args = [
     '-jar',
@@ -712,7 +873,7 @@ export async function installBundle(
     );
   }
 
-  /* ---- 6. 装后复核（与 APK 同一条硬规矩） ---- */
+  /* ---- 装后复核（与 APK 同一条硬规矩） ---- */
   let verified: boolean | undefined;
   if (pkg) {
     for (let i = 0; i < 5; i += 1) {
@@ -734,7 +895,7 @@ export async function installBundle(
      * 装了但用调试签名拆的包 —— 应用能跑，但凡是「按签名校验」的地方都会挂。
      * 这条提示必须显式打出来，否则用户会把它当成我们工具的 bug 来报。
      */
-    if (/调试密钥库/.test(signing.desc)) {
+    if (/调试密钥库/.test(conv.signingDesc)) {
       log(
         'warn',
         'AAB',
@@ -758,14 +919,14 @@ export async function installBundle(
   return {
     serial,
     packageName: pkg,
-    versionName: info.versionName,
-    versionCode: info.versionCode,
+    versionName: conv.versionName,
+    versionCode: conv.versionCode,
     output,
     uninstalled: mode === 'clean',
     verified,
     fromBundle: true,
-    fromCache: cacheHit,
-    buildMs,
+    fromCache: conv.fromCache,
+    buildMs: conv.buildMs,
     installMs,
     apksDir,
   };
@@ -783,6 +944,181 @@ async function deviceHasPackage(s: string, pkg: string): Promise<boolean> {
 /** 让 bundletool 用我们自带的 adb，避免它去 PATH 上找一个版本不同的 */
 function adbForBundletool(): string {
   return adbPath();
+}
+
+/* ------------------------------------------------------------------ */
+/* 装现成的 .apks                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 把「一份现成的 .apks」装到设备上。
+ *
+ * 边界说明（重要）
+ * ---------------------------------------------------------------
+ * 这里只接受**本工具自己拆出来的** .apks。走 install-apks 要求
+ * 「文件里有一套正常 split 结构」，这个结构只有 build-apks 会给，
+ * 所以外部工具产的同名文件天然装不了 —— 不需要额外设防。
+ *
+ * 版本 1.0.19 起本工具的每个拆包产物目录里都会写一份 `source.aab.txt`
+ * （指向拆它的那个 .aab），装现成 .apks 时就靠它反查包名做装后复核。
+ * 更早版本的缓存没有这个文件 → 复核退化为「不复核 + 打一条 warn」，
+ * 不会因此装不上。
+ *
+ * 不做设备适配校验：拆包 cache 目录名里已经带了设备 key（serial+sdk），
+ * 而「拆给 A 设备的 split 装到 B 设备」属于用户自己的操作，adb 会给出报错。
+ * 我们只负责把这个报错翻译成人话。
+ *
+ * 更不会「装不上就偷偷重拆」——那会让用户以为装 .apks 比装 .aab 还慢，
+ * 而且违背了「拆包与安装分开」的初衷。
+ */
+export async function installApksFile(
+  apksPath: string,
+  options: BundleInstallOptions,
+): Promise<BundleInstallResult> {
+  const serial = options.serial;
+  if (!serial) throw new Error('安装 .apks 必须明确指定目标设备');
+
+  const mode: InstallMode = options.mode ?? 'overwrite';
+  const grantAll = options.grantAll ?? false;
+  const say = (line: string) => options.onLine?.(line);
+
+  if (!existsSync(apksPath)) throw new Error(`文件不存在：${apksPath}`);
+  const lower = basename(apksPath).toLowerCase();
+  if (!lower.endsWith('.apks')) throw new Error('所选文件不是 .apks 文件');
+
+  /* ---- 0. 认来源 ---- */
+  const apksDir = dirname(apksPath);
+  let inCache = false;
+  try {
+    const rel = relative(resolve(cacheRoot()), resolve(apksDir));
+    // 缓存根目录下的一级子目录 = 本工具拆出来的产物目录
+    inCache = !!rel && !rel.startsWith('..') && !isAbsolute(rel) && !rel.includes(sep);
+  } catch {
+    inCache = false;
+  }
+
+  let pkg: string | undefined;
+  const srcFile = join(apksDir, APKS_SOURCE_FILE);
+  if (existsSync(srcFile)) {
+    try {
+      const srcAab = readFileSync(srcFile, 'utf8').trim();
+      if (srcAab && existsSync(srcAab)) pkg = readAabInfo(srcAab).packageName;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  log(
+    'info',
+    'APKS',
+    `${INSTALL_MODE_LABEL[mode]}：${basename(apksPath)}${pkg ? `（${pkg}）` : ''} → ${serial}` +
+      `${inCache ? '' : '｜缓存外的文件，不做设备适配校验'}`,
+  );
+
+  /* ---- 1. 设备侧准备（与 AAB 同一套语义） ---- */
+  if (mode === 'clean') {
+    if (!pkg) {
+      throw new Error(
+        '读不出这个 .apks 对应的包名，无法清洁安装（要先按包名卸载旧版本）。可改用「覆盖安装」。',
+      );
+    }
+    if (await deviceHasPackage(serial, pkg)) {
+      say(`清洁安装：先卸载 ${pkg}，应用数据会一起清掉`);
+      const res = await runAdb(['-s', serial, 'uninstall', pkg], {
+        source: 'APKS',
+        timeout: 90000,
+      });
+      const text = (res.stdout + '\n' + res.stderr).trim();
+      if (/Failure|Error/i.test(text) || !res.ok || !/Success/i.test(text)) {
+        throw new Error(
+          `卸载旧版本失败：${text.replace(/^.*?Failure\s*/i, '').trim() || '未知原因'}`,
+        );
+      }
+    } else {
+      say(`清洁安装：设备上没有 ${pkg}，直接全新安装`);
+    }
+  }
+
+  if (mode === 'fresh' && pkg && (await deviceHasPackage(serial, pkg))) {
+    throw new Error(
+      `设备 ${serial} 上已存在 ${pkg}，已按「全新安装」的约定中止，没有动到旧版本。` +
+        '如需升级请用「覆盖安装」，如需清空数据重装请用「清洁安装」。',
+    );
+  }
+
+  /* ---- 2. 运行时 ---- */
+  const rt = await resolveAabRuntime();
+  if (!rt.ready) throw new Error(rt.reason || 'AAB 安装环境不完整（需要 Java 11+ 与 bundletool）');
+
+  /* ---- 3. install-apks ---- */
+  say('正在安装已有产物（不再拆包）…');
+  const args = [
+    '-jar',
+    rt.jar!,
+    'install-apks',
+    `--apks=${apksPath}`,
+    `--adb=${adbPath()}`,
+    `--device-id=${serial}`,
+  ];
+  if (grantAll) args.push('--grant-all');
+
+  const installStarted = Date.now();
+  const inst = await runJava(rt.java!.path, args, (l) => say(l), 10 * 60 * 1000);
+  const installMs = Date.now() - installStarted;
+
+  const output = (inst.stdout + '\n' + inst.stderr).trim();
+  if (inst.code !== 0) {
+    const reason = pickErrorLine(inst.stderr, inst.stdout);
+    throw new Error(
+      `安装失败：${reason || output || '未知原因'}` +
+        (/INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match/i.test(output)
+          ? '。设备上已装的版本与这份产物的签名不一致，可改用「清洁安装」。'
+          : '') +
+        (inCache
+          ? ''
+          : '。这是一份不在拆包缓存里的 .apks，如果它不是给这台设备拆的' +
+            '（ABI / 屏幕 / SDK 不匹配），请改用对应的 .aab，让本工具按这台设备重新拆包。'),
+    );
+  }
+
+  /* ---- 4. 装后复核 ---- */
+  let verified: boolean | undefined;
+  if (pkg) {
+    for (let i = 0; i < 5; i += 1) {
+      if (await deviceHasPackage(serial, pkg)) {
+        verified = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    if (verified !== true) {
+      throw new Error(
+        `bundletool 报告安装成功，但在设备 ${serial} 上查不到 ${pkg} —— 实际没有装上。` +
+          '常见原因：设备有多个用户 / 系统分身，装到了别的用户下；存储空间或权限受限；厂商安全策略拦截。',
+      );
+    }
+    log('success', 'APKS', `安装成功并已复核：${pkg} → ${serial}`);
+  } else {
+    log(
+      'warn',
+      'APKS',
+      `安装成功，但这份 .apks 没有来源记录（装现成产物的老缓存），无法按包名复核：` +
+        `${basename(apksPath)} → ${serial}`,
+    );
+  }
+
+  return {
+    serial,
+    packageName: pkg,
+    output,
+    uninstalled: mode === 'clean',
+    verified,
+    fromBundle: false,
+    fromApks: true,
+    fromCache: true,
+    installMs,
+    apksDir,
+  };
 }
 
 /* ------------------------------------------------------------------ */

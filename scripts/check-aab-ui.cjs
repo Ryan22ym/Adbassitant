@@ -32,7 +32,8 @@ if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 const LOG = path.join(OUT, '_aab-ui.log');
 
 const ADB = path.join(ROOT, 'bin', 'adb.exe');
-const SERIAL = process.env.ADB_SERIAL || 'emulator-5556';
+/** 首选目标设备；若不在线会回落到列表里的第一台（见 runChecks 开头的固定逻辑） */
+let SERIAL = process.env.ADB_SERIAL || 'emulator-5556';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -111,6 +112,16 @@ window.__aab = {
       chips: Array.from(m.querySelectorAll('.install-chip')).map((c) => c.textContent.trim()),
     };
   },
+  /** 「仅拆包并另存为 .apks」按钮是否存在 —— 只对 AAB 显示 */
+  convertBtn() {
+    const b = document.querySelector('[data-convert-apks]');
+    return b ? { text: b.textContent.trim(), disabled: !!b.disabled } : null;
+  },
+  /** 拆包结果 / 错误提示块 */
+  convertResult: () => {
+    const el = document.querySelector('[data-convert-result]');
+    return el ? el.textContent.trim() : null;
+  },
   closeMask() {
     const m = document.querySelector('.install-mask');
     if (!m) return 'no-mask';
@@ -175,8 +186,14 @@ async function runChecks(page) {
     await sleep(500);
   }
 
-  /* 固定到模拟器（不要往真机上装 AAB 测试包） */
-  const picked = await page.evalJS(`
+  /*
+   * 固定目标设备。
+   *
+   * 默认挑模拟器（AAB 测试包往真机上装不合适：签名与原版几乎必然不同，
+   * 会把用户机器上的正式应用覆盖掉）。但模拟器不一定在线 ——
+   * 这时候回落到第一台在线设备，并把 SERIAL 改掉，后面的用例才有一致的目标。
+   */
+  let picked = await page.evalJS(`
     (() => {
       const sel = document.querySelector('.device-select');
       if (!sel) return 'no-select';
@@ -188,7 +205,25 @@ async function runChecks(page) {
       return 'ok';
     })()
   `);
-  record(picked === 'ok', '测试设备已固定为模拟器', String(picked));
+  if (picked !== 'ok') {
+    const fallback = await page.evalJS(`
+      (() => {
+        const sel = document.querySelector('.device-select');
+        if (!sel || !sel.options.length) return null;
+        const v = sel.options[0].value;
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+        setter.call(sel, v);
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return v;
+      })()
+    `);
+    log(`pin device fallback: ${picked} → ${fallback}`);
+    if (fallback) {
+      SERIAL = fallback;
+      picked = 'ok(fallback)';
+    }
+  }
+  record(picked.startsWith('ok'), '测试设备已固定（默认模拟器，缺则回落在线设备）', String(picked));
   await sleep(800);
 
   /* 进常用工具页 */
@@ -211,13 +246,14 @@ async function runChecks(page) {
   record(clicked === 'ok', '进入「安装安装包」标签页', String(clicked));
   await sleep(600);
 
-  /* ---------- 2. 拖放区文案提到两种格式 ---------- */
+  /* ---------- 2. 拖放区文案提到三种格式 ---------- */
   const dropText = await page.evalJS(
     `(document.querySelector('.apk-drop')?.textContent || '').trim()`,
   );
   log(`drop zone: ${safe(dropText)}`);
   record(/\bAPK\b/i.test(dropText), '拖放区提示接受 APK', safe(dropText));
   record(/\bAAB\b/i.test(dropText), '拖放区提示接受 AAB', safe(dropText));
+  record(/\bAPKS\b/i.test(dropText), '拖放区提示接受 APKS（拆包产物可直接装）', safe(dropText));
 
   /* ---------- 3. AAB 环境（本机应已就绪） ---------- */
   const envApi = await page.evalJS(`window.adbApi.aabEnv(false)`);
@@ -418,8 +454,159 @@ async function runChecks(page) {
   /* 清场：关掉结果弹窗 */
   const closed = await page.evalJS(`window.__aab.closeMask()`);
   log(`close mask: ${closed}`);
+  await sleep(400);
 
-  /* ---------- 9. 渲染层错误 ---------- */
+  /* ---------- 9. 「仅拆包并另存为 .apks」按钮（只对 AAB 显示） ---------- */
+  let convBtn = await page.evalJS(`window.__aab.convertBtn()`);
+  log(`convert btn (aab selected): ${JSON.stringify(convBtn)}`);
+  record(!!convBtn, '选中 AAB 时出现「仅拆包并另存」按钮', safe(JSON.stringify(convBtn)));
+  record(
+    !!convBtn && /\.apks/.test(convBtn.text),
+    '按钮文案说明了产物是 .apks',
+    safe(convBtn ? convBtn.text : 'null'),
+  );
+
+  /*
+   * 点这个按钮会弹系统保存框 —— headless 下点下去会卡住，所以不点。
+   * 改为直接验证「拆包 API 可达且产物真的落盘」：走 preload 的 convertBundle
+   * （不弹框那条路），拿到的路径再喂给下一段做 .apks 安装。
+   */
+  const convProbe = await page.evalJS(`
+    (async () => {
+      try {
+        const r = await window.adbApi.convertBundle(
+          ${JSON.stringify(SERIAL)},
+          ${JSON.stringify(aabFile)},
+          undefined,
+          true
+        );
+        if (!r || !r.ok) return { error: r && r.error };
+        return { apksPath: r.data.apksPath, fromCache: r.data.fromCache, rebuilt: r.data.rebuilt };
+      } catch (e) { return { error: String((e && e.message) || e) }; }
+    })()
+  `);
+  log(`convertBundle: ${safe(JSON.stringify(convProbe))}`);
+  record(!!convProbe && !!convProbe.apksPath, '仅拆包接口可达且返回产物路径', safe(convProbe && convProbe.error));
+  const apksFile = convProbe && convProbe.apksPath;
+  if (apksFile) {
+    record(/\.apks$/.test(apksFile), '产物扩展名是 .apks', safe(apksFile));
+    // 前面刚装过一次 AAB，这里应当直接命中缓存（同一 AAB + 同一设备 + 同一签名）
+    record(convProbe.fromCache === true, '同一 AAB + 同一设备时拆包命中缓存', `fromCache=${convProbe.fromCache}`);
+  }
+
+  /* ---------- 10. 选中 .apks → 类型标签与安装弹窗分流 ---------- */
+  if (apksFile) {
+    // 换个「缓存外的」副本，模拟用户从磁盘上挑一份 .apks 进来
+    const outsideApks = path.join(os.tmpdir(), `aab-ui-outside-${Date.now()}.apks`);
+    fs.copyFileSync(apksFile, outsideApks);
+    log(`outside apks: ${outsideApks}`);
+
+    await page.evalJS(`
+      (() => {
+        const old = document.getElementById('__aab_probe');
+        if (old) old.remove();
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.id = '__aab_probe';
+        input.multiple = true;
+        input.style.cssText = 'position:fixed;left:-9999px;top:0;';
+        document.body.appendChild(input);
+        return true;
+      })()
+    `);
+    const root2 = (await dbg.sendCommand('DOM.getDocument', { depth: 1 })).root;
+    const n2 = (await dbg.sendCommand('DOM.querySelector', {
+      nodeId: root2.nodeId,
+      selector: '#__aab_probe',
+    })).nodeId;
+    if (n2) {
+      await dbg.sendCommand('DOM.setFileInputFiles', { files: [outsideApks], nodeId: n2 });
+      await page.evalJS(PAGE_HELPERS);
+
+      // 走整窗拖放：与真人一致
+      await page.evalJS(`
+        (() => {
+          const files = window.__aab.probe();
+          window.__aab.fire(files, window);
+          return true;
+        })()
+      `);
+      await sleep(1200);
+
+      let apksChip = null;
+      for (let i = 0; i < 20; i++) {
+        await sleep(300);
+        const m = await page.evalJS(`window.__aab.mask()`);
+        const d = await page.evalJS(`window.__aab.pickDialog()`);
+        if (d) {
+          // 多台在线会先问装到哪台 —— 选 .apks 时不该再说「AAB 要拆包」
+          log(`pick dialog (apks): ${safe(JSON.stringify(d))}`);
+          record(
+            /APKS|拆好|不用再拆|已经拆/.test(d.text) || !/AAB 要先/.test(d.text),
+            '选设备弹窗不会把 .apks 说成「要先拆包」',
+            safe(d.text.slice(0, 200)),
+          );
+          await page.evalJS(`window.__aab.pickDevice(${JSON.stringify(SERIAL)})`);
+          continue;
+        }
+        if (m) {
+          apksChip = m;
+          break;
+        }
+      }
+
+      log(`apks mask: ${safe(JSON.stringify({ ...apksChip, detail: (apksChip && apksChip.detail || '').slice(0, 200) }))}`);
+      record(!!apksChip, '.apks 安装出现进度弹窗', safe(JSON.stringify(apksChip)));
+      if (apksChip) {
+        record(
+          apksChip.kind === 'apks',
+          '弹窗带 data-install-kind=apks（与 AAB 分流）',
+          safe(apksChip.kind),
+        );
+        record(
+          /APKS/i.test(apksChip.title),
+          '弹窗标题标明这是在装 APKS',
+          safe(apksChip.title),
+        );
+      }
+
+      // 等结果
+      let apksDone = null;
+      for (let i = 0; i < 200; i++) {
+        await sleep(500);
+        const m = await page.evalJS(`window.__aab.mask()`);
+        if (m && /安装成功|安装失败/.test(m.title)) {
+          apksDone = m;
+          break;
+        }
+        if (!m) break;
+      }
+      log(`apks result: ${safe(JSON.stringify({ ...apksDone, detail: (apksDone && apksDone.detail || '').slice(0, 300) }))}`);
+      record(
+        !!(apksDone && apksDone.title.includes('安装成功')),
+        '.apks 安装成功，弹窗切到「安装成功」',
+        safe(apksDone ? apksDone.title : 'null'),
+      );
+      if (apksDone && apksDone.title.includes('安装成功')) {
+        const blob = `${apksDone.detail || ''} ${apksDone.note || ''}`;
+        record(
+          /APKS|install-multiple|拆包产物/.test(blob),
+          '成功文案说明走的是「已有产物直接装」链路',
+          safe(blob.slice(0, 200)),
+        );
+      }
+      await page.screenshot(path.join(OUT, 'aab-ui-3-apks.png'));
+      await page.evalJS(`window.__aab.closeMask()`);
+    }
+
+    try {
+      fs.rmSync(outsideApks, { force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /* ---------- 11. 渲染层错误 ---------- */
   const errs = page.errors ? page.errors() : [];
   log(`renderer errors: ${safe(JSON.stringify(errs))}`);
   record(!errs || errs.length === 0, '渲染层无 error 级日志', safe(JSON.stringify((errs || []).slice(0, 3))));

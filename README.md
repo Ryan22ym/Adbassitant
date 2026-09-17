@@ -1,7 +1,19 @@
-# ADB 桌面助手 v1.0.18
+# ADB 桌面助手 v1.0.19
 
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
+
+> **v1.0.19 更新**
+> - **拆包与安装拆成两件事**：新增「仅拆包并另存为 .apks」——AAB 按目标设备拆一次，
+>   产物导出到磁盘；之后直接拖这个 `.apks` 进来装，不再重复拆包（同一份大包省几十秒）；
+> - **拖放区 / 文件选择器开始接受 `.apks`**（本工具拆出来的产物），
+>   覆盖 / 清洁 / 全新三种安装方式与**装后复核**对它同样适用；
+> - `.apks` 是「按设备挑好 split 的产物」，安装走 `install-apks` 而非自己解 zip：
+>   `toc.pb` 是 protobuf，复刻它的挑包逻辑既贵又易过时；
+> - 拆包时记下 `source.aab.txt`（源 AAB 路径）——`.apks` 里不含包名，
+>   靠它反查才能做「装完按包名复核」这条硬规矩；
+> - **装现成 `.apks` 绝不偷偷重拆**：否则用户会以为「装 .apks 比装 .aab 还慢」；
+> - 验收扩到 **`check:aab-install` 78 项**（新增 E 段 30 项：仅拆包、缓存命中、另存、装现成产物、缓存外产物）。
 
 > **v1.0.18 更新**
 > - 「安装安装包」页新增**「签名方式」**：AAB 拆包时不再写死调试密钥库 ——
@@ -797,6 +809,40 @@ AAB 的 `.apks` 产物按「文件指纹 + 目标设备」缓存在临时目录�
 「★设备上实际生效的签名 == 用户所选密钥库」两条端到端；后一条靠 `adb pull` 回 APK 读指纹，
 不信任本地产物）。样本用的是 `~/Downloads/AdbTools/pokercity.keystore`。
 
+### ⚠️ 拆包与安装要分开：`.apks` 是「按设备挑好 split 的产物」
+
+**为什么拆**：拆包（`build-apks`）吃的是「AAB + 一台设备的规格」，产出 `.apks`；
+安装（`install-apks`）吃的是「`.apks` + 一台在线设备」。第一版把两步绑死在
+`installBundle()` 里，于是每换一台设备、每重装一次都要**再跑一遍几十秒的拆包**
+（缓存只省掉了 build，省不掉整个调用流程）。v1.0.19 拆成：
+
+```
+convertBundle()  →  AAB → .apks（可以不装，直接另存）
+installBundle()  →  调 convertBundle 拿产物，再 install-apks
+```
+
+**四条硬规矩**：
+
+1. **装现成的 `.apks` 绝不偷偷重拆**。`installApksFile()` 只做
+   `install-apks --apks=<现成文件>`，不碰 `build-apks`。
+   一旦「装不上就重新拆一遍」，用户会以为装 `.apks` 比装 `.aab` 还慢，
+   整个功能的立意就没了。验证办法：断言输出里没有 `build-apks` / `device-spec` 字样
+   （`check-aab-install.cjs` 的 E4）。
+2. **`.apks` 里没有包名**。`toc.pb` 是 protobuf，为它引一个解析器不划算 ——
+   但「装完按包名 `pm path` 复核」是本项目对 APK/AAB 一贯的硬规矩。
+   解法：拆包时往产物目录写一份 `source.aab.txt`（源 AAB 绝对路径），
+   装现成产物时靠它反查包名。老缓存没这个文件 → 退化为「不复核 + 打 warn」，不会装不上。
+3. **不用自己解 `.apks` 里的 zip**。`.apks` 是 zip（内含 `splits/*.apk` + `toc.pb`），
+   理论上可以自己解出 split 再 `adb install-multiple`，但那要求复刻 bundletool 的
+   「挑哪些 split / 什么顺序 / 何时用 `install-multi-package`」逻辑，成本高且易过时。
+   **只装本工具自己产的 `.apks`** 时没有任何理由放弃 `install-apks`
+   —— 这条约束由缓存目录命名（含文件指纹 + 设备 key）天然保证。
+4. **另存产物要先写 `.part` 再改名**。中途失败不会在用户目录里留一个看起来正常的半截包；
+   验收里有一条专门断言不留 `.part`（E3）。
+
+**验收**：`npm run check:aab-install` 已扩到 **78 项**，新增 E 段 30 项覆盖
+「仅拆包 / 命中缓存不重拆 / 另存 / 装现成产物 / 缓存外产物 / fresh·clean 语义」。
+
 ### ⚠️ `adb install` 不带 `-r` 也会覆盖已装应用
 
 老资料说「`adb install` 遇到已装包会报 `INSTALL_FAILED_ALREADY_EXISTS`，要覆盖得加 `-r`」——
@@ -1064,6 +1110,20 @@ npm run check:device-order
 # 覆盖 / 清洁 / 全新 + 目标设备定死 + 装后复核 + 互斥锁 + 日志可追溯
 npm run check:install-modes
 
+# ---- AAB 安装 + 拆包分离（后端直测，78 项；v1.0.19 扩到 78）----
+# A 环境与工具链 7 项 / B AAB 文件识别 11 项 / C 真机安装链路 21 项
+# D 缓存与安装方式 9 项
+# E 拆包与安装分离 30 项（v1.0.19 新增）★
+#   E1 仅拆包：产物落盘、不改设备状态、写下 source.aab.txt
+#   E2 二次调用命中缓存、不重拆（buildMs=0）
+#   E3 另存 outPath：产物复制到位、不留 .part 半成品
+#   E4 装现成 .apks：不再拆包（输出里无 build-apks 痕迹）+ 靠来源反查做复核
+#   E5/E6 不指定设备、扩展名不符一律拒
+#   E7 fresh / clean 语义在 .apks 路径上同样成立
+#   E8 缓存外的 .apks 也能装
+# 需要一台在线设备；素材默认取 ~/Downloads 下最小的 .aab（AAB_FILE 可覆盖）
+npm run check:aab-install
+
 # ---- 拆包签名 / key hash（32 项，v1.0.18 新增）----
 # A 段 key hash 计算 4 项 / B 段密钥库探测 7 项 / C 段配置 1 项
 # D 段签名参数拼装 10 项 / E 段真机拆包验证签名 10 项
@@ -1072,9 +1132,15 @@ npm run check:install-modes
 # 需要模拟器在线；样本密钥库默认 ~/Downloads/AdbTools/pokercity.keystore（密码 111111，别名 pokercity）
 npm run check:aab-signing
 
+# ---- AAB / APKS 界面验收（v1.0.19 扩到 39 项）----
+# 标签名 / 拖放区接受 .apk·.aab·.apks / AAB 环境 / 类型标签分流
+# / 安装方式提示按类型不同 / 选设备弹窗 / 安装中·成功弹窗 / 实时输出流
+# / 「仅拆包并另存」按钮只对 AAB 出现 / .apks 安装弹窗 data-install-kind=apks
+npm run check:aab-ui
+
 # ---- 安装版真身验收（需先 python scripts/install-local.py 装一次）----
 # ⚠️ 被测应用有单实例锁，跑之前先 python scripts/_kill-our-processes.py --installed
-npm run check:aab-ui:installed                 # AAB 界面 33 项（CDP 连安装目录的 exe）
+npm run check:aab-ui:installed                 # AAB/APKS 界面 39 项（CDP 连安装目录的 exe）
 npm run check:drag-install:installed           # 拖放 47 项（node 跑，Node 22 自带 WebSocket）
 npm run check:drag-install:installed:electron  # 同上，但用 electron 跑（走 _ws-shim.cjs 垫片）
 npm run test:ws-shim                           # 垫片自检 7 项（握手/大响应/并发 id/close）
