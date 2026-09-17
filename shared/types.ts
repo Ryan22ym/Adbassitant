@@ -228,7 +228,7 @@ export const INSTALL_MODE_LABEL: Record<InstallMode, string> = {
 export interface InstallResult {
   /** 实际安装到的设备序列号 */
   serial: string;
-  /** 从 APK 里读出的包名（读不出时为空） */
+  /** 从安装包里读出的包名（读不出时为空） */
   packageName?: string;
   versionName?: string;
   versionCode?: number;
@@ -241,6 +241,59 @@ export interface InstallResult {
    * 读不出包名时为 undefined —— 表示「装是装完了，但没能复核」。
    */
   verified?: boolean;
+  /** 是否来自 AAB（走了 bundletool 拆包再用 install-multiple 安装） */
+  fromBundle?: boolean;
+  /** AAB：拆包是否复用了本机缓存 */
+  fromCache?: boolean;
+  /** AAB：拆包耗时（毫秒） */
+  buildMs?: number;
+  /** AAB：安装耗时（毫秒） */
+  installMs?: number;
+}
+
+/**
+ * 可安装的文件类型。
+ *  - apk：Android 安装包，`adb install` 直接装
+ *  - aab：Android App Bundle，必须先由 bundletool 拆成一组 APK 再安装
+ */
+export type InstallKind = 'apk' | 'aab';
+
+/** APK / AAB 通用的安装方式选择项（AAB 的按钮更少，是 bundletool 的能力限制） */
+export const INSTALL_KINDS: InstallKind[] = ['apk', 'aab'];
+
+export const INSTALL_KIND_LABEL: Record<InstallKind, string> = {
+  apk: 'APK 安装包',
+  aab: 'AAB 应用束',
+};
+
+/**
+ * AAB 安装环境。
+ * 必需两样：Java 11+（bundletool 是 Java 程序）与 bundletool jar。
+ * 都不随程序捆，由界面引导用户补齐。
+ */
+export interface AabEnv {
+  /** Java 与 bundletool 都可用 */
+  ready: boolean;
+  /** 不可用时的原因（可直接展示） */
+  reason?: string;
+  /** java 可执行文件路径 */
+  javaPath?: string;
+  /** java 版本号，如 11.0.9 */
+  javaVersion?: string;
+  /** java 版本是否满足 bundletool 要求（>=11）；读不出时按满足处理 */
+  javaOk: boolean;
+  /** Java 来源的中文描述 */
+  javaDesc?: string;
+  /** bundletool jar 是否就位 */
+  bundletoolReady: boolean;
+  /** bundletool jar 的本机路径（可能尚不存在） */
+  bundletoolPath: string;
+  /** 程序内置的 bundletool 版本 */
+  bundletoolVersion: string;
+  /** 官方下载地址（下载失败时给用户手动下） */
+  downloadUrl: string;
+  /** 是否检测到随包 JRE（bin/jre） */
+  javaBundled: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -497,6 +550,14 @@ export const IPC = {
   /* APK */
   APK_INSTALL: 'apk:install',
 
+  /* AAB（Android App Bundle） */
+  AAB_INSTALL: 'aab:install',
+  AAB_ENV: 'aab:env',
+  AAB_DOWNLOAD_TOOL: 'aab:downloadTool',
+  AAB_OPEN_TOOL_DIR: 'aab:openToolDir',
+  AAB_CACHE_LIST: 'aab:cacheList',
+  AAB_CACHE_CLEAR: 'aab:cacheClear',
+
   /* Monkey */
   MONKEY_RUN: 'monkey:run',
   MONKEY_STOP: 'monkey:stop',
@@ -561,6 +622,10 @@ export const IPC = {
   PUSH_LOGCAT_LINES: 'push:logcatLines',
   PUSH_LOGCAT_STATUS: 'push:logcatStatus',
   PUSH_WEAKNET_STATUS: 'push:weaknetStatus',
+  /** AAB 安装过程中 bundletool 的输出行 */
+  PUSH_AAB_OUTPUT: 'push:aabOutput',
+  /** bundletool 下载进度 */
+  PUSH_AAB_DOWNLOAD: 'push:aabDownload',
 } as const;
 
 /* ------------------------------------------------------------------ */

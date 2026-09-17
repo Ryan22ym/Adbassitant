@@ -342,3 +342,63 @@
   font-family: var(--font-mono);
   font-size: 11.5px;
 }
+
+/* ---------------- AAB 相关 ---------------- */
+
+/* 拖放区里那个 APK / AAB 小标签 */
+.install-kind-chip {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  line-height: 1.6;
+}
+
+.install-kind-chip.apk {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.install-kind-chip.aab {
+  border-color: var(--border-strong);
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+
+/* AAB 拆包过程的实时输出流：比 install-detail 矮一点，给提示文字留位置 */
+.install-stream {
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+/* bundletool 下载进度条（内层 <i> 才是填充条） */
+.aab-dl {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aab-dl-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.aab-dl-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+

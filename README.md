@@ -651,6 +651,48 @@ platform-tools 不带 aapt。所以有了 `electron/services/apk.ts` —— 手�
 
 `npm run check:apk-parse` 就是钉这两个坑：包名与版本号必须和设备端 `dumpsys package` 对上。
 
+### ⚠️ AAB 不能直接装，且它的 manifest 不是 AXML
+
+`.aab`（Android App Bundle）是**给应用商店用的原料**，不是安装包：里面的模块未签名，
+R 资源与 dex 都还没拆包，`adb install` 根本不认。唯一官方路线是 Google 的 bundletool：
+
+```
+bundletool build-apks    --bundle=x.aab --output=x.apks  →  按目标设备拆成一堆 APK
+bundletool install-apks  --apks=x.apks                   →  内部用 adb install-multiple
+```
+
+踩到的四个坑（都在 `electron/services/aab.ts` / `apk.ts` 里留了注释）：
+
+- **AAB 的 `base/manifest/AndroidManifest.xml` 是 protobuf，不是 AXML**。既有解析器直接
+  报「读不出 AndroidManifest.xml」。protobuf 里字符串是明文，但**值后面紧跟着下一个字段号
+  字节**（`\x12\x0bversionName\x1a\x042.80(\x9c\x84\x84\x08` —— `2.80` 后的 `(` 是 0x28，
+  也是可打印 ASCII），按引号切段会把 `2.80(` 当成整体。必须用**长度前缀 `0x1a <len> <value>`**
+  精确切值，且只接受全可打印 ASCII 的结果。`parseAabManifestProto()` 在 15 份真实 AAB 上 15/15 正确。
+- **bundletool 只在找得到 `~/.android/debug.keystore` 时才签名**，否则照常产出、
+  只打一行 `WARNING: The APKs won't be signed and thus not installable`，到安装阶段才被拒。
+  → 必须自带密钥库并显式 `--ks/--ks-pass/--key-pass/--ks-key-alias`（`bin/bundletool/debug.keystore`，
+  `bin/` 已被 electron-builder 的 `extraResources` 映射到 `resources/bin/`，自动随包）。
+- **`--device-id` 必须配 `--connected-device`，而那条路要求 bundletool 自己找得到 adb**
+  （找不到就 `Unable to find the requested device.`）。正解是拆成两步：
+  `get-device-spec --adb=<我们的 adb> --device-id=<serial>` 落一个 JSON，
+  再 `build-apks --device-spec=<该 JSON>` —— 设备归属完全由我们决定，build 阶段不再碰 adb。
+  `install-apks` 则**支持** `--adb`，直接指到随包的 adb。
+- **`--adb` 只属于 `install-apks` 和 `get-device-spec`，`build-apks` 传它会报
+  `Unrecognized flags: --adb`**；`install-apks` 也**不支持 `-r`**（覆盖本来就是默认语义）。
+
+另外两条沿用 APK 的硬规矩：多台在线时**绝不猜目标设备**（先问装到哪台），
+以及装完必须 `pm path <包名>` 复核（AAB 装出来是 split 多包，`pm path` 会返回多行）。
+
+### ⚠️ 「按设备拆包」的缓存不能让安装方式判断短路
+
+AAB 的 `.apks` 产物按「文件指纹 + 目标设备」缓存在临时目录，第二次装同一台设备直接复用。
+但 `fresh`（已有则拒绝）与 `clean`（先卸载）是**设备侧**的判断，跟有没有拆包缓存无关 ——
+第一版把它们写在了 `else`（未命中缓存）分支里，于是「第二次装同一台设备」会命中缓存、
+跳过这两个判断，行为跟第一次不一致（`fresh` 该拦的没拦）。
+
+规则：**缓存只能跳过纯计算的部分，任何跟设备当前状态有关的判断都必须每次执行。**
+`scripts/check-aab-install.cjs` 里专门有一条「fresh 模式对已装应用中止（缓存命中时也拦）」。
+
 ### ⚠️ `adb install` 不带 `-r` 也会覆盖已装应用
 
 老资料说「`adb install` 遇到已装包会报 `INSTALL_FAILED_ALREADY_EXISTS`，要覆盖得加 `-r`」——

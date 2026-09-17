@@ -1,19 +1,35 @@
 import { useApp, type InstallFile, type InstallTask } from '@/store/app';
-import type { DeviceInfo } from '@shared/types';
+import type { DeviceInfo, InstallKind } from '@shared/types';
 import { deviceLabel } from '@/components/layout';
 import { call } from '@/lib/ipc';
 import { INSTALL_MODE_LABEL, type InstallMode, type InstallResult } from '@shared/types';
 
 /**
- * 拖放 / 按钮安装的统一入口。
+ * 拖放 / 按钮安装的统一入口（APK 与 AAB 共用）。
  *
- * 不管是「拖到窗口」还是「安装 APK 页点按钮」，都必须走这里，原因：
+ * 不管是「拖到窗口」还是「安装安装包页点按钮」，都必须走这里，原因：
  * 1. 防重复 —— 同一时刻只允许一个安装任务（后面还有主进程互斥锁兜底）；
  * 2. 进度反馈 —— 安装中 / 成功 / 失败三种状态都写进 store，由同一个弹窗渲染；
  * 3. **目标设备必须落实** —— 多台设备在线时不允许猜（见 installApkFiles）。
+ *
+ * 两种包走的是**完全不同的后端通道**：
+ *   apk → ipc `apk:install`（adb install）
+ *   aab → ipc `aab:install`（bundletool 拆包 + install-multiple）
+ * 分叉点在 runInstall()。对外接口与防重复逻辑完全一致。
  */
 
 export type { InstallFile };
+
+/** 可安装的扩展名（拖放与文件选择都用它） */
+export const INSTALL_EXTS = ['.apk', '.aab'] as const;
+
+/** 按扩展名判断安装包类型；认不出来返回 undefined */
+export function kindOf(pathOrName: string): InstallKind | undefined {
+  const lower = (pathOrName || '').toLowerCase();
+  if (lower.endsWith('.apk')) return 'apk';
+  if (lower.endsWith('.aab')) return 'aab';
+  return undefined;
+}
 
 export interface InstallOptions {
   /** 安装方式，默认 overwrite（-r 覆盖、保留数据） */
@@ -77,23 +93,24 @@ export function pathOfDroppedFile(file: File): string {
   return (file as File & { path?: string }).path || '';
 }
 
-/** 从拖放事件的 File 列表里挑出 APK，并解析出磁盘路径 */
+/** 从拖放事件的 File 列表里挑出 APK / AAB，并解析出磁盘路径 */
 export function collectApks(files: File[]): { apks: InstallFile[]; skipped: number } {
   const apks: InstallFile[] = [];
   let skipped = 0;
 
   for (const f of files) {
-    if (!/\.apk$/i.test(f.name)) {
+    const kind = kindOf(f.name);
+    if (!kind) {
       skipped += 1;
       continue;
     }
     const path = pathOfDroppedFile(f);
     if (!path) {
-      // 明确是 APK 但拿不到路径（如从压缩包里直接拖出来的虚拟文件）
+      // 明确是安装包但拿不到路径（如从压缩包里直接拖出来的虚拟文件）
       skipped += 1;
       continue;
     }
-    apks.push({ path, name: f.name, size: f.size });
+    apks.push({ path, name: f.name, size: f.size, kind });
   }
 
   return { apks, skipped };
@@ -124,7 +141,7 @@ export function currentTarget(): DeviceInfo | undefined {
 }
 
 /**
- * 顺序安装一批 APK。
+ * 顺序安装一批安装包（APK 与 AAB 都走这里）。
  *
  * 目标设备的确定顺序（关键）：
  *   1. 调用方明确指定的 serial（且那台在线）；
@@ -135,6 +152,8 @@ export function currentTarget(): DeviceInfo | undefined {
  * 很可能不是用户以为的那台（模拟器先连上、或被点过一次就一直沿用），
  * 于是出现「显示安装成功、手机上没有」—— 而且装后复核也查不出问题，
  * 因为包确实装上了，只是装到了另一台设备上。
+ *
+ * AAB 尤其不能猜：拆一次包要十几秒到几十秒，装错机器等于白等一场。
  */
 export async function installApkFiles(
   files: InstallFile[],
@@ -199,7 +218,7 @@ export async function startInstallOn(serial: string): Promise<void> {
   await runInstall(pending.files, pending.mode, pending.grantAll, device);
 }
 
-/** 真正执行安装（目标设备已确定） */
+/** 真正执行安装（目标设备已确定）。APK 与 AAB 在这里分流。 */
 async function runInstall(
   files: InstallFile[],
   mode: InstallMode,
@@ -215,6 +234,7 @@ async function runInstall(
     phase: 'installing',
     fileName: total > 1 ? `${files[index].name}（${index + 1}/${total}）` : files[index].name,
     apkPath: files[index].path,
+    kind: files[index].kind ?? kindOf(files[index].path),
     sizeBytes: files[index].size,
     modeLabel: INSTALL_MODE_LABEL[mode],
     device: target,
@@ -228,17 +248,26 @@ async function runInstall(
     useApp.getState().setInstall(task);
 
     try {
-      const result = await call<InstallResult>(
-        () => window.adbApi.installApk(device.serial, files[i].path, mode, grantAll),
-        { silent: true },
-      );
+      const file = files[i];
+      const kind = file.kind ?? kindOf(file.path) ?? 'apk';
+
+      const result =
+        kind === 'aab'
+          ? await call<InstallResult>(
+              () => window.adbApi.installBundle(device.serial, file.path, mode, grantAll),
+              { silent: true },
+            )
+          : await call<InstallResult>(
+              () => window.adbApi.installApk(device.serial, file.path, mode, grantAll),
+              { silent: true },
+            );
 
       // 中间文件安装成功不改变 phase，继续装下一个（弹窗仍显示「正在安装中」）
       if (i === total - 1) {
         const done: InstallTask = {
           ...task,
           phase: 'success',
-          message: successMessage(result),
+          message: successMessage(result, kind),
           packageName: result?.packageName,
           verified: result?.verified,
           finishedAt: Date.now(),
@@ -259,24 +288,34 @@ async function runInstall(
 }
 
 /** 成功详情：把「装到哪台、哪个包、有没有复核过」都写出来 */
-function successMessage(r?: InstallResult): string {
+function successMessage(r?: InstallResult, kind: InstallKind = 'apk'): string {
   if (!r) return 'Success';
   const lines: string[] = [];
 
   const out = cleanOutput(r.output);
   if (out) lines.push(out);
 
+  if (r.fromBundle) {
+    // AAB 走的是拆包 + install-multiple，把这段链路说清楚，用户才知道时间花在哪了
+    const parts: string[] = [];
+    if (r.fromCache) parts.push('复用本机拆包缓存');
+    else if (r.buildMs) parts.push(`拆包 ${(r.buildMs / 1000).toFixed(1)}s`);
+    if (r.installMs) parts.push(`安装 ${(r.installMs / 1000).toFixed(1)}s`);
+    lines.push(`AAB 安装：bundletool 拆包 → install-multiple${parts.length ? `（${parts.join(' / ')}）` : ''}`);
+  }
+
   if (r.packageName) {
     lines.push(`包名：${r.packageName}${r.versionName ? ` v${r.versionName}` : ''}`);
   }
   if (r.uninstalled) lines.push('清洁安装：已先卸载旧版本，应用数据已清除');
   if (r.verified === true) lines.push(`已复核：${r.serial} 上确实存在该包`);
-  else if (r.verified === undefined) lines.push('提示：读不出 APK 包名，本次未做装后复核');
+  else if (r.verified === undefined)
+    lines.push(`提示：读不出 ${kind === 'aab' ? 'AAB' : 'APK'} 包名，本次未做装后复核`);
 
   return lines.join('\n') || 'Success';
 }
 
-/** 去掉 adb install 输出里的空行与 Success 前缀噪音 */
+/** 去掉 adb / bundletool 输出里的空行与 Success 前缀噪音 */
 function cleanOutput(output: string): string {
   return (output || '')
     .split(/\r?\n/)

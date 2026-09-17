@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Spinner } from '@/components/ui';
 import { useApp, type InstallTask, type PendingInstall } from '@/store/app';
 import {
@@ -7,6 +7,7 @@ import {
   dismissInstall,
   installApkFiles,
   isBusy,
+  kindOf,
   selectableDevices,
   startInstallOn,
 } from '@/lib/install';
@@ -94,9 +95,9 @@ export default function DragInstallHost() {
       {dragActive && (
         <div className="drop-veil">
           <div className="drop-veil-card">
-            <p className="drop-veil-title">松开鼠标即可安装 APK</p>
+            <p className="drop-veil-title">松开鼠标即可安装</p>
             <p className="drop-veil-hint">
-              可一次拖多个，按顺序安装；非 APK 文件会被忽略。
+              支持 .apk 与 .aab，可一次拖多个，按顺序安装；其他文件会被忽略。
               多台设备在线时，会先问一下装到哪台
             </p>
           </div>
@@ -136,11 +137,11 @@ async function handleWindowDrop(files: File[]) {
     st.toast(
       'warn',
       '没有可安装的文件',
-      '拖放安装只支持 .apk 文件；其他文件可拖到投屏窗口，会自动存入设备 Download 目录',
+      '拖放安装只支持 .apk 与 .aab；其他文件可拖到投屏窗口，会自动存入设备 Download 目录',
     );
     return;
   }
-  if (skipped > 0) st.toast('info', `已忽略 ${skipped} 个非 APK 文件`);
+  if (skipped > 0) st.toast('info', `已忽略 ${skipped} 个非安装包文件`);
 
   // 与「安装 APK」页保持同一个安装方式，避免用户选了清洁安装、拖进去却是覆盖安装
   await installApkFiles(apks, { mode: st.installMode });
@@ -163,9 +164,10 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
   const currentSerial = useApp((s) => s.currentSerial);
   const devices = selectableDevices();
 
-  const firstName = pending.files[0]?.name ?? 'APK';
+  const firstName = pending.files[0]?.name ?? '安装包';
   const label =
     pending.files.length > 1 ? `${firstName} 等 ${pending.files.length} 个文件` : firstName;
+  const hasAab = pending.files.some((f) => (f.kind ?? kindOf(f.path)) === 'aab');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -213,6 +215,12 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
 
         <p className="install-note">
           多台设备同时在线时不会替你挑一台 —— 点哪台就装到哪台
+          {hasAab && (
+            <>
+              <br />
+              AAB 要先按所选设备的配置拆包，比 APK 慢一些
+            </>
+          )}
         </p>
 
         <div className="install-actions">
@@ -232,6 +240,30 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
 function InstallDialog({ task }: { task: InstallTask }) {
   const installing = task.phase === 'installing';
   const isSuccess = task.phase === 'success';
+  const isAab = (task.kind ?? kindOf(task.apkPath)) === 'aab';
+
+  /**
+   * AAB 安装期间把 bundletool 的输出实时显示出来。
+   *
+   * 拆包一个大 bundle 要十几秒到几十秒，界面只有一个转圈的话，
+   * 用户完全无法区分「在干活」和「卡死了」。
+   */
+  const [lines, setLines] = useState<string[]>([]);
+  const tailRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    if (!installing || !isAab) return undefined;
+    setLines([]);
+    const off = window.adbApi.on('push:aabOutput', (p: { line?: string }) => {
+      if (!p?.line) return;
+      setLines((prev) => [...prev.slice(-120), p.line as string]);
+    });
+    return off;
+  }, [installing, isAab]);
+
+  useEffect(() => {
+    if (tailRef.current) tailRef.current.scrollTop = tailRef.current.scrollHeight;
+  }, [lines]);
 
   /* 结果态支持 Esc 关闭；安装中不接受任何关闭操作 */
   useEffect(() => {
@@ -243,11 +275,17 @@ function InstallDialog({ task }: { task: InstallTask }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [installing]);
 
-  const title = installing ? '正在安装中…' : isSuccess ? '安装成功' : '安装失败';
+  const title = installing
+    ? isAab
+      ? '正在安装 AAB…'
+      : '正在安装中…'
+    : isSuccess
+      ? '安装成功'
+      : '安装失败';
 
   return (
     <div className="install-mask" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="install-card fade-in">
+      <div className="install-card fade-in" data-install-kind={isAab ? 'aab' : 'apk'}>
         <div className={`install-badge ${task.phase}`}>
           {installing ? <Spinner size={22} /> : isSuccess ? '✓' : '×'}
         </div>
@@ -258,6 +296,11 @@ function InstallDialog({ task }: { task: InstallTask }) {
         </p>
         {(task.sizeBytes ?? 0) > 0 && (
           <p className="install-size">{formatBytes(task.sizeBytes)}</p>
+        )}
+        {isAab && installing && (
+          <p className="install-note">
+            AAB 需要先按目标设备的配置拆包（首次较慢，之后同一台设备会复用缓存）
+          </p>
         )}
 
         {/*
@@ -273,9 +316,16 @@ function InstallDialog({ task }: { task: InstallTask }) {
         </div>
 
         {installing ? (
-          <p className="install-note">
-            安装期间已锁定，重复拖入或重复点击都会被忽略
-          </p>
+          <>
+            {isAab && lines.length > 0 && (
+              <pre className="install-detail install-stream" ref={tailRef}>
+                {lines.join('\n')}
+              </pre>
+            )}
+            <p className="install-note">
+              安装期间已锁定，重复拖入或重复点击都会被忽略
+            </p>
+          </>
         ) : (
           <>
             {task.message && <pre className="install-detail">{task.message}</pre>}

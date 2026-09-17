@@ -6,6 +6,7 @@ import type {
   AppSettings,
   RecordSession,
   InstallMode,
+  InstallKind,
 } from '@shared/types';
 
 /* ------------------------------------------------------------------ */
@@ -31,8 +32,10 @@ export interface InstallTask {
   phase: 'installing' | 'success' | 'error';
   /** 展示用文件名，多文件时为「名字（2/3）」 */
   fileName: string;
-  /** 本地 APK 绝对路径 */
+  /** 本地安装包绝对路径 */
   apkPath: string;
+  /** 安装包类型：apk 直接装；aab 要先拆包，耗时明显更长 */
+  kind?: InstallKind;
   /** 文件大小（字节），拖放时由 File.size 提供，可能为空 */
   sizeBytes?: number;
   /** 成功时为 adb 输出，失败时为失败原因 */
@@ -55,7 +58,7 @@ export interface InstallTask {
   finishedAt?: number;
 }
 
-/** 一个待安装的 APK（只放渲染层需要的最少信息） */
+/** 一个待安装的包（只放渲染层需要的最少信息） */
 export interface InstallFile {
   /** 本地绝对路径 */
   path: string;
@@ -63,6 +66,8 @@ export interface InstallFile {
   name: string;
   /** 文件大小（字节），拖放时可由 File.size 得到 */
   size?: number;
+  /** 类型：不填时按扩展名推断（.apk / .aab） */
+  kind?: InstallKind;
 }
 
 /**

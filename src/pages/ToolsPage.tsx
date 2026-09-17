@@ -14,10 +14,10 @@ import {
 } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
 import { call } from '@/lib/ipc';
-import { collectApks, installApkFiles } from '@/lib/install';
+import { collectApks, installApkFiles, kindOf } from '@/lib/install';
 import { formatBytes, fileName } from '@/lib/format';
 import { deviceLabel } from '@/components/layout';
-import type { ScreenResolution, AppInfo, InstallMode } from '@shared/types';
+import type { ScreenResolution, AppInfo, InstallMode, InstallKind, AabEnv } from '@shared/types';
 
 type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file';
 
@@ -25,6 +25,13 @@ type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file';
 const MODE_HINT: Record<InstallMode, string> = {
   overwrite: '保留应用数据，直接覆盖升级；与原包签名不一致时会失败。',
   clean: '先卸载旧版本（数据一起清掉）再全新安装，适合覆盖装不上或想从干净状态开始。',
+  fresh: '不做覆盖：设备上已有该应用时直接报错，不会动到旧数据。',
+};
+
+/** AAB 的提示略有不同：它要先拆包，且签名与已装版本不一致时只能清洁安装 */
+const AAB_MODE_HINT: Record<InstallMode, string> = {
+  overwrite: '保留应用数据，直接覆盖升级。AAB 由 bundletool 用调试密钥签名，与原包签名不一致时会失败。',
+  clean: '先卸载旧版本（数据一起清掉）再安装。AAB 的签名与原包几乎必然不同，覆盖装不上时用这个。',
   fresh: '不做覆盖：设备上已有该应用时直接报错，不会动到旧数据。',
 };
 
@@ -48,7 +55,7 @@ export default function ToolsPage() {
               ['record', '录屏'],
               ['resolution', '分辨率'],
               ['monkey', 'Monkey 测试'],
-              ['apk', '安装 APK'],
+              ['apk', '安装安装包'],
               ['file', '文件传输'],
             ] as [Tab, string][]
           ).map(([k, label]) => (
@@ -658,7 +665,7 @@ function MonkeyPanel() {
 }
 
 /* ================================================================== */
-/* 安装 APK                                                            */
+/* 安装安装包（APK / AAB）                                              */
 /* ================================================================== */
 
 function ApkPanel() {
@@ -680,6 +687,32 @@ function ApkPanel() {
   /** 上一次安装结果，弹窗自动关闭后仍留在页面上供回看 */
   const [lastResult, setLastResult] = useState('');
 
+  /** 当前选中的包类型（按扩展名），决定文案、安装方式和是否需要 AAB 环境 */
+  const kind: InstallKind = kindOf(apkPath) ?? 'apk';
+  const isAab = kind === 'aab';
+
+  /**
+   * AAB 环境（Java 11+ 与 bundletool）。
+   * 选中的是 APK 时不必探测 —— 探测要跑 java -version，是个真实进程开销。
+   */
+  const [aabEnv, setAabEnv] = useState<AabEnv | null>(null);
+  const aabReady = aabEnv?.ready ?? false;
+  const aabReason = aabEnv?.reason;
+
+  const refreshAabEnv = async (force = false) => {
+    try {
+      const r = await call<AabEnv>(() => window.adbApi.aabEnv(force), { silent: true });
+      setAabEnv(r ?? null);
+    } catch {
+      setAabEnv(null);
+    }
+  };
+
+  useEffect(() => {
+    if (isAab) void refreshAabEnv();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAab]);
+
   useEffect(() => {
     if (!install || install.phase === 'installing') return;
     setLastResult(
@@ -695,7 +728,11 @@ function ApkPanel() {
     if (busy) return;
     const files = await call<string[]>(
       () =>
-        window.adbApi.pickFiles(false, [{ name: 'Android 安装包', extensions: ['apk'] }]),
+        window.adbApi.pickFiles(false, [
+          { name: 'Android 安装包', extensions: ['apk', 'aab'] },
+          { name: 'APK 安装包', extensions: ['apk'] },
+          { name: 'AAB 应用束', extensions: ['aab'] },
+        ]),
       { silent: true },
     );
     if (files?.[0]) {
@@ -711,9 +748,12 @@ function ApkPanel() {
         installing ? '正在安装中，请稍候' : '请先选择安装到哪台设备',
       );
     }
-    if (!apkPath) return toast('warn', '请先选择 APK 文件');
+    if (!apkPath) return toast('warn', '请先选择安装包文件');
+    if (isAab && !aabReady) {
+      return toast('warn', 'AAB 安装环境未就绪', aabReason);
+    }
     void installApkFiles(
-      [{ path: apkPath, name: fileName(apkPath), size: apkSize }],
+      [{ path: apkPath, name: fileName(apkPath), size: apkSize, kind }],
       { mode, grantAll },
     );
   };
@@ -737,12 +777,12 @@ function ApkPanel() {
     if (apks.length === 0) {
       toast(
         'warn',
-        '请拖入 .apk 文件',
-        skipped > 0 ? `已忽略 ${skipped} 个非 APK 文件` : undefined,
+        '请拖入 .apk 或 .aab 文件',
+        skipped > 0 ? `已忽略 ${skipped} 个非安装包文件` : undefined,
       );
       return;
     }
-    if (skipped > 0) toast('info', `已忽略 ${skipped} 个非 APK 文件`);
+    if (skipped > 0) toast('info', `已忽略 ${skipped} 个非安装包文件`);
 
     setApkPath(apks[0].path);
     setApkSize(apks[0].size);
@@ -751,9 +791,14 @@ function ApkPanel() {
   };
 
   return (
-    <Card title="安装 APK" subtitle="选择或直接拖入安装包，安装过程会显示进度">
+    <Card
+      title="安装安装包"
+      subtitle="支持 APK 与 AAB；选择或直接拖入，安装过程会显示进度"
+    >
       <div className="col">
-        <Field label="APK 文件" hint="拖进来即开始安装">
+        {isAab && <AabEnvNotice />}
+
+        <Field label="安装包文件" hint="APK / AAB，拖进来即开始安装">
           <div
             data-dropzone="apk"
             className={`apk-drop ${over ? 'over' : ''} ${busy ? 'is-busy' : ''}`}
@@ -775,10 +820,12 @@ function ApkPanel() {
           >
             <p className="apk-drop-title">
               {installing
-                ? '正在安装…'
+                ? isAab
+                  ? '正在安装 AAB…'
+                  : '正在安装…'
                 : pendingInstall
                   ? '请先选择安装到哪台设备'
-                  : '把 APK 拖到这里，或点击选择文件'}
+                  : '把 APK / AAB 拖到这里，或点击选择文件'}
             </p>
             <p className="apk-drop-hint">
               {busy ? '完成当前任务后才能开始下一个' : '松手即开始安装，并弹出进度'}
@@ -786,6 +833,9 @@ function ApkPanel() {
 
             {apkPath && (
               <div className="apk-drop-file">
+                <span className={`install-kind-chip ${isAab ? 'aab' : 'apk'}`}>
+                  {isAab ? 'AAB' : 'APK'}
+                </span>
                 <span className="apk-drop-file-name" title={apkPath}>
                   {fileName(apkPath)}
                 </span>
@@ -816,7 +866,7 @@ function ApkPanel() {
           )}
         </div>
 
-        <Field label="安装方式" hint={MODE_HINT[mode]}>
+        <Field label="安装方式" hint={isAab ? AAB_MODE_HINT[mode] : MODE_HINT[mode]}>
           {/* data-install-mode 供验收脚本定位（页面里可能还有别的 Segmented） */}
           <div data-install-mode={mode}>
             <Segmented<InstallMode>
@@ -843,7 +893,15 @@ function ApkPanel() {
         {mode === 'clean' && (
           <Notice tone="warn">
             清洁安装会先卸载设备上的旧版本，<b>应用数据（登录状态、本地缓存）会一并清除</b>，
-            且需要从 APK 里读出包名。
+            且需要从安装包里读出包名。
+          </Notice>
+        )}
+
+        {isAab && mode === 'overwrite' && (
+          <Notice tone="accent">
+            AAB 里的模块是未签名的，<b>本程序会用调试密钥签名后再安装</b>。
+            如果设备上已装的这个应用是正式签名，覆盖安装会报签名不一致 ——
+            改用<b>清洁安装</b>即可（会清掉应用数据）。
           </Notice>
         )}
 
@@ -852,7 +910,7 @@ function ApkPanel() {
             variant="primary"
             onClick={installSelected}
             loading={installing}
-            disabled={!current || !apkPath || busy}
+            disabled={!current || !apkPath || busy || (isAab && !aabReady)}
           >
             开始安装
           </Button>
@@ -886,12 +944,124 @@ function ApkPanel() {
           避免「界面说成功了、手机上却没有」。但只要有多台设备同时在线，
           <b>开装前一定会先问你装到哪台</b>：装到别的设备上时，装后复核同样会通过
           （包确实装上了，只是不在你要的那台上），所以这一步不能省。
-          提示：把 APK 拖到本程序窗口任意位置也能安装，同样会弹出进度并防止重复安装；
-          拖到投屏窗口则由 scrcpy 直接安装（无本程序弹窗）。其他文件请拖到投屏窗口，会自动存入
-          Download 目录。
+          提示：把安装包拖到本程序窗口任意位置也能安装，同样会弹出进度并防止重复安装；
+          拖到投屏窗口则由 scrcpy 直接安装（仅支持 APK，无本程序弹窗）。其他文件请拖到投屏窗口，
+          会自动存入 Download 目录。
         </Notice>
       </div>
     </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* AAB 环境提示                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * AAB 安装依赖两样外部工具：Java 11+ 与 bundletool。
+ * 都缺的时候直接告诉用户怎么补，而不是等他点了安装之后再报错。
+ */
+function AabEnvNotice() {
+  const toast = useApp((s) => s.toast);
+  const [env, setEnv] = useState<AabEnv | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ percent: number; received: number } | null>(null);
+
+  const load = async (force = false) => {
+    try {
+      const r = await call<AabEnv>(() => window.adbApi.aabEnv(force), { silent: true });
+      setEnv(r ?? null);
+    } catch {
+      /* 探测失败不打扰用户 */
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  /* 下载进度由主进程推过来 */
+  useEffect(() => {
+    const off = window.adbApi.on('push:aabDownload', (p: any) => {
+      if (p && typeof p.percent === 'number') setProgress(p);
+    });
+    return off;
+  }, []);
+
+  const download = async () => {
+    setBusy(true);
+    setProgress({ percent: 0, received: 0 });
+    try {
+      await call(() => window.adbApi.downloadBundletool(), { silent: true });
+      toast('success', 'bundletool 已下载完成');
+      await load(true);
+    } catch (e) {
+      toast('error', '下载失败', (e as Error).message);
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
+  if (!env) return <Notice tone="accent">正在检测 AAB 安装环境…</Notice>;
+
+  if (env.ready) {
+    return (
+      <div data-aab-env="ready">
+        <Notice tone="success">
+          <b>AAB 安装环境已就绪</b>：{env.javaDesc}，bundletool {env.bundletoolVersion}。
+          AAB 会先按目标设备的配置拆包，再以 install-multiple 安装（同一台设备第二次起复用缓存）。
+        </Notice>
+      </div>
+    );
+  }
+
+  return (
+    <div data-aab-env="incomplete">
+      <Notice tone="warn">
+        <b>AAB 安装环境不完整</b>
+        <div style={{ marginTop: 6 }}>{env.reason}</div>
+        <div className="row" style={{ marginTop: 10, gap: 8 }}>
+          {!env.bundletoolReady && (
+            <Button variant="primary" size="sm" onClick={download} loading={busy}>
+              下载 bundletool（约 31 MB）
+            </Button>
+          )}
+          {env.bundletoolReady && (
+            <span className="text-dim">
+              bundletool 已就位：<span className="mono">{env.bundletoolPath}</span>
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => window.adbApi.openBundletoolDir()}
+            title="在资源管理器中打开，可手动放入 bundletool 或 JRE"
+          >
+            打开工具目录
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => load(true)}>
+            重新检测
+          </Button>
+        </div>
+        {progress && (
+          <div className="aab-dl">
+            <div className="aab-dl-bar">
+              <i style={{ width: `${progress.percent}%` }} />
+            </div>
+            <span className="text-dim">
+              {progress.percent}%（{(progress.received / 1024 / 1024).toFixed(1)} MB）
+            </span>
+          </div>
+        )}
+        {!env.javaOk && (
+          <div className="text-dim" style={{ marginTop: 8 }}>
+            需要 Java 11 及以上。装好 JDK/JRE 后点「重新检测」；
+            也可以把便携版 JRE 解压到程序的 <span className="mono">bin\jre</span> 目录（免安装 Java）。
+          </div>
+        )}
+      </Notice>
+    </div>
   );
 }
 

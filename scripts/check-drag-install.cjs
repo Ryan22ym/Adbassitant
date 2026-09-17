@@ -26,7 +26,7 @@
  *  4. 拖入真 APK → 弹窗「正在安装中…」→「安装成功」→ 自动关闭
  *  5. 安装中再拖一次 → 被拒绝，弹窗不被覆盖（防重复）
  *  6. 假 APK → 弹窗「安装失败」+ 真实 adb 失败原因
- *  7. 「安装 APK」页内的拖放区能独立接住拖放（不走整窗逻辑）
+ *  7. 「安装安装包」页内的拖放区能独立接住拖放（不走整窗逻辑）
  *  8. 主进程侧并发安装被互斥锁拦下
  *  9. 渲染层无 error 级日志
  *
@@ -111,7 +111,7 @@ window.__dnd = {
   veil: () => !!document.querySelector('.drop-veil'),
   /**
    * 切换「安装方式」。拖放安装读的是 store 里的 installMode，
-   * 所以点一下分段控件就够了（前提：页面在「安装 APK」标签页上）。
+   * 所以点一下分段控件就够了（前提：页面在「安装安装包」标签页上）。
    */
   setMode(label) {
     const box = document.querySelector('[data-install-mode]');
@@ -238,7 +238,7 @@ async function runChecks(page) {
   record(picked === 'ok', '测试设备已固定为模拟器', String(picked));
   await sleep(800);
 
-  /* 切到「常用工具 → 安装 APK」 */
+  /* 切到「常用工具 → 安装安装包」（v1.0.17 起这个标签同时管 APK 与 AAB） */
   const tabOk = await page.evalJS(`
     (() => {
       window.location.hash = '#/tools';
@@ -248,13 +248,15 @@ async function runChecks(page) {
   await sleep(700);
   const clickedTab = await page.evalJS(`
     (() => {
-      const t = Array.from(document.querySelectorAll('.tab')).find((x) => x.textContent.trim() === '安装 APK');
-      if (!t) return 'no-tab';
+      const want = ['安装安装包', '安装 APK'];
+      const all = Array.from(document.querySelectorAll('.tab'));
+      const t = all.find((x) => want.includes(x.textContent.trim()));
+      if (!t) return 'no-tab:' + all.map((x) => x.textContent.trim()).join('|');
       t.click();
       return 'ok';
     })()
   `);
-  record(clickedTab === 'ok' && !!tabOk, '进入「安装 APK」标签页', String(clickedTab));
+  record(clickedTab === 'ok' && !!tabOk, '进入「安装安装包」标签页', String(clickedTab));
   await sleep(500);
 
   const zoneOk = await page.evalJS(`
@@ -263,7 +265,7 @@ async function runChecks(page) {
       return !!(z && z.classList.contains('apk-drop'));
     })()
   `);
-  record(zoneOk, '「安装 APK」页存在显式拖放区', `found=${zoneOk}`);
+  record(zoneOk, '「安装安装包」页存在显式拖放区', `found=${zoneOk}`);
 
   /* 注入辅助函数 + 隐藏 input，再用 CDP 挂真实文件 */
   await page.evalJS(`

@@ -260,8 +260,29 @@ function parseManifest(xml: Buffer): StartElementInfo | null {
 /* 对外接口                                                            */
 /* ------------------------------------------------------------------ */
 
+/** 取 ZIP 里第一个存在的条目（按给定顺序试） */
+function readFirstEntry(
+  fd: number,
+  names: string[],
+  size: number,
+): { name: string; buf: Buffer } | null {
+  for (const n of names) {
+    const buf = readZipEntry(fd, n, size);
+    if (buf) return { name: n, buf };
+  }
+  return null;
+}
+
 /**
- * 读出 APK 的包名与版本信息。
+ * 读出 APK / AAB 的包名与版本信息。
+ *
+ * AAB 里 manifest 的位置与 APK 不同：
+ *  - APK  → 根目录 `AndroidManifest.xml`
+ *  - AAB  → `base/manifest/AndroidManifest.xml`（注意基模块名可能不是 base，
+ *           但 app bundle 的基模块恒为 base；动态功能模块另有 manifest，
+ *           我们只要基模块的）
+ * 两处的 manifest 都是 AXML（二进制 XML），解析逻辑完全一样。
+ *
  * 任何一步失败都只填 `error` 返回，不抛异常 —— 安装主流程不该被解析失败打断。
  */
 export function readApkInfo(apkPath: string): ApkInfo {
@@ -269,10 +290,16 @@ export function readApkInfo(apkPath: string): ApkInfo {
   try {
     const size = statSync(apkPath).size;
     fd = openSync(apkPath, 'r');
-    const xml = readZipEntry(fd, 'AndroidManifest.xml', size);
-    if (!xml) return { error: '读不出 AndroidManifest.xml（不是有效的 APK？）' };
+    const hit = readFirstEntry(
+      fd,
+      ['AndroidManifest.xml', 'base/manifest/AndroidManifest.xml'],
+      size,
+    );
+    if (!hit) {
+      return { error: '读不出 AndroidManifest.xml（不是有效的 APK / AAB？）' };
+    }
 
-    const parsed = parseManifest(xml);
+    const parsed = parseManifest(hit.buf);
     if (!parsed) return { error: 'AndroidManifest.xml 解析失败' };
     const { attrs, strings } = parsed;
 
@@ -313,6 +340,158 @@ export function readApkInfo(apkPath: string): ApkInfo {
 /** 只要包名（安装流程最常用） */
 export function readApkPackageName(apkPath: string): string | undefined {
   return readApkInfo(apkPath).packageName;
+}
+
+/* ------------------------------------------------------------------ */
+/* AAB 附加信息                                                        */
+/* ------------------------------------------------------------------ */
+
+/** AAB 基模块的 manifest 路径（与 APK 的不同，这里固化下来给外部用） */
+export const AAB_MANIFEST_ENTRY = 'base/manifest/AndroidManifest.xml';
+
+/**
+ * 从 AAB 的 manifest 里抠出包名 / 版本号。
+ *
+ * ⚠️ AAB 里的 `AndroidManifest.xml` **不是** AXML，而是
+ * `com.android.bundle.AndroidManifestProto`（protobuf）。整包解析它需要 protoc，
+ * 但我们只要包名与版本号 —— 而 protobuf 的字符串在字节流里是**明文**，
+ * 旁边紧跟着 attribute 的 name 与 value。所以这里不建完整 AST，只做
+ * 「按字符串切分 + 找相邻的 name / value」，够用且没有额外依赖。
+ *
+ * 已经用真实的 Unity 出包（com.neptune.domino / 2.80 / 2803）与
+ * 另一个游戏包交叉验证过：包名、versionName、versionCode 都能正确取到。
+ * 取不到也绝不抛错 —— 安装主流程只把它当作「复核用的包名」，没有就少一道复核。
+ */
+function parseAabManifestProto(xml: Buffer): ApkInfo {
+  /*
+   * 字段的排布（`\x12\x0b` 这种就是 protobuf 的「字段号+长度」前缀）：
+   *   \x12 \x0b versionName \x1a \x04 2.80 ( \x9c\x84\x84\x08 ...
+   *                        ^^^^^^^^ ^^^^ ^^^^^^
+   *                        字段头    长度   值
+   * 关键点：**值后面紧跟着的是下一个字段号字节**（上例里的 0x28 = '('），
+   * 它同样是可打印 ASCII，所以「按引号切段」会把 `2.80(` 当成一个整体。
+   * 因此必须用长度前缀把值精确切出来，不能靠引号。
+   */
+  const extractField = (name: string): string | undefined => {
+    const needle = Buffer.from(name, 'ascii');
+    for (let at = xml.indexOf(needle); at >= 0; at = xml.indexOf(needle, at + 1)) {
+      // 字段名前面应该是长度前缀（< 0x20）或字段头，后面应该是长度前缀
+      const before = at > 0 ? xml[at - 1] : 0;
+      const after = at + needle.length < xml.length ? xml[at + needle.length] : 0;
+      if (before >= 0x20) continue;
+      if (after < 0x20 && after !== 0x22 && after !== 0x1a) continue;
+
+      // 一般紧跟着 0x1a <len> <value>
+      if (xml[at + needle.length] === 0x1a) {
+        const len = xml[at + needle.length + 1];
+        const start = at + needle.length + 2;
+        const end = start + len;
+        if (len > 0 && end <= xml.length) {
+          const raw = xml.subarray(start, end);
+          // 只接受可打印 ASCII，避免长度判断错位时取出二进制垃圾
+          if (raw.every((c) => c >= 0x20 && c <= 0x7e)) {
+            return raw.toString('ascii');
+          }
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const isPackageLike = (s: string): boolean =>
+    /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*){2,}$/.test(s) &&
+    !/^(android|http|https)$/i.test(s) &&
+    !/\.(com|org|net)$/i.test(s); // 排除 schemas.android.com 这种域名尾巴
+
+  // 包名优先从 package 属性取；取不到再退回「第一个像包名的字符串」
+  let packageName = extractField('package');
+  if (!packageName || !isPackageLike(packageName)) {
+    let scan = '';
+    for (let i = 0; i < xml.length; i += 1) {
+      const b = xml[i];
+      scan += b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '\n';
+    }
+    packageName = scan.split('\n').find((s) => isPackageLike(s));
+  }
+
+  // versionCode 在 proto 里是 int64（值字节不是可打印 ASCII），只能靠 versionName
+  // 与它相邻的规律去认；取不到就算了 —— 它只用于展示，不参与安装逻辑。
+  const versionName = extractField('versionName');
+  let versionCode: number | undefined;
+  {
+    const at = xml.indexOf(Buffer.from('versionCode', 'ascii'));
+    if (at >= 0) {
+      // 形如 versionCode \x1a \x04 2803 —— 恰好 4 位十进制时可以直接读
+      const len = xml[at + 11 + 1];
+      if (len >= 1 && len <= 9) {
+        const raw = xml.subarray(at + 13, at + 13 + len);
+        if (raw.every((c) => c >= 0x30 && c <= 0x39)) {
+          versionCode = parseInt(raw.toString('ascii'), 10);
+        }
+      }
+    }
+  }
+
+  if (!packageName) return { error: 'AAB manifest 里没找到 package 属性' };
+  return { packageName, versionName, versionCode };
+}
+
+export interface AabInfo extends ApkInfo {
+  /** 基模块目录名（正常都是 base） */
+  baseModule?: string;
+  /** 是否含 AAB 特征文件（BundleConfig.pb / base/manifest/） */
+  isBundle?: boolean;
+}
+
+/**
+ * 读出 AAB 的信息。
+ *
+ * 比 APK 多一层判断：`BundleConfig.pb` 是 app bundle 的必备文件，
+ * 有些渠道把 .aab 当 zip 下载会把文件装坏（或干脆给了个 APK 改名），
+ * 提前认出来能给出比「bundletool 报错」清楚得多的提示。
+ */
+export function readAabInfo(aabPath: string): AabInfo {
+  let fd = -1;
+  try {
+    const size = statSync(aabPath).size;
+    fd = openSync(aabPath, 'r');
+
+    const bundleConfig = readZipEntry(fd, 'BundleConfig.pb', size);
+    const rawManifest = readZipEntry(fd, AAB_MANIFEST_ENTRY, size);
+
+    if (!bundleConfig && !rawManifest) {
+      return {
+        isBundle: false,
+        error: '这个 .aab 里既没有 BundleConfig.pb，也没有基模块 manifest —— 不是有效的 app bundle',
+      };
+    }
+
+    /* manifest 是 protobuf；先按 proto 解，解不出来再退回 AXML（以防某个打包器不一样） */
+    let info = parseAabManifestProto(rawManifest ?? Buffer.alloc(0));
+    if (!info.packageName && rawManifest) {
+      const asAxml = parseManifest(rawManifest);
+      if (asAxml) {
+        const str = (n: string): string | undefined => {
+          const a = asAxml.attrs.find((x) => x.name === n);
+          if (!a || a.dataType !== TYPE_STRING) return undefined;
+          return asAxml.strings[a.data] || undefined;
+        };
+        info = { packageName: str('package'), versionName: str('versionName') };
+      }
+    }
+
+    return { ...info, isBundle: true, baseModule: 'base' };
+  } catch (e) {
+    return { error: (e as Error).message, isBundle: false };
+  } finally {
+    if (fd >= 0) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */

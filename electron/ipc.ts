@@ -1,5 +1,5 @@
 import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import {
   IPC,
@@ -9,6 +9,7 @@ import {
   type LogcatFilter,
   type WeakNetParams,
   type InstallMode,
+  type AabEnv,
 } from '../shared/types';
 import {
   listDevices,
@@ -49,6 +50,14 @@ import {
   setAppEnabled,
   extractApk,
 } from './services/files';
+import {
+  installBundle,
+  inspectAabEnv,
+  downloadBundletool,
+  bundletoolJarPath,
+  listBundleCache,
+  clearBundleCache,
+} from './services/aab';
 import {
   startLogcat,
   stopLogcat,
@@ -371,6 +380,51 @@ export function registerIpc() {
       ) => installApk(serial, apkPath, mode, grantAll),
     ),
   );
+
+  /* ---------------- AAB（Android App Bundle） ---------------- */
+
+  ipcMain.handle(
+    IPC.AAB_INSTALL,
+    wrap(
+      (
+        _e,
+        serial: string | undefined,
+        aabPath: string,
+        mode: InstallMode = 'overwrite',
+        grantAll = false,
+      ) =>
+        installBundle(aabPath, {
+          serial: serial || '',
+          mode,
+          grantAll,
+          // 拆包进度实时推给界面：一个大 bundle 要跑十几秒，没有输出会像卡死
+          onLine: (line) => send(IPC.PUSH_AAB_OUTPUT, { line }),
+        }),
+    ),
+  );
+
+  ipcMain.handle(IPC.AAB_ENV, wrap((_e, force = false) => inspectAabEnv(force) as Promise<AabEnv>));
+
+  ipcMain.handle(
+    IPC.AAB_DOWNLOAD_TOOL,
+    wrap(async () => {
+      const r = await downloadBundletool((p) => send(IPC.PUSH_AAB_DOWNLOAD, p));
+      return { ...r, jarPath: bundletoolJarPath() };
+    }),
+  );
+
+  ipcMain.handle(
+    IPC.AAB_OPEN_TOOL_DIR,
+    wrap(async () => {
+      const dir = dirname(bundletoolJarPath());
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      shell.showItemInFolder(bundletoolJarPath());
+      return dir;
+    }),
+  );
+
+  ipcMain.handle(IPC.AAB_CACHE_LIST, wrap(() => listBundleCache()));
+  ipcMain.handle(IPC.AAB_CACHE_CLEAR, wrap(() => clearBundleCache()));
 
   /* ---------------- 应用 / Monkey ---------------- */
 

@@ -31,6 +31,15 @@ const IPC = {
   FILE_REVEAL: 'file:reveal',
   FILE_OPEN: 'file:open',
   APK_INSTALL: 'apk:install',
+
+  /* AAB（Android App Bundle） */
+  AAB_INSTALL: 'aab:install',
+  AAB_ENV: 'aab:env',
+  AAB_DOWNLOAD_TOOL: 'aab:downloadTool',
+  AAB_OPEN_TOOL_DIR: 'aab:openToolDir',
+  AAB_CACHE_LIST: 'aab:cacheList',
+  AAB_CACHE_CLEAR: 'aab:cacheClear',
+
   MONKEY_RUN: 'monkey:run',
   MONKEY_STOP: 'monkey:stop',
   APP_LIST: 'app:list',
@@ -89,6 +98,8 @@ const IPC = {
   PUSH_LOGCAT_LINES: 'push:logcatLines',
   PUSH_LOGCAT_STATUS: 'push:logcatStatus',
   PUSH_WEAKNET_STATUS: 'push:weaknetStatus',
+  PUSH_AAB_OUTPUT: 'push:aabOutput',
+  PUSH_AAB_DOWNLOAD: 'push:aabDownload',
 } as const;
 
 /**
@@ -152,6 +163,23 @@ const api = {
     mode: 'overwrite' | 'clean' | 'fresh' = 'overwrite',
     grantAll = false,
   ) => invoke(IPC.APK_INSTALL, serial, apkPath, mode, grantAll),
+
+  /* AAB（Android App Bundle）：走 bundletool 拆包后 install-multiple */
+  /** AAB 安装能力全景（Java / bundletool 是否就位） */
+  aabEnv: (force = false) => invoke(IPC.AAB_ENV, force),
+  /** 安装 AAB —— serial 必须明确，AAB 绝不能猜目标设备 */
+  installBundle: (
+    serial: string | undefined,
+    aabPath: string,
+    mode: 'overwrite' | 'clean' | 'fresh' = 'overwrite',
+    grantAll = false,
+  ) => invoke(IPC.AAB_INSTALL, serial, aabPath, mode, grantAll),
+  /** 下载 bundletool（进度走 push:aabDownload） */
+  downloadBundletool: () => invoke(IPC.AAB_DOWNLOAD_TOOL),
+  openBundletoolDir: () => invoke(IPC.AAB_OPEN_TOOL_DIR),
+  /** AAB 拆包产物缓存 */
+  aabCache: () => invoke(IPC.AAB_CACHE_LIST),
+  clearAabCache: () => invoke(IPC.AAB_CACHE_CLEAR),
 
   /**
    * 取拖放进来的文件在磁盘上的真实路径。
@@ -251,6 +279,8 @@ const api = {
       IPC.PUSH_LOGCAT_LINES,
       IPC.PUSH_LOGCAT_STATUS,
       IPC.PUSH_WEAKNET_STATUS,
+      IPC.PUSH_AAB_OUTPUT,
+      IPC.PUSH_AAB_DOWNLOAD,
       'push:screenshot',
     ];
     if (!allowed.includes(channel as any)) {

@@ -110,17 +110,24 @@ def main():
     ok = after.startswith(version)
 
     # resources/bin 逐文件 md5
+    #
+    # 注意：bin/ 里既有文件也有子目录（如 bundletool/ 装着 jar 与调试密钥库），
+    # 所以必须递归比对 —— 早期版本只 listdir 一层，遇到目录会直接 PermissionError。
     dst_bin = os.path.join(TARGET, 'resources', 'bin')
     if os.path.isdir(unpacked_bin) and os.path.isdir(dst_bin):
-        names = sorted(os.listdir(unpacked_bin))
+        pairs = []
+        for root, _dirs, files in os.walk(unpacked_bin):
+            for f in files:
+                sp = os.path.join(root, f)
+                rel = os.path.relpath(sp, unpacked_bin)
+                pairs.append((rel, sp, os.path.join(dst_bin, rel)))
         bad = []
-        for n in names:
-            sp, dp = os.path.join(unpacked_bin, n), os.path.join(dst_bin, n)
+        for rel, sp, dp in sorted(pairs):
             if not os.path.exists(dp):
-                bad.append((n, 'MISSING'))
+                bad.append((rel, 'MISSING'))
             elif md5(sp) != md5(dp):
-                bad.append((n, 'DIFF'))
-        print('bin 比对 :', '%d 个文件，全一致' % len(names) if not bad else bad)
+                bad.append((rel, 'DIFF'))
+        print('bin 比对 :', '%d 个文件，全一致' % len(pairs) if not bad else bad)
         ok = ok and not bad
 
     # asar 里不能残留旧版本号
@@ -142,9 +149,15 @@ def main():
               % (cur, 'YES' if notes_hit else 'NO（发版忘了补版本说明？）'))
         print('           上一版本 %s 命中 %d 次（历史说明的 key，属正常）'
               % (prev, b.count(prev.encode())))
-        for key in (b'install-mask', b'drop-veil', b'install-chip'):
+        for key in (b'install-mask', b'drop-veil', b'install-chip',
+                    b'install-kind-chip', b'aab:install', b'install-kind-chip aab'):
             print('           %s: %d' % (key.decode(), b.count(key)))
         ok = ok and cur > 0 and notes_hit > 0
+        # AAB 功能痕迹：新增的关键字符串必须真的进包了
+        for key in (b'aab:install', b'install-kind-chip'):
+            if b.count(key) == 0:
+                print('           ⚠ 缺少 AAB 痕迹：%s' % key.decode())
+                ok = False
 
     print()
     print('结果     :', 'OK' if ok else '失败')
