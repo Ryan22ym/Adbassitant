@@ -641,6 +641,12 @@ async function runInElectron() {
   }
 
   const INSTALLED = process.argv.includes('--installed');
+  // 安装版分支跑在 **Electron 主进程** 里，而主进程没有全局 WebSocket（见 _ws-shim.cjs），
+  // 不打这个垫片，CDP 客户端会直接抛 "WebSocket is not defined" 变成假失败。
+  if (INSTALLED) {
+    const patched = require('./_ws-shim.cjs').install();
+    log(`ws-shim: ${patched ? '已挂载' : '已存在（未覆盖）'}`);
+  }
   const aabFile = pickAab();
   log(`aab fixture: ${safe(aabFile || 'none')}`);
   if (aabFile) log(`size: ${(fs.statSync(aabFile).size / 1048576).toFixed(1)}MB`);

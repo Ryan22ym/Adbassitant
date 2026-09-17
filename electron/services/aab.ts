@@ -48,8 +48,9 @@ import { tmpdir } from 'os';
 import { adbPath, binDir, log, runAdb } from './adb';
 import { readAabInfo } from './apk';
 import { findJava, javaVersionOk, describeJava, JavaInfo } from './java';
+import { resolveSigning } from './aab-signing';
 import { INSTALL_MODE_LABEL } from '../../shared/types';
-import type { InstallMode, InstallResult, AabEnv } from '../../shared/types';
+import type { InstallMode, InstallResult, AabEnv, AabSigningConfig } from '../../shared/types';
 
 /* ------------------------------------------------------------------ */
 /* 环境与工具链                                                        */
@@ -310,13 +311,11 @@ export async function downloadBundletool(
 }
 
 /* ------------------------------------------------------------------ */
-/* 调试签名 keystore                                                   */
+/* 签名                                                                */
 /* ------------------------------------------------------------------ */
 
 /**
- * 调试密钥库（与 Android SDK 的 debug.keystore 完全同参数）。
- *
- * 为什么必须自己造一个
+ * 为什么必须自己带一份调试密钥库
  * ---------------------------------------------------------------
  * bundletool 的文档说「不给 --ks 就用默认调试密钥库」，但那个默认值指的是
  * `~/.android/debug.keystore` —— 只有装过 Android SDK 并跑过一次构建的机器才有。
@@ -325,49 +324,21 @@ export async function downloadBundletool(
  * install-multiple 阶段被系统以「没有证书」拒掉，报错还很难懂。
  * 实测确认：那一版全是 `WARNING: The APKs won't be signed...`。
  *
- * 所以这里带上一份调试密钥库。它只用于本地调试安装，与商店发布签名无关 ——
- * 用它的代价是「同一个应用如果之前是用正式签名装的，覆盖安装会签名冲突」，
- * 这时引导用户用「清洁安装」（先卸载）即可。
+ * 但「用调试密钥库」本身也有代价 —— 见 aab-signing.ts 开头的说明：
+ * 换签名会改 key hash，Facebook / 微信 / Google 登录、推送全都会失配。
+ * 所以签名方式做成了可配置的三选一（随包调试 / 我的密钥库 / 不签名），
+ * 真正的解析逻辑在 aab-signing.ts，这里只负责取参数拼命令行。
  */
-const DEBUG_KS_FILE = 'debug.keystore';
-const DEBUG_KS_PASS = 'android';
-const DEBUG_KS_ALIAS = 'androiddebugkey';
 
-/** 随包调试密钥库路径 */
-function bundledDebugKeystore(): string {
-  return join(binDir(), 'bundletool', DEBUG_KS_FILE);
-}
-
-/** 系统默认调试密钥库（Android SDK 生成的） */
-function sdkDebugKeystore(): string {
-  const home = process.env.USERPROFILE || process.env.HOME || '';
-  return home ? join(home, '.android', DEBUG_KS_FILE) : '';
-}
-
-/**
- * 找一个可用的签名密钥库。优先级：
- *   1. 随包 bin/bundletool/debug.keystore（自带的，最稳）
- *   2. ~/.android/debug.keystore（用户装了 SDK 的话）
- * 两个都没有时返回 null，调用方会明确告诉用户去补。
- */
-export function debugKeystore(): string | null {
-  const bundled = bundledDebugKeystore();
-  if (existsSync(bundled)) return bundled;
-  const sdk = sdkDebugKeystore();
-  if (sdk && existsSync(sdk)) return sdk;
-  return null;
-}
-
-/** 签名相关的命令行参数（没有密钥库就返回空，让 bundletool 走它自己的默认逻辑） */
-function signingArgs(): string[] {
-  const ks = debugKeystore();
-  if (!ks) return [];
-  return [
-    `--ks=${ks}`,
-    `--ks-pass=pass:${DEBUG_KS_PASS}`,
-    `--key-pass=pass:${DEBUG_KS_PASS}`,
-    `--ks-key-alias=${DEBUG_KS_ALIAS}`,
-  ];
+/** 签名相关的命令行参数（跳过签名时返回空数组） */
+async function signingArgs(override?: Partial<AabSigningConfig>): Promise<{
+  args: string[];
+  desc: string;
+  ok: boolean;
+  reason?: string;
+}> {
+  const { info, args } = await resolveSigning(override);
+  return { args, desc: info.desc, ok: info.ok, reason: info.reason };
 }
 
 /* ------------------------------------------------------------------ */
@@ -489,8 +460,20 @@ async function deviceKey(serial: string): Promise<string> {
   return `${serial.replace(/[^\w.-]/g, '_')}-sdk${sdk}`;
 }
 
-function cachedApksDir(file: string, key: string): string {
-  return join(cacheRoot(), `${fingerprint(file)}-${key}`);
+/**
+ * 签名标签：把签名参数压成一段短 hash 拼进缓存目录名。
+ *
+ * 为什么不直接把路径拼进去：路径含盘符/反斜杠/中文，做目录名不安全，
+ * 而且密码也会跟着进名字（虽然只是本地临时目录，也没必要）。
+ * 用 hash 既短又不会泄漏，还能保证「同签名复用、不同签名重拆」。
+ */
+function signingKeyTag(args: string[]): string {
+  if (!args.length) return 'nosign';
+  return createHash('sha1').update(args.join('|')).digest('hex').slice(0, 10);
+}
+
+function cachedApksDir(file: string, key: string, signTag = 'nosign'): string {
+  return join(cacheRoot(), `${fingerprint(file)}-${key}-${signTag}`);
 }
 
 /* ------------------------------------------------------------------ */
@@ -510,6 +493,11 @@ export interface BundleInstallOptions {
   useCache?: boolean;
   /** 安装成功后是否删除临时产物（默认保留，便于连装第二台） */
   cleanAfter?: boolean;
+  /**
+   * 本次安装使用的签名配置（不传则用用户设置里那份）。
+   * 注意：签名参与拆包结果的指纹 —— 换了签名必须重拆，不能吃缓存。
+   */
+  signing?: Partial<AabSigningConfig>;
 }
 
 export interface BundleInstallResult extends InstallResult {
@@ -567,9 +555,24 @@ export async function installBundle(
   say(`Java：${describeJava(rt.java)}`);
   say(`bundletool：${basename(rt.jar!)}`);
 
-  /* ---- 2. 设备侧准备 ---- */
+  /* ---- 2. 签名 ---- */
+  /*
+   * 签名必须在拆包之前定下来，并且参与缓存目录的命名 ——
+   * 换了签名却复用旧产物，等于白改（装上去的还是旧 key hash 的包，
+   * 而用户会以为「我已经换签名了怎么还不行」）。
+   */
+  const signing = await signingArgs(options.signing);
+  if (!signing.ok) {
+    throw new Error(
+      `签名配置不可用：${signing.reason || signing.desc}。` +
+        '可在安装页的「签名方式」里改用随包调试密钥库，或指定自己的密钥库。',
+    );
+  }
+  say(`签名：${signing.desc}`);
+
+  /* ---- 3. 设备侧准备 ---- */
   const key = await deviceKey(serial);
-  const apksDir = cachedApksDir(aabPath, key);
+  const apksDir = cachedApksDir(aabPath, key, signingKeyTag(signing.args));
   const apksFile = join(apksDir, 'app.apks');
   const specFile = join(apksDir, 'device-spec.json');
   const cacheHit = options.useCache !== false && existsSync(apksFile);
@@ -617,7 +620,7 @@ export async function installBundle(
     say(`复用上次的拆包产物：${apksDir}`);
     log('info', 'AAB', '复用上次的拆包产物（同一个 AAB、同一颗设备）');
   } else {
-    /* ---- 3. build-apks ---- */
+    /* ---- 4. build-apks ---- */
     try {
       rmSync(apksDir, { recursive: true, force: true });
     } catch {
@@ -626,7 +629,14 @@ export async function installBundle(
     mkdirSync(apksDir, { recursive: true });
 
     say(`正在为这台设备拆包（${(size / 1024 / 1024).toFixed(1)} MB，首次较慢）…`);
-    log('info', 'AAB', `bundletool build-apks（device-spec=${serial}）`);
+    log('info', 'AAB', `bundletool build-apks（device-spec=${serial}｜${signing.desc}）`);
+
+    // 把本次签名写进产物目录，方便下次诊断「这份缓存是哪个签名拆的」
+    try {
+      writeFileSync(join(apksDir, 'signing.txt'), signing.desc, 'utf8');
+    } catch {
+      /* ignore */
+    }
 
     const started = Date.now();
     // 先取设备规格（缓存命中则零成本），build 阶段就完全不用碰 adb 了
@@ -641,8 +651,8 @@ export async function installBundle(
         `--bundle=${aabPath}`,
         `--output=${apksFile}`,
         `--device-spec=${specFile}`,
-        // 必须显式带上调试密钥库，否则产出的是未签名 APK，安装阶段直接被拒
-        ...signingArgs(),
+        // 必须显式带上密钥库，否则产出的是未签名 APK，安装阶段直接被拒
+        ...signing.args,
         '--overwrite',
       ],
       (l) => say(l),
@@ -696,12 +706,13 @@ export async function installBundle(
     throw new Error(
       `安装失败：${reason || output || '未知原因'}` +
         (/INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match/i.test(output)
-          ? '。设备上已装的版本与这个 AAB 签名不一致，可改用「清洁安装」。'
+          ? '。设备上已装的版本与本次拆包所用的签名不一致，可改用「清洁安装」，' +
+            '或在「签名方式」里换成这台设备上原有版本所用的密钥库。'
           : ''),
     );
   }
 
-  /* ---- 5. 装后复核（与 APK 同一条硬规矩） ---- */
+  /* ---- 6. 装后复核（与 APK 同一条硬规矩） ---- */
   let verified: boolean | undefined;
   if (pkg) {
     for (let i = 0; i < 5; i += 1) {
@@ -718,6 +729,20 @@ export async function installBundle(
       );
     }
     log('success', 'AAB', `安装成功并已复核：${pkg} → ${serial}`);
+
+    /*
+     * 装了但用调试签名拆的包 —— 应用能跑，但凡是「按签名校验」的地方都会挂。
+     * 这条提示必须显式打出来，否则用户会把它当成我们工具的 bug 来报。
+     */
+    if (/调试密钥库/.test(signing.desc)) {
+      log(
+        'warn',
+        'AAB',
+        '本次用的是调试密钥库，应用的签名已被替换 —— ' +
+          'Facebook / 微信 / Google 等三方登录、推送、地图 key 都可能失效。' +
+          '如需保持原签名，请在「签名方式」里选「我的密钥库」并指定该应用的正式签名文件。',
+      );
+    }
   } else {
     log('success', 'AAB', `安装成功（读不出包名，未复核）：${basename(aabPath)} → ${serial}`);
   }

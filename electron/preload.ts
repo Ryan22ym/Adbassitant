@@ -39,6 +39,11 @@ const IPC = {
   AAB_OPEN_TOOL_DIR: 'aab:openToolDir',
   AAB_CACHE_LIST: 'aab:cacheList',
   AAB_CACHE_CLEAR: 'aab:cacheClear',
+  /* AAB 签名 */
+  AAB_SIGNING_GET: 'aab:signingGet',
+  AAB_SIGNING_SET: 'aab:signingSet',
+  AAB_SIGNING_PICK: 'aab:signingPick',
+  AAB_SIGNING_PROBE: 'aab:signingProbe',
 
   MONKEY_RUN: 'monkey:run',
   MONKEY_STOP: 'monkey:stop',
@@ -173,13 +178,27 @@ const api = {
     aabPath: string,
     mode: 'overwrite' | 'clean' | 'fresh' = 'overwrite',
     grantAll = false,
-  ) => invoke(IPC.AAB_INSTALL, serial, aabPath, mode, grantAll),
+    signing?: Record<string, unknown>,
+  ) => invoke(IPC.AAB_INSTALL, serial, aabPath, mode, grantAll, signing),
   /** 下载 bundletool（进度走 push:aabDownload） */
   downloadBundletool: () => invoke(IPC.AAB_DOWNLOAD_TOOL),
   openBundletoolDir: () => invoke(IPC.AAB_OPEN_TOOL_DIR),
   /** AAB 拆包产物缓存 */
   aabCache: () => invoke(IPC.AAB_CACHE_LIST),
   clearAabCache: () => invoke(IPC.AAB_CACHE_CLEAR),
+
+  /**
+   * AAB 拆包签名。
+   * 换签名会改应用的 key hash —— Facebook / 微信 / Google 登录、推送、
+   * 地图 key 都按「包名 + 签名」校验，用错签名装上去这些全废。
+   */
+  aabSigning: () => invoke(IPC.AAB_SIGNING_GET),
+  setAabSigning: (patch: Record<string, unknown>) => invoke(IPC.AAB_SIGNING_SET, patch),
+  /** 弹系统文件选择框挑一个密钥库，返回绝对路径（取消返回 null） */
+  pickKeystore: () => invoke(IPC.AAB_SIGNING_PICK),
+  /** 探测密钥库：能不能打开、有哪些别名、对应什么 key hash */
+  probeKeystore: (path: string, storePass: string, alias?: string) =>
+    invoke(IPC.AAB_SIGNING_PROBE, path, storePass, alias),
 
   /**
    * 取拖放进来的文件在磁盘上的真实路径。

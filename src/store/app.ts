@@ -7,6 +7,7 @@ import type {
   RecordSession,
   InstallMode,
   InstallKind,
+  SigningMode,
 } from '@shared/types';
 
 /* ------------------------------------------------------------------ */
@@ -81,6 +82,20 @@ export interface PendingInstall {
   files: InstallFile[];
   mode: InstallMode;
   grantAll: boolean;
+  /** AAB 本次要用的签名覆盖（界面上临时改的），不传则用后端设置里那份 */
+  signing?: InstallSigningOverride;
+}
+
+/**
+ * AAB 安装时的签名覆盖 —— 与后端 AabSigningConfig 同构。
+ * 持久化由主进程负责，这里只是界面上那份缓存。
+ */
+export interface InstallSigningOverride {
+  mode: SigningMode;
+  keystorePath?: string;
+  storePass?: string;
+  keyPass?: string;
+  keyAlias?: string;
 }
 
 interface AppState {
@@ -129,6 +144,15 @@ interface AppState {
    */
   installMode: InstallMode;
   setInstallMode: (m: InstallMode) => void;
+  /**
+   * AAB 拆包签名（与后端持久化的那份同步）。
+   *
+   * 独立于 installMode 之外的原因：签名的作用域是「这个应用」而不是「这次安装」，
+   * 用户换一次签名（比如换成游戏的正式签名）后，之后装同一个包一直用它才合理。
+   * 但设备上原有版本是用什么签名装的，只有用户自己知道 —— 所以必须可改。
+   */
+  installSigning: InstallSigningOverride;
+  setInstallSigning: (s: InstallSigningOverride) => void;
   /** 是否正把文件拖在窗口上方（用于显示全窗拖放提示） */
   dragActive: boolean;
   setDragActive: (v: boolean) => void;
@@ -230,6 +254,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   installMode: 'overwrite',
   setInstallMode: (installMode) => set({ installMode }),
+
+  installSigning: { mode: 'bundled-debug' },
+  setInstallSigning: (installSigning) => set({ installSigning }),
 
   dragActive: false,
   setDragActive: (dragActive) => {

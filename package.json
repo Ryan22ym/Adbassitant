@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -40,7 +40,11 @@
     "make:update": "python scripts/make-update.py --out out-v1.0.16",
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
     "check:aab-install": "node scripts/check-aab-install.cjs",
+    "check:aab-signing": "node scripts/check-aab-signing.cjs",
     "check:aab-ui": "python scripts/run-electron.py scripts/check-aab-ui.cjs --watch ui-shots/_aab-ui.log --until \"AAB UI CHECK DONE\" --timeout 600",
+    "check:aab-ui:installed": "python scripts/run-electron.py scripts/check-aab-ui.cjs --watch ui-shots/_aab-ui.log --until \"AAB UI CHECK DONE\" --timeout 600 -- --installed",
+    "check:drag-install:installed:electron": "python scripts/run-electron.py scripts/check-drag-install.cjs --watch ui-shots/_draginstall-installed.log --until \"DRAG INSTALL CHECK DONE\" --timeout 900 -- --installed",
+    "test:ws-shim": "python scripts/_verify-ws-shim.py",
     "check:install-modes": "python scripts/run-electron.py scripts/check-install-modes.cjs --watch ui-shots/_installmodes.log --until \"INSTALL MODES CHECK DONE\" --timeout 600"
   },
   "devDependencies": {

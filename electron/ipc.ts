@@ -10,6 +10,7 @@ import {
   type WeakNetParams,
   type InstallMode,
   type AabEnv,
+  type AabSigningConfig,
 } from '../shared/types';
 import {
   listDevices,
@@ -58,6 +59,12 @@ import {
   listBundleCache,
   clearBundleCache,
 } from './services/aab';
+import {
+  getSigningInfo,
+  setSigningConfig,
+  probeKeystore,
+  computeKeyHash,
+} from './services/aab-signing';
 import {
   startLogcat,
   stopLogcat,
@@ -392,11 +399,14 @@ export function registerIpc() {
         aabPath: string,
         mode: InstallMode = 'overwrite',
         grantAll = false,
+        // 本次安装的签名覆盖（界面上临时改的签名方式），不传则用设置里那份
+        signing?: Partial<AabSigningConfig>,
       ) =>
         installBundle(aabPath, {
           serial: serial || '',
           mode,
           grantAll,
+          signing,
           // 拆包进度实时推给界面：一个大 bundle 要跑十几秒，没有输出会像卡死
           onLine: (line) => send(IPC.PUSH_AAB_OUTPUT, { line }),
         }),
@@ -425,6 +435,54 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.AAB_CACHE_LIST, wrap(() => listBundleCache()));
   ipcMain.handle(IPC.AAB_CACHE_CLEAR, wrap(() => clearBundleCache()));
+
+  /* AAB 签名：换签名会改 key hash，三方登录 / 推送全靠它 */
+  ipcMain.handle(IPC.AAB_SIGNING_GET, wrap(() => getSigningInfo()));
+
+  ipcMain.handle(
+    IPC.AAB_SIGNING_SET,
+    wrap((_e, patch: Partial<AabSigningConfig>) => {
+      setSigningConfig(patch || {});
+      return getSigningInfo();
+    }),
+  );
+
+  /*
+   * 让用户挑一个密钥库文件。用 dialog 而不是让前端拿路径 ——
+   * 渲染进程拿不到本机绝对路径（沙箱），必须主进程代选。
+   */
+  ipcMain.handle(
+    IPC.AAB_SIGNING_PICK,
+    wrap(async (e) => {
+      const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+      const r = await dialog.showOpenDialog(win as BrowserWindow, {
+        title: '选择签名密钥库',
+        properties: ['openFile'],
+        filters: [
+          { name: 'Java 密钥库', extensions: ['jks', 'keystore', 'p12', 'pfx', 'bks'] },
+          { name: '全部文件', extensions: ['*'] },
+        ],
+      });
+      if (r.canceled || !r.filePaths.length) return null;
+      return r.filePaths[0];
+    }),
+  );
+
+  /* 探测一个密钥库：能不能打开、有哪些别名、对应什么 key hash */
+  ipcMain.handle(
+    IPC.AAB_SIGNING_PROBE,
+    wrap(async (_e, path: string, storePass: string, alias?: string) => {
+      const p = await probeKeystore(path, storePass);
+      if (!p.ok) return { ok: false, reason: p.reason, aliases: p.aliases };
+      const kh = await computeKeyHash(path, storePass, alias);
+      return {
+        ok: true,
+        aliases: p.aliases,
+        keyHash: kh.keyHash,
+        reason: kh.reason,
+      };
+    }),
+  );
 
   /* ---------------- 应用 / Monkey ---------------- */
 

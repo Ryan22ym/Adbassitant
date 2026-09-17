@@ -1,4 +1,9 @@
-import { useApp, type InstallFile, type InstallTask } from '@/store/app';
+import {
+  useApp,
+  type InstallFile,
+  type InstallTask,
+  type InstallSigningOverride,
+} from '@/store/app';
 import type { DeviceInfo, InstallKind } from '@shared/types';
 import { deviceLabel } from '@/components/layout';
 import { call } from '@/lib/ipc';
@@ -41,6 +46,11 @@ export interface InstallOptions {
    * 默认不传 → 由本模块决定（单设备直接装，多设备问用户）。
    */
   serial?: string;
+  /**
+   * AAB 拆包签名。不传则用 store 里那份（用户在安装页选过、已持久化的）。
+   * 只对 AAB 有效 —— APK 的签名是包里自带的，改不了。
+   */
+  signing?: InstallSigningOverride;
 }
 
 /** 成功弹窗自动关闭的延时（毫秒）—— 失败弹窗不自动关，需要用户看到原因 */
@@ -175,6 +185,8 @@ export async function installApkFiles(
 
   const mode = options.mode ?? 'overwrite';
   const grantAll = options.grantAll ?? false;
+  // 签名：调用方没给就用 store 里那份（用户在上次安装页选的、已持久化的）
+  const signing = options.signing ?? st.installSigning;
 
   const online = selectableDevices();
   if (online.length === 0) {
@@ -185,16 +197,16 @@ export async function installApkFiles(
   // 1. 调用方指定了目标，且那台在线 → 直接装
   if (options.serial) {
     const picked = online.find((d) => d.serial === options.serial);
-    if (picked) return runInstall(files, mode, grantAll, picked);
+    if (picked) return runInstall(files, mode, grantAll, picked, signing);
     st.toast('warn', `指定的设备 ${options.serial} 不在线`, '请重新选择安装目标');
   }
 
   // 2. 只有一台在线设备 → 没有歧义，直接装
-  if (online.length === 1) return runInstall(files, mode, grantAll, online[0]);
+  if (online.length === 1) return runInstall(files, mode, grantAll, online[0], signing);
 
   // 3. 多台在线 → 问用户，不猜
   st.setInstall(null);
-  st.setPendingInstall({ files, mode, grantAll });
+  st.setPendingInstall({ files, mode, grantAll, signing });
 }
 
 /**
@@ -224,6 +236,7 @@ async function runInstall(
   mode: InstallMode,
   grantAll: boolean,
   device: DeviceInfo,
+  signing?: InstallSigningOverride,
 ): Promise<void> {
   const total = files.length;
 
@@ -254,7 +267,15 @@ async function runInstall(
       const result =
         kind === 'aab'
           ? await call<InstallResult>(
-              () => window.adbApi.installBundle(device.serial, file.path, mode, grantAll),
+              () =>
+                window.adbApi.installBundle(
+                  device.serial,
+                  file.path,
+                  mode,
+                  grantAll,
+                  // 签名只对 AAB 有意义：APK 的签名是包里自带的，改不了
+                  signing as unknown as Record<string, unknown> | undefined,
+                ),
               { silent: true },
             )
           : await call<InstallResult>(

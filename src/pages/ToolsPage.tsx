@@ -12,12 +12,20 @@ import {
   Empty,
   Spinner,
 } from '@/components/ui';
-import { useApp, useCurrentDevice } from '@/store/app';
+import { useApp, useCurrentDevice, type InstallSigningOverride } from '@/store/app';
 import { call } from '@/lib/ipc';
 import { collectApks, installApkFiles, kindOf } from '@/lib/install';
 import { formatBytes, fileName } from '@/lib/format';
 import { deviceLabel } from '@/components/layout';
-import type { ScreenResolution, AppInfo, InstallMode, InstallKind, AabEnv } from '@shared/types';
+import type {
+  ScreenResolution,
+  AppInfo,
+  InstallMode,
+  InstallKind,
+  AabEnv,
+  AabSigningInfo,
+  SigningMode,
+} from '@shared/types';
 
 type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file';
 
@@ -30,8 +38,8 @@ const MODE_HINT: Record<InstallMode, string> = {
 
 /** AAB 的提示略有不同：它要先拆包，且签名与已装版本不一致时只能清洁安装 */
 const AAB_MODE_HINT: Record<InstallMode, string> = {
-  overwrite: '保留应用数据，直接覆盖升级。AAB 由 bundletool 用调试密钥签名，与原包签名不一致时会失败。',
-  clean: '先卸载旧版本（数据一起清掉）再安装。AAB 的签名与原包几乎必然不同，覆盖装不上时用这个。',
+  overwrite: '保留应用数据，直接覆盖升级。拆包时用的签名必须与设备上已装版本一致，否则会失败。',
+  clean: '先卸载旧版本（数据一起清掉）再安装。签名换了、覆盖装不上时用这个。',
   fresh: '不做覆盖：设备上已有该应用时直接报错，不会动到旧数据。',
 };
 
@@ -897,11 +905,13 @@ function ApkPanel() {
           </Notice>
         )}
 
+        {isAab && <SigningPanel busy={busy} />}
+
         {isAab && mode === 'overwrite' && (
           <Notice tone="accent">
-            AAB 里的模块是未签名的，<b>本程序会用调试密钥签名后再安装</b>。
-            如果设备上已装的这个应用是正式签名，覆盖安装会报签名不一致 ——
-            改用<b>清洁安装</b>即可（会清掉应用数据）。
+            AAB 里的模块是未签名的，<b>必须由本程序重新签名后才能安装</b>。
+            签名会决定应用的 key hash —— 换签名后 Facebook / 微信 / Google 登录、
+            推送、地图 key 都会失配，<b>想保持三方能力请改用该应用自己的正式签名</b>。
           </Notice>
         )}
 
@@ -1062,6 +1072,273 @@ function AabEnvNotice() {
         )}
       </Notice>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* AAB 签名                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * AAB 拆包签名选择 + key hash 展示。
+ *
+ * 为什么要做成界面可改：签名决定应用的 key hash，而 Facebook / 微信 /
+ * Google 登录、推送全都按「包名 + 签名」校验。默认的调试密钥库只适合
+ * 「反正是本地随便测一下」的场景；一旦要验证三方登录，就必须换成
+ * 这个应用自己的正式签名。之前这一点是写死的，装了 AAB 的人会撞上
+ * 「Invalid key hash」而完全不知道是安装器改了签名。
+ */
+function SigningPanel({ busy }: { busy: boolean }) {
+  const toast = useApp((s) => s.toast);
+  const signing = useApp((s) => s.installSigning);
+  const setSigning = useApp((s) => s.setInstallSigning);
+
+  const [info, setInfo] = useState<AabSigningInfo | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [showHash, setShowHash] = useState(false);
+  /** 自定义签名时的表单（与 store 里的值同步回写） */
+  const [ksPath, setKsPath] = useState('');
+  const [storePass, setStorePass] = useState('');
+  const [keyPass, setKeyPass] = useState('');
+  const [alias, setAlias] = useState('');
+
+  /* 第一次进入时把主进程持久化的配置读回来 */
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await call<AabSigningInfo>(() => window.adbApi.aabSigning(), { silent: true });
+        if (!r) return;
+        setInfo(r);
+        setSigning({
+          mode: r.config.mode,
+          keystorePath: r.config.keystorePath,
+          storePass: r.config.storePass,
+          keyPass: r.config.keyPass,
+          keyAlias: r.config.keyAlias,
+        });
+        setKsPath(r.config.keystorePath ?? '');
+        setStorePass(r.config.storePass ?? '');
+        setKeyPass(r.config.keyPass ?? '');
+        setAlias(r.config.keyAlias ?? '');
+      } catch {
+        /* 探测失败不打扰 */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 把表单写回主进程并刷新展示 */
+  const apply = async (patch: Partial<InstallSigningOverride>, tip?: string) => {
+    setProbing(true);
+    try {
+      const r = await call<AabSigningInfo>(
+        () =>
+          window.adbApi.setAabSigning({
+            mode: patch.mode ?? signing.mode,
+            keystorePath: patch.keystorePath ?? ksPath,
+            storePass: patch.storePass ?? storePass,
+            keyPass: patch.keyPass ?? keyPass,
+            keyAlias: patch.keyAlias ?? alias,
+          } as Record<string, unknown>),
+        { silent: true },
+      );
+      setInfo(r ?? null);
+      if (r) {
+        setSigning({
+          mode: r.config.mode,
+          keystorePath: r.config.keystorePath,
+          storePass: r.config.storePass,
+          keyPass: r.config.keyPass,
+          keyAlias: r.config.keyAlias,
+        });
+      }
+      if (r?.ok) toast('success', tip ?? '签名已生效', r.desc);
+      else if (r?.reason) toast('warn', '签名配置未生效', r.reason);
+    } catch (e) {
+      toast('error', '设置签名失败', (e as Error).message);
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  const pickKeystore = async () => {
+    try {
+      const p = await call<string | null>(() => window.adbApi.pickKeystore(), { silent: true });
+      if (!p) return;
+      setKsPath(p);
+      toast('info', '已选择密钥库', p);
+    } catch (e) {
+      toast('error', '选择密钥库失败', (e as Error).message);
+    }
+  };
+
+  const hash = info?.keyHash;
+
+  return (
+    <Field
+      label="拆包签名"
+      hint="AAB 的模块是未签名的，必须重新签。签名决定应用 key hash —— 三方登录/推送靠它校验。"
+    >
+      <div data-aab-signing={signing.mode} className="aab-signing">
+        <Segmented<SigningMode>
+          value={signing.mode}
+          onChange={(m) => {
+            if (m === signing.mode) return;
+            if (m === 'custom') {
+              // 切到自定义：先把表单值带过去，用户填完密码再点「应用」
+              setSigning({ ...signing, mode: 'custom', keystorePath: ksPath });
+            } else {
+              void apply({ mode: m });
+            }
+          }}
+          options={[
+            { value: 'bundled-debug', label: '随包调试密钥' },
+            { value: 'custom', label: '我的密钥库' },
+            { value: 'none', label: '不签名' },
+          ]}
+        />
+
+        {signing.mode === 'bundled-debug' && (
+          <div className="text-dim" style={{ marginTop: 8 }}>
+            用程序自带的 <span className="mono">debug.keystore</span> 签名，开箱即用。
+            <b>但签名是调试 key，应用原来的 key hash 会被替换</b> ——
+            想验证三方登录请改用「我的密钥库」。
+          </div>
+        )}
+
+        {signing.mode === 'custom' && (
+          <div className="col" style={{ marginTop: 10, gap: 8 }}>
+            <div className="row" style={{ gap: 8, alignItems: 'flex-end' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <Field label="密钥库文件">
+                  <Input
+                    value={ksPath}
+                    onChange={(e) => setKsPath(e.target.value)}
+                    placeholder="例如 D:\\keys\\myapp.jks（.jks / .keystore / .p12）"
+                  />
+                </Field>
+              </div>
+              <Button variant="default" size="sm" onClick={pickKeystore} disabled={busy}>
+                浏览…
+              </Button>
+            </div>
+
+            <div className="row row-wrap" style={{ gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <Field label="密钥库密码">
+                  <Input value={storePass} onChange={(e) => setStorePass(e.target.value)} type="password" placeholder="storepass" />
+                </Field>
+              </div>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <Field label="私钥密码" hint="留空则与密钥库密码相同">
+                  <Input value={keyPass} onChange={(e) => setKeyPass(e.target.value)} type="password" placeholder="keypass（可留空）" />
+                </Field>
+              </div>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <Field label="别名" hint="留空则自动取库里唯一那个">
+                  <Input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="例如 release" />
+                </Field>
+              </div>
+            </div>
+
+            <div className="row" style={{ gap: 8 }}>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={probing}
+                disabled={busy || !ksPath || !storePass}
+                onClick={() => void apply({ mode: 'custom' })}
+              >
+                应用并测试
+              </Button>
+              {info?.aliases?.length ? (
+                <span className="text-dim">
+                  库内别名：<span className="mono">{info.aliases.join('、')}</span>
+                </span>
+              ) : null}
+            </div>
+
+            {info && info.config.mode === 'custom' && !info.ok && info.reason && (
+              <Notice tone="warn">{info.reason}</Notice>
+            )}
+          </div>
+        )}
+
+        {signing.mode === 'none' && (
+          <Notice tone="warn">
+            不给 bundletool 任何签名参数。找不到默认调试密钥库时它会只打一行 WARNING，
+            然后产出<b>未签名 APK</b>，设备会拒绝安装 —— 仅用于排查问题。
+          </Notice>
+        )}
+
+        {/* 当前生效的签名状态 */}
+        {info && (
+          <div style={{ marginTop: 8 }}>
+            {info.ok ? (
+              <span className="text-dim">当前签名：{info.desc}</span>
+            ) : (
+              <span className="text-dim">签名不可用：{info.reason}</span>
+            )}
+          </div>
+        )}
+
+        {/*
+          key hash 是用户去三方后台登记时要复制的东西。
+          默认折叠 —— 平时用不上，需要时展开一次就够。
+        */}
+        {hash && (
+          <div style={{ marginTop: 8 }}>
+            <div className="row" style={{ gap: 8 }}>
+              <Button variant="ghost" size="sm" onClick={() => setShowHash((v) => !v)}>
+                {showHash ? '收起 key hash' : '查看 key hash'}
+              </Button>
+              {showHash && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    const txt = [
+                      `Facebook：${hash.facebook}`,
+                      `微信/QQ：${hash.wechat}`,
+                      `SHA1：${hash.sha1}`,
+                      `SHA256：${hash.sha256}`,
+                    ].join('\n');
+                    void navigator.clipboard?.writeText(txt);
+                    toast('success', 'key hash 已复制');
+                  }}
+                >
+                  复制全部
+                </Button>
+              )}
+            </div>
+            {showHash && (
+              <div className="aab-hash">
+                <div>
+                  <span className="aab-hash-k">Facebook</span>
+                  <span className="mono aab-hash-v">{hash.facebook || '（未读到）'}</span>
+                </div>
+                <div>
+                  <span className="aab-hash-k">微信/QQ</span>
+                  <span className="mono aab-hash-v">{hash.wechat || '（需要 JDK 才能算）'}</span>
+                </div>
+                <div>
+                  <span className="aab-hash-k">SHA1</span>
+                  <span className="mono aab-hash-v">{hash.sha1 || '（未读到）'}</span>
+                </div>
+                <div>
+                  <span className="aab-hash-k">SHA256</span>
+                  <span className="mono aab-hash-v">{hash.sha256 || '（未读到）'}</span>
+                </div>
+                <div className="text-dim" style={{ marginTop: 6 }}>
+                  拿 Facebook 那行去 <span className="mono">开发者后台 → 设置 → 基本 → 密钥散列</span> 登记，
+                  即可解决「Invalid key hash」。改签名后这行会变，别忘了重新登记。
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Field>
   );
 }
 

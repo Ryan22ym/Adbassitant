@@ -48,6 +48,9 @@ if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
 /** 安装版走 CDP 连安装目录的真身；开发态在 Electron 里加载 dist */
 const INSTALLED = process.argv.includes('--installed');
+// 安装版分支跑在 **Electron 主进程** 里，而主进程没有全局 WebSocket（见 _ws-shim.cjs），
+// 不打这个垫片，CDP 客户端会直接抛 "WebSocket is not defined" 变成假失败。
+if (INSTALLED) require('./_ws-shim.cjs').install();
 const LOG = path.join(OUT, INSTALLED ? '_draginstall-installed.log' : '_draginstall.log');
 
 /** 测试素材放系统临时目录，不污染仓库 */
@@ -996,7 +999,15 @@ async function openInstalled() {
       evalJS: (expr) => cdp.eval(expr),
       cdpSend: (m, p) => cdp.send(m, p),
       screenshot: async (file) => {
-        const r = await cdp.send('Page.captureScreenshot', { format: 'png' });
+        // fromSurface:false —— 安装版的窗口可能不在前台/没被合成，
+        // 默认的 fromSurface:true 在这种状态下会一直等不到帧（CDP timeout）。
+        // 关掉它走渲染层直接抓，窗口在后台也能出图。
+        let r;
+        try {
+          r = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: false });
+        } catch {
+          return 0;
+        }
         if (!r || !r.data) return 0;
         const buf = Buffer.from(r.data, 'base64');
         fs.writeFileSync(file, buf);
@@ -1038,10 +1049,25 @@ async function openInstalled() {
     }
     const ok = finish(session ? session.errors : []);
     if (session) session.close();
+    // ⚠️ 必须 return，不能只靠 process.exit：
+    //   Electron 主进程里 process.exit() 会在当前 tick 之后才真正生效，
+    //   底下开发态那段 app.whenReady().then(...) 仍会被注册并跑起来 ——
+    //   它会去 loadFile(dist/index.html)（安装版环境里没有 dist/）而抛错，
+    //   往同一份日志里写一条 FAIL，把一次干净的 47/0 污染成 47/1。
+    //   return 让 IIFE 正常结束，开发态那段根本不会被执行到。
     process.exit(ok ? 0 : 1);
+    return;
   }
 
   /* ---- 开发态：Electron 运行时里加载 dist ---- */
+  // 兜底断言：走到这里说明 INSTALLED 分支没能提前结束（见那里的 return 注释）。
+  // 宁可直接退出，也不要在安装版环境里 loadFile(dist/...) 抛错、污染日志。
+  if (INSTALLED) {
+    log('FATAL 安装版分支未提前结束（不应到达开发态代码）');
+    log('DRAG INSTALL CHECK DONE');
+    process.exit(1);
+    return;
+  }
   const electronMain = require('electron');
   if (typeof electronMain !== 'object' || !electronMain.app) {
     log('FATAL 未在 Electron 运行时中执行（请用 run-electron.py 起）');

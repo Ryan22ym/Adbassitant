@@ -1,7 +1,16 @@
-# ADB 桌面助手 v1.0.1
+# ADB 桌面助手 v1.0.18
 
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
+
+> **v1.0.18 更新**
+> - 「安装安装包」页新增**「签名方式」**：AAB 拆包时不再写死调试密钥库 ——
+>   可指定应用自己的正式密钥库（路径 + 密码 + 别名），保住原签名；
+> - 修掉由此引发的**三方登录 `Invalid key hash`**：Facebook / 微信 / QQ / Google 登录、
+>   推送、地图 key 都按「包名 + 签名」校验，用调试 key 重签名会让它们全部失效；
+> - 页面可**一键算出四个平台的 key hash**（Facebook / 微信 QQ / Google / SHA-256）直接粘后台；
+> - 签名纳入**拆包缓存键**：换了签名不会复用旧产物（否则会「改了却没生效」）；
+> - 新增验收 `npm run check:aab-signing`（32 项，含产物签名与设备实际签名的端到端交叉验证）。
 
 > **v1.0.1 更新**
 > - 应用管理新增**常用应用收藏**：星标固定包名，换设备/重进页面/重启后依然记得，不用每次重新搜；
@@ -568,6 +577,50 @@ python scripts/run-electron.py scripts/e2e-v1-device.cjs \
 判别法：如果命令「没有任何输出、但脚本自己的日志文件已经写完了」，
 就是这个问题，不是脚本逻辑错了。
 
+#### 但 `--until` 的判据是「体积变化」，不是「变大」
+
+脚本常在一开始 `fs.writeFileSync(LOG, '')` 清空自己的日志 —— 此时体积**变小**。
+早期用「体积变大」判断，遇到清空就永远等不到「变化」，每个脚本都白等到超时强杀（返回 124）。
+现在用 `!=` 比较，并要求 `start < 0 || size < start` 时从 0 读。
+
+#### 脚本自己的开关写在后面即可，但**绝不要**给脚本参数用 `REMAINDER`
+
+`run-electron.py` 用 `parse_known_args()`：认识的留下，不认识的透传给脚本。
+所以下面两种写法都能工作：
+
+```bash
+python scripts/run-electron.py scripts/check-aab-ui.cjs \
+    --watch ui-shots/_aab-ui.log --until "AAB UI CHECK DONE" --timeout 600
+python scripts/run-electron.py scripts/check-aab-ui.cjs \
+    --watch ui-shots/_aab-ui.log --until "AAB UI CHECK DONE" -- --installed
+```
+
+**曾经的错误修法是给脚本参数声明 `nargs=argparse.REMAINDER`。** 这个坑极隐蔽：
+`REMAINDER` 会把命令里它之后的**一切**都收走，包括本工具自己的
+`--watch` / `--until` / `--timeout`。后果不是报错，而是：
+
+> 脚本照常启动、照常把结果写进日志，但本工具**没在监视那个日志**，
+> 于是永远等不到完成标记 → 干等到默认 240s 超时强杀（exit 124）。
+
+日志里明明写着 `43 通过 / 2 失败` / `DRAG INSTALL CHECK DONE`，
+命令却报「兜底超时 240s，已强杀」——**看起来像功能挂了，其实是参数没传进去**。
+用 `--timeout 900` 也救不了，那个 `900` 同样会被吞掉。
+
+#### 安装版分支需要 WebSocket 垫片
+
+`--installed` 的检查跑在 **Electron 主进程**里，而 Electron 33 内置的是 Node 20，
+**没有全局 `WebSocket`**（Node 22 才有，但那是跑 runner 的那个 node）。
+CDP 客户端用标准 `WebSocket` 接口，于是直接抛 `WebSocket is not defined`，
+表现为「0 通过 / 1 失败」——同样是脚手架缺件伪装成功能失败。
+
+解法：`scripts/_ws-shim.cjs` 里手写了一个 RFC 6455 客户端侧最小实现
+（`net.Socket` + 自己握手 + `Sec-WebSocket-Accept` 校验 + 掩码帧 + 分片 + ping/pong），
+两个脚本在 `INSTALLED` 分支开头 `require('./_ws-shim.cjs').install()` 即可。
+只在缺失时挂载，不会覆盖 Node 22 的原生实现。
+
+另外 `Page.captureScreenshot` 默认 `fromSurface: true`，安装版窗口若在后台/未被合成
+会一直等不到帧而超时 → 截图统一带 `fromSurface: false`，窗口不在前台也能出图。
+
 ### ⚠️ Electron 32+ 拖放拿不到文件路径：`File.path` 已被移除
 
 `electron` 升到 32 之后，非标准的 `File.path` **被删掉了**，原本「拖进来一个文件 →
@@ -692,6 +745,57 @@ AAB 的 `.apks` 产物按「文件指纹 + 目标设备」缓存在临时目录�
 
 规则：**缓存只能跳过纯计算的部分，任何跟设备当前状态有关的判断都必须每次执行。**
 `scripts/check-aab-install.cjs` 里专门有一条「fresh 模式对已装应用中止（缓存命中时也拦）」。
+
+### 🔴 AAB 拆包必须重新签名 —— 换掉签名 = 三方登录全废（Invalid key hash）
+
+**症状**：用本工具装完 AAB，应用能装能跑，但**用 Facebook（或微信 / QQ / Google）登录报
+`Invalid key hash`**，报错里给出一串 base64；后台配的 hash 全都对，就是登不上。
+
+**根因**：`.aab` 是给应用商店的「原料」，**本身不含签名**。`bundletool build-apks` 把它拆成
+一组 APK 时必须产出一个签名（否则 `install-multiple` 会被系统以「没有证书」拒掉；
+而且 bundletool 在找不到 keystore 时**只打一行 WARNING、静默产出未签名 APK**）。
+第一版固定用随包的 `debug.keystore`，于是：
+
+- 应用能装、能跑、看起来一切正常；
+- 但**签名被换成了调试 key**，凡是按「包名 + 签名」校验的能力全部失效 ——
+  三方登录（Facebook / 微信 / QQ / Google）、推送（FCM / 厂商通道）、地图 key …
+
+用 `base64` 反解报错里的那串值就能确认：它对应的是 `debug.keystore` 的 SHA-1，而不是应用正式签名的。
+**只要报错里的 hash 不是应用正式签名的 hash，问题就一定出在签名上，跟网络、SDK 版本都无关。**
+
+**修法（v1.0.18）**：`electron/services/aab-signing.ts` 把签名做成可配置，「安装安装包」页
+多了一个**「签名方式」**面板：
+
+| 模式 | 行为 | 什么时候用 |
+| --- | --- | --- |
+| `bundled-debug`（默认） | 用随包 `bin/bundletool/debug.keystore`（回退 `~/.android/debug.keystore`） | 只求装上跑起来，不在乎三方能力 |
+| `custom` | 用**你自己的** `.jks` / `.keystore`（路径 + 库密码 + 别名 + key 密码） | 要保持原签名、要让三方登录能用 |
+| `none` | 不传签名参数 | 调试用，产出的 APK 装不上，界面会警告 |
+
+选 `custom` 后点「应用并测试」会当场跑一次 keytool 校验；下方「查看 key hash」会直接算出
+四个平台的 hash 供粘贴到三方后台：
+
+- **Facebook** = `base64(sha1(cert) 原始字节)`（就是这个报错要的值）
+- **微信 / QQ** = `md5(cert DER)` 小写无冒号
+- **Google** = `sha1` 大写带冒号
+- 另附 **SHA-256**
+
+**四条硬规矩**（踩过的坑，改这块务必保留）：
+
+1. **签名必须参与拆包缓存键**。缓存目录是 `<指纹>-<设备key>-<签名tag>`，
+   否则「换了签名还吃旧 apks 产物」= 白改，用户会以为「我换了签名怎么还不行」。
+2. **keytool 是 JDK 独有，JRE 没有**；`findJava()` 在 PATH 命中时返回的是**裸名**
+   （`java.exe`），`dirname('java.exe') === '.'`，拼不出 keytool —— 必须四路候选
+   （java 同目录 / `JAVA_HOME/bin` / PATH / 扫常见安装位置含 Android Studio 的 `jbr`）。
+3. **keytool 在中文 Windows 按 GBK 输出**，Node 按 utf8 解会乱码，连「别名:」都认不出来
+   → 所有调用必须加 `-J-Dfile.encoding=UTF-8`。
+4. **spawn ENOENT 的错误文案自带程序名**（`spawn keytool.exe ENOENT`），
+   任何「输出含 keytool 就算成功」的宽松判定都会把没找到的程序误判为可用
+   → 判据必须是 `r.code >= 0 && /Key and Certificate|密钥和证书/.test(text)`。
+
+验收：`npm run check:aab-signing`（32 项，含「★产物签名指纹 == 用户所选密钥库」与
+「★设备上实际生效的签名 == 用户所选密钥库」两条端到端；后一条靠 `adb pull` 回 APK 读指纹，
+不信任本地产物）。样本用的是 `~/Downloads/AdbTools/pokercity.keystore`。
 
 ### ⚠️ `adb install` 不带 `-r` 也会覆盖已装应用
 
@@ -959,7 +1063,28 @@ npm run check:device-order
 # ---- 三种安装方式（后端直测，21 项）----
 # 覆盖 / 清洁 / 全新 + 目标设备定死 + 装后复核 + 互斥锁 + 日志可追溯
 npm run check:install-modes
+
+# ---- 拆包签名 / key hash（32 项，v1.0.18 新增）----
+# A 段 key hash 计算 4 项 / B 段密钥库探测 7 项 / C 段配置 1 项
+# D 段签名参数拼装 10 项 / E 段真机拆包验证签名 10 项
+#   E6 ★产物签名指纹 == 用户所选密钥库（拆出来的 APK 逐个读指纹）
+#   E9 ★设备上实际生效的签名 == 用户所选密钥库（adb pull 回 APK 读，不信本地产物）
+# 需要模拟器在线；样本密钥库默认 ~/Downloads/AdbTools/pokercity.keystore（密码 111111，别名 pokercity）
+npm run check:aab-signing
+
+# ---- 安装版真身验收（需先 python scripts/install-local.py 装一次）----
+# ⚠️ 被测应用有单实例锁，跑之前先 python scripts/_kill-our-processes.py --installed
+npm run check:aab-ui:installed                 # AAB 界面 33 项（CDP 连安装目录的 exe）
+npm run check:drag-install:installed           # 拖放 47 项（node 跑，Node 22 自带 WebSocket）
+npm run check:drag-install:installed:electron  # 同上，但用 electron 跑（走 _ws-shim.cjs 垫片）
+npm run test:ws-shim                           # 垫片自检 7 项（握手/大响应/并发 id/close）
 ```
+
+> 要往**脚本自己**传开关（如 `--installed`）直接跟在后面就行 —— `run-electron.py`
+> 用 `parse_known_args()`，认识的自己留下、其余透传给脚本。
+> **但绝不能给脚本参数声明 `nargs=REMAINDER`**：它会把 `--watch`/`--until`/`--timeout`
+> 一起吞掉，导致「不监视日志 → 干等到默认 240s 超时强杀（exit 124）」，
+> 而日志里其实早就写完了 —— 极易误判成功能失败。详见下方踩坑记录。
 
 > Windows 下跑 electron 脚本前需先 `unset ELECTRON_RUN_AS_NODE`，
 > 否则 electron 会以 Node 模式启动。

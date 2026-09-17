@@ -297,6 +297,76 @@ export interface AabEnv {
 }
 
 /* ------------------------------------------------------------------ */
+/* AAB 签名                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * AAB 拆包时用什么签名。
+ *
+ * 为什么这件事很重要：换签名会改应用的 key hash，而 Facebook / 微信 /
+ * Google 登录、推送、地图 key 全都按「包名 + 签名」校验 ——
+ * 用调试 key 拆一个正式签名的 AAB，应用能装能跑，但三方登录全废。
+ */
+export type SigningMode = 'bundled-debug' | 'custom' | 'none';
+
+export interface AabSigningConfig {
+  mode: SigningMode;
+  /** custom 模式下的密钥库路径 */
+  keystorePath?: string;
+  /** 密钥库密码（storepass） */
+  storePass?: string;
+  /** 私钥密码（keypass），留空表示与 storepass 相同 */
+  keyPass?: string;
+  /** 私钥别名，留空表示自动取密钥库里唯一那个 */
+  keyAlias?: string;
+}
+
+/** 三方后台登记用的 key hash（一次给全，省得用户来回问） */
+export interface AabKeyHash {
+  /** Facebook：base64(SHA1) */
+  facebook: string;
+  /** 微信 / QQ：MD5 小写无冒号 */
+  wechat: string;
+  /** Google：SHA1 大写带冒号 */
+  sha1: string;
+  /** SHA256 大写带冒号 */
+  sha256: string;
+}
+
+export interface AabSigningInfo {
+  config: AabSigningConfig;
+  /** 随包调试密钥库路径 */
+  bundledKeystore: string;
+  /** 当前实际生效的密钥库路径（none / 不可用时为 null） */
+  activeKeystore: string | null;
+  /** 配置是否可用 */
+  ok: boolean;
+  /** 不可用原因 */
+  reason?: string;
+  /** 当前签名对应的 key hash */
+  keyHash?: AabKeyHash;
+  /** 密钥库里的别名列表 */
+  aliases?: string[];
+  /** 一句话描述 */
+  desc: string;
+}
+
+/** 选择密钥库文件后的探测结果（界面「测试」按钮用） */
+export interface KeystoreProbeResult {
+  ok: boolean;
+  reason?: string;
+  aliases: string[];
+  /** 探测成功时顺带给出的 key hash */
+  keyHash?: AabKeyHash;
+}
+
+export const SIGNING_MODE_LABEL: Record<SigningMode, string> = {
+  'bundled-debug': '随包调试密钥库',
+  custom: '我的密钥库',
+  none: '不签名',
+};
+
+/* ------------------------------------------------------------------ */
 /* 实时 Logcat                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -557,6 +627,11 @@ export const IPC = {
   AAB_OPEN_TOOL_DIR: 'aab:openToolDir',
   AAB_CACHE_LIST: 'aab:cacheList',
   AAB_CACHE_CLEAR: 'aab:cacheClear',
+  /* AAB 签名（解决三方登录 / 推送的 key hash 失配问题） */
+  AAB_SIGNING_GET: 'aab:signingGet',
+  AAB_SIGNING_SET: 'aab:signingSet',
+  AAB_SIGNING_PICK: 'aab:signingPick',
+  AAB_SIGNING_PROBE: 'aab:signingProbe',
 
   /* Monkey */
   MONKEY_RUN: 'monkey:run',

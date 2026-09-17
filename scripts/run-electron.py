@@ -32,6 +32,16 @@
     python scripts/run-electron.py scripts/e2e-v1-device.cjs \\
         --watch ui-shots/_device.log --until "\\d+/\\d+ 通过"
 
+要给**脚本自己**传开关（如 `--installed`），直接写在后面即可，
+本工具只认自己声明过的开关，其余原样透传：
+
+    python scripts/run-electron.py scripts/check-aab-ui.cjs \\
+        --watch ui-shots/_aab-ui.log --until "AAB UI CHECK DONE" -- --installed
+
+（`--` 可省，写上更清楚。⚠️ 早期版本给脚本参数用了 `nargs=REMAINDER`，
+那会把 `--watch`/`--until`/`--timeout` 一起吞掉，导致「干等到 240s 超时强杀、
+而日志其实早就写完了」——现已改用 `parse_known_args`，不再有这个问题。）
+
 参数
 ------------------------------------------------------------
     --watch FILE     可重复。监视这些文件在本次启动后的新写入。
@@ -113,7 +123,6 @@ def _matches(paths, before, patterns):
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument('script', help='要运行的 Electron 脚本（相对项目根或绝对路径）')
-    ap.add_argument('script_args', nargs='*', help='透传给脚本的参数')
     ap.add_argument('--watch', action='append', default=[],
                     help='日志文件（可重复）：脚本会往这里写结果')
     ap.add_argument('--until', action='append', default=[],
@@ -123,7 +132,24 @@ def main() -> int:
     ap.add_argument('--user-data', default=None, help='自定义 user-data-dir')
     ap.add_argument('--out', default=None, help='子进程 stdout/stderr 落盘路径')
     ap.add_argument('--raw', action='store_true', help='不做 PASS/FAIL 判定')
-    args = ap.parse_args()
+
+    # ★ 这里**绝对不要**给脚本参数声明 `nargs=argparse.REMAINDER`。
+    #   REMAINDER 会把命令里它之后的**一切**都收走，包括本工具自己的
+    #   --watch / --until / --timeout —— 于是习惯写法
+    #       run-electron.py script.cjs --watch X --until Y --timeout 900
+    #   一个开关都传不进来，表现为：
+    #       「不监视日志 → 干等到默认 240s 超时强杀（exit 124）」，
+    #   而脚本其实早就把结果写进日志了 —— 极像功能失败，实为参数没生效。
+    #   正确做法是 parse_known_args：认识的留下，不认识的当作脚本自己的参数，
+    #   于是下面两种写法都能工作：
+    #       run-electron.py script.cjs --watch X --until Y --timeout 900
+    #       run-electron.py script.cjs --watch X -- --installed
+    args, unknown = ap.parse_known_args()
+
+    # 不认识的、以及 `--` 之后的东西，都透传给脚本（去掉裸 `--`）
+    script_args = list(unknown)
+    if script_args and script_args[0] == '--':
+        script_args = script_args[1:]
 
     script = args.script
     if not os.path.isabs(script):
@@ -144,7 +170,7 @@ def main() -> int:
     env = dict(os.environ)
     env.pop('ELECTRON_RUN_AS_NODE', None)  # 宿主注入，不清 Electron 会退化成纯 Node
 
-    cmd = [ELECTRON, '--user-data-dir=' + ud, script] + list(args.script_args)
+    cmd = [ELECTRON, '--user-data-dir=' + ud, script] + script_args
     print('[run-electron] %s' % ' '.join('"%s"' % c if ' ' in c else c for c in cmd))
     print('[run-electron] out -> %s' % out_path)
 

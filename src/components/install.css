@@ -402,3 +402,38 @@
   transition: width 0.2s ease;
 }
 
+/* 签名选择区：Segmented 下面跟提示与表单 */
+.aab-signing {
+  display: block;
+}
+
+/* key hash 列表：一行一个，左边固定标签宽，右边等宽字值 */
+.aab-hash {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  font-size: 11.5px;
+}
+
+.aab-hash > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 1.9;
+}
+
+/* 标签列定宽，四行才对得齐 */
+.aab-hash-k {
+  flex: none;
+  width: 68px;
+  color: var(--text-tertiary);
+}
+
+.aab-hash-v {
+  min-width: 0;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
