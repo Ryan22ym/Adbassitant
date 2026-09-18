@@ -4,7 +4,7 @@ import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
 import { IPC } from '@shared/types';
-import type { UpdateResult } from '@shared/types';
+import type { UpdateResult, AabSigningInfo } from '@shared/types';
 
 import DevicePage from './pages/DevicePage';
 import MirrorPage from './pages/MirrorPage';
@@ -54,6 +54,28 @@ export default function App() {
         setSettings(res.data);
       } else {
         applyTheme('light');
+      }
+
+      /*
+       * 把主进程持久化的 AAB 签名配置同步进 store —— 必须在启动时做，不能只靠签名面板。
+       *
+       * 安装链路读的就是 store 里这份（src/lib/install.ts: `options.signing ?? st.installSigning`），
+       * 而 store 的初始值是写死的 { mode: 'bundled-debug' }。以前只有「打开安装页 + 选中 AAB」
+       * 才会挂载 SigningPanel 去同步后端配置，于是「把包拖到窗口直接装」这条高频路径
+       * 永远拿初始值去装 —— 后端的正式签名根本没机会生效。
+       * 表现就是：装完 AAB 后应用能跑，但三方登录（按「包名+签名」校验）当场报
+       * Invalid key hash，而用户完全看不出是安装器换了签名。
+       */
+      const signRes = await window.adbApi.aabSigning();
+      if (alive && signRes?.ok && signRes.data) {
+        const cfg = (signRes.data as AabSigningInfo).config;
+        useApp.getState().setInstallSigning({
+          mode: cfg.mode,
+          keystorePath: cfg.keystorePath,
+          storePass: cfg.storePass,
+          keyPass: cfg.keyPass,
+          keyAlias: cfg.keyAlias,
+        });
       }
 
       const logRes = await window.adbApi.getAllLogs();

@@ -1,9 +1,22 @@
-# ADB 桌面助手 v1.0.19
+# ADB 桌面助手 v1.0.21
 
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
 
-> **v1.0.20 更新（future 分支，开发中）**
+> **v1.0.21 更新（future 分支，已装到本机）**
+> - **修「签名配置被默认值吃掉」**（真 bug）：`store.installSigning` 的初始值写死
+>   `{ mode: 'bundled-debug' }`，而主进程持久化的那份**只在 SigningPanel 挂载**
+>   （= 打开「安装安装包」页 + 选中 AAB）时才同步进 store。
+>   于是「把 AAB 拖到窗口直接装」这条最常用的路径永远拿初始值去装，
+>   后端存的正式签名压根没机会生效 —— 现在改到 App 启动时同步（`src/App.tsx`）；
+> - **安装结果里写明本次用的签名**：`InstallResult.signingDesc` 打通到结果弹窗，
+>   用调试密钥库时显式警告「应用签名已被替换，三方登录 / 推送可能失效」。
+>   以前这条只落在「运行日志」页（`aab.ts` 里早就有），用户根本看不到；
+> - 实测踩坑：装完 AAB 后 Facebook 登录报 `Invalid key hash`，
+>   设备签名位与 `bin/bundletool/debug.keystore` **完全一致**（`495ff4ce`），
+>   据此确认是拆包换了签名 —— 换成正式签名重装后恢复（`2222c440`）。
+
+> **v1.0.20 更新**
 > - **新增「导出通用 APK」**：把 AAB 转成一个**能装进任何设备**的普通 `.apk`
 >   （bundletool `build-apks --mode=universal`），可直接发给别人、或随手装到任意手机；
 > - 这条路**完全不需要设备** —— universal 不按设备挑 split，不取 device-spec、不碰 adb，
@@ -909,6 +922,41 @@ universal.apk   ← 含全部 ABI / 屏幕资源的单文件 APK，任何设备�
 那时脚本会先确认**在线设备全是 `emulator-*`**，否则整段跳过。
 
 自查手段：合成的拖放若没被拦住，界面上会弹出「正在安装 AAB…」遮罩 —— 看到它就已经开局装了。
+
+### 🔴 怎么确认设备上某个包「是谁签的」（排查 Invalid key hash 用）
+
+AAB 装了之后三方登录报 `Invalid key hash`，报错值只告诉你**当前签名是什么**，
+不告诉你**它属于哪个密钥库**。定位就三步，本次实测很有效：
+
+1. **报错里的 key hash = `base64(sha1(证书 DER))`**，而且最后一个有效字符的
+   base64 索引**必是 4 的倍数**（SHA-1 是 20 字节：160 bit = 26×6 + 4）。
+   截图里看着像小写 `l`（索引 37，非法）的，实际一定是大写 `I`（索引 8）—— 别读错。
+2. **设备侧签名**：`adb shell dumpsys package <pkg>` 的 `signatures:[xxxxxxxx]`
+   是 **`java.util.Arrays.hashCode(证书 DER)`** 的 hex，**不是 sha1**。
+   我第一次拿 `Arrays.hashCode(sha1(cert))` 去比，怎么都对不上，白折腾一轮。
+3. 把候选密钥库用 `keytool -exportcert -rfc -alias <a> -keystore <k> -storepass <p>`
+   导出证书，**两种哈希各算一份**去比：对上哪个就知道设备上装的是谁签的。
+
+实测结论表（可直接照抄成脚本）：
+
+| 密钥库 | `Arrays.hashCode(证书DER)` | `base64(sha1(证书DER))` |
+|---|---|---|
+| `bin/bundletool/debug.keystore`（随包调试） | `495ff4ce` | `MsICged1jJf2MonQc6ENZ01j6uI=` |
+| 小杨的正式签名 `pokercity.keystore` | `2222c440` | `BdD65U92Qj5jqpTQPwn9SD4uON0=` |
+
+顺带一条：**换签名必须卸载重装**（签名不同的包不能覆盖，`adb install` 会失败），
+卸载会清掉应用数据 —— 所以「重装成正式签名」前要先跟用户确认。
+
+### 🔴 签名配置为什么会被「默认值」吃掉
+
+`src/lib/install.ts` 里是 `const signing = options.signing ?? st.installSigning`，
+而 `store.installSigning` 的初始值写死成 `{ mode: 'bundled-debug' }`，
+真正持久化的那份（`%APPDATA%\adb-assistant\aab-signing.json`）**只在
+`SigningPanel` 挂载时才同步**——而那个面板要「打开安装页 + 选中 AAB」才出现。
+于是「把包拖到窗口直接装」永远用初始值，后端配置形同虚设。
+已改为在 `App.tsx` 启动时同步；AAB 安装结果里也会写明本次用的签名。
+**教训**：凡是有「持久化配置」+「只在某个组件挂载时才读」的写法，都要问一句
+「有没有别的入口绕过了这个组件」。
 
 ### ⚠️ `adb install` 不带 `-r` 也会覆盖已装应用
 

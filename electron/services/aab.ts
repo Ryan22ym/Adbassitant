@@ -1197,6 +1197,8 @@ export async function installBundle(
     fromCache: conv.fromCache,
     buildMs: conv.buildMs,
     installMs,
+    // 带回签名描述：界面要拿它判断「这次是不是把签名换掉了」并显式提示
+    signingDesc: conv.signingDesc,
     apksDir,
   };
 }

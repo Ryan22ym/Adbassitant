@@ -251,6 +251,15 @@ export interface InstallResult {
   buildMs?: number;
   /** AAB：安装耗时（毫秒） */
   installMs?: number;
+  /**
+   * AAB：本次拆包用的签名（人话描述）。
+   *
+   * 为什么必须带到结果里：用调试密钥库拆包会**换掉应用签名**，而三方登录 /
+   * 推送 / 地图 key 全是按「包名 + 签名」校验的 —— 包装得上、应用能跑，
+   * 但登录当场报 Invalid key hash。这条以前只写进运行日志，用户在安装结果
+   * 里完全看不到，于是把它当成安装器的 bug（实测踩过）。
+   */
+  signingDesc?: string;
 }
 
 /**

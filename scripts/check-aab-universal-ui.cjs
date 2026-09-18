@@ -415,15 +415,46 @@ async function main() {
       safe(`chip=${JSON.stringify(chipBefore)} exp=${JSON.stringify(expBefore)}`),
     );
 
+    /*
+     * ---------- 2b. 读得到 AAB 签名配置 ----------
+     *
+     * 安装 AAB 时前端会把这份配置传给主进程（src/lib/install.ts:
+     * `options.signing ?? st.installSigning`），所以「能不能读到它」
+     * 直接决定装 AAB 用的是正式签名还是随包调试签名 ——
+     * 后者会换掉应用签名，三方登录当场报 Invalid key hash。
+     */
+    const signCfg = await cdp.eval(
+      `(async () => {
+         try {
+           const r = await window.adbApi.aabSigning();
+           return r && r.ok ? JSON.stringify(r.data.config) : ('ERR:' + (r && (r.error || r.reason)));
+         } catch (e) { return 'THROW:' + e.message; }
+       })()`,
+    );
+    log(`signing config: ${safe(signCfg)}`);
+    let cfg = null;
+    try {
+      cfg = JSON.parse(signCfg);
+    } catch {
+      /* 不是合法 JSON（多半是 ERR/THROW 字符串） */
+    }
+    record(!!cfg && !!cfg.mode, '读得到 AAB 签名配置（决定装 AAB 时用哪份签名）', safe(signCfg));
+
     /* ---------- 3. 关于页 ---------- */
     await cdp.eval(`window.location.hash = '#/settings'`);
     await sleep(1600);
     const about = await cdp.eval(`document.body.innerText.replace(/\\s+/g, ' ')`);
-    const hasVer = (about || '').includes(want);
-    const hasNote = /导出通用\s*APK/.test(about || '');
+    /*
+     * 版本说明的判据**不能绑具体文案** —— 每发一版 VERSION_NOTES 都会换一段话，
+     * 断言写死某个功能名的话，下一版就必然假红（v1.0.21 就这么红过一次）。
+     * 只判断：这一版确实有自己的一段说明，而不是落到兜底文案。
+     */
+    const about2 = about || '';
+    const hasVer = about2.includes(want);
+    const hasNote = about2.includes('本版本') && !about2.includes('更多高级功能将在后续版本加入');
     log(`about hasVersion(${want})=${hasVer} hasNote=${hasNote}`);
-    record(hasVer, `关于页显示版本 ${want}`, hasVer ? 'ok' : safe((about || '').slice(0, 200)));
-    record(hasNote, '关于页版本说明写到了「导出通用 APK」', hasNote ? 'ok' : '未命中');
+    record(hasVer, `关于页显示版本 ${want}`, hasVer ? 'ok' : safe(about2.slice(0, 200)));
+    record(hasNote, `关于页有 v${want} 的版本说明（没落回兜底文案）`, hasNote ? 'ok' : safe(about2.slice(0, 240)));
 
     /* ---------- 4. 截图（回到安装页 —— 注意切 hash 不够，
        工具页内部的 tab 状态会重置回「截图」，必须再点一次） ---------- */

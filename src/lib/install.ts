@@ -345,6 +345,27 @@ function successMessage(r?: InstallResult, kind: InstallKind = 'apk'): string {
   if (r.packageName) {
     lines.push(`包名：${r.packageName}${r.versionName ? ` v${r.versionName}` : ''}`);
   }
+
+  /*
+   * 签名必须露在结果里，不能只写运行日志。
+   *
+   * 用程序自带的调试密钥库拆包会**换掉应用签名**，而三方登录 / 推送 / 地图 key
+   * 全靠「包名 + 签名」校验 —— 包装得上、应用能跑，一点进去就报 Invalid key hash。
+   * 以前这条提示只落在运行日志页，用户在安装结果里看不到，于是把它当成安装器的
+   * bug 来报（实测踩过：装完 AAB 后 Facebook 登录直接报 key hash 不匹配）。
+   */
+  if (r.signingDesc) {
+    if (/调试密钥库/.test(r.signingDesc)) {
+      lines.push(`⚠ 签名：${r.signingDesc}`);
+      lines.push(
+        '调试密钥库会替换应用原签名 —— Facebook / 微信 / Google 登录、推送、地图 key 都可能失效。' +
+          '（换过签名的包必须卸载重装才能换回正式签名）',
+      );
+    } else {
+      lines.push(`签名：${r.signingDesc}`);
+    }
+  }
+
   if (r.uninstalled) lines.push('清洁安装：已先卸载旧版本，应用数据已清除');
   if (r.verified === true) lines.push(`已复核：${r.serial} 上确实存在该包`);
   else if (r.verified === undefined) {
