@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -41,6 +41,8 @@
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
     "check:aab-install": "node scripts/check-aab-install.cjs",
     "check:aab-universal": "node scripts/check-aab-universal.cjs",
+    "check:aab-universal-ui": "node scripts/check-aab-universal-ui.cjs",
+    "check:aab-universal-ui:drop": "node scripts/check-aab-universal-ui.cjs --with-drop",
     "check:aab-signing": "node scripts/check-aab-signing.cjs",
     "check:aab-ui": "python scripts/run-electron.py scripts/check-aab-ui.cjs --watch ui-shots/_aab-ui.log --until \"AAB UI CHECK DONE\" --timeout 600",
     "check:aab-ui:installed": "python scripts/run-electron.py scripts/check-aab-ui.cjs --watch ui-shots/_aab-ui.log --until \"AAB UI CHECK DONE\" --timeout 600 -- --installed",
