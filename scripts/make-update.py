@@ -277,12 +277,21 @@ def main():
         print('安装版小包            : %8.1f KB  %s' % (z_asar_size / 1024, os.path.basename(asar_zip)))
         if portable_zip:
             print('便携版整包            : %8.1f MB  %s' % (p_size / 1048576, os.path.basename(portable_zip)))
+        # 全量包体积：优先 NSIS 安装包；只出便携包时就用便携包来对比
         full = None
+        full_label = '全量安装包'
         for f in sorted(os.listdir(out_dir)):
             if f.endswith('.exe') and 'portable' not in f.lower():
                 full = os.path.getsize(os.path.join(out_dir, f))
+        if full is None:
+            for f in sorted(os.listdir(out_dir)):
+                if f.endswith('.exe') and 'portable' in f.lower():
+                    full = os.path.getsize(os.path.join(out_dir, f))
+                    full_label = '全量便携包'
+                    break
         if full:
-            print('全量安装包            : %8.1f MB  （小包体积是它的 1/%.0f）' % (full / 1048576, full / max(z_asar_size, 1)))
+            print('%s            : %8.1f MB  （小包体积是它的 1/%.0f）' % (
+                full_label, full / 1048576, full / max(z_asar_size, 1)))
         print('产物目录              : %s' % upd_dir)
         print('=' * 68)
 

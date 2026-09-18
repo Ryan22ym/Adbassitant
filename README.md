@@ -3,6 +3,15 @@
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
 
+> **发版策略调整（v1.0.21 之后）**
+> - 打包**只出免安装便携包（portable）+ 增量小包**，不再出 NSIS 安装包 ——
+>   装一次要跑安装器、还得先关干净进程，日常自测太啰嗦；便携包双击即用；
+> - 配套把 `scripts/install-local.py` 扩成**双路**：产物里有安装包就走静默安装，
+>   只有 `win-unpacked/` 就**免安装绿色部署**（整目录搬到
+>   `%LOCALAPPDATA%\Programs\ADBAssistant`），且会自己先把在跑的进程结束掉；
+> - 应用内增量更新**不受影响**：`update.ts` 本来就按 `PORTABLE_EXECUTABLE_FILE`
+>   区分便携形态（整包替换 exe）与 asar 形态（替换 `app.asar`），两条路都在。
+
 > **v1.0.21 更新（future 分支，已装到本机）**
 > - **修「签名配置被默认值吃掉」**（真 bug）：`store.installSigning` 的初始值写死
 >   `{ mode: 'bundled-debug' }`，而主进程持久化的那份**只在 SigningPanel 挂载**
@@ -304,9 +313,55 @@ python scripts/build.py --no-build
 python scripts/build.py --out out-v1.1
 ```
 
-产物目录由 `electron-builder.json` 的 `directories.output` 决定，同时生成 NSIS 安装包与
-免安装 portable 版本，命名形如 `ADB桌面助手-v1.0.0-x64.exe` / `ADB桌面助手-v1.0.0-portable.exe`。
+产物目录由 `electron-builder.json` 的 `directories.output` 决定。**默认只出免安装便携包**
+（`ADB桌面助手-vX-portable.exe`，单文件自解压，双击即用），`scripts/build.py` 收尾时
+再追加产出 `update/` 下的增量小包（见下文「应用内更新」）。
+
+`win-unpacked/` 是便携包的中间产物，它本身也是一份完整绿色版（整目录复制即可运行），
+`make-update.py` 正是靠它取 `app.asar` 生成小包，所以**不能从 `files`/target 里去掉**。
+
+需要 NSIS 安装包时（现在默认不出）：把 `nsis` 加回 `win.target` 即可 ——
+`electron-builder.json` 里的 `nsis` 配置段一直保留着，只差 target 那一项。
+
 二进制文件通过 `extraResources` 打进 `resources/bin/`。
+
+### 装到本机（发版后自测）
+
+```bash
+python scripts/build.py --out out-v1.0.22     # 打包（便携包 + 增量包）
+python scripts/install-local.py --out out-v1.0.22
+```
+
+`install-local.py` 自己选路：产物里有 NSIS 安装包就走静默安装（`/S /D=` 那套坑都在脚本里），
+**只有 `win-unpacked/`（现在的默认）就走免安装绿色部署** —— 整目录搬到
+`%LOCALAPPDATA%\Programs\ADBAssistant`。
+
+绿色部署的两个要点：
+
+1. **先整份复制到同级 `.tmp`，再把旧目录挪成 `.old`、`.tmp` 改名顶上，最后删 `.old`**。
+   不往目标目录里逐个覆盖：中途失败会留下半新半旧的目录，而「旧文件没被删掉」
+   正是「版本号对、代码是旧的」那种最脏状态的来源。
+2. **脚本会先自己把在跑的进程结束掉**（温和→强制）。不结束必定「装完还是旧版本」：
+   exe 与 `app.asar` 被占用，复制直接失败。
+
+装完照旧核对三件事：exe 的 FileVersion、`resources/bin` 逐文件 md5、asar 里的当前版本号
+与 VERSION_NOTES 是否含本版。绿色部署不含卸载器，桌面/开始菜单快捷方式
+（`%LOCALAPPDATA%\Programs\ADBAssistant\ADB桌面助手.exe`）指向没变，继续有效。
+
+> ⚠️ **绿色部署实测踩到的坑（已经修了，别改回去）**
+>
+> `rename(.tmp, dst)` 会**间歇性 `PermissionError(13)`**：刚复制出来的目录里，
+> exe / dll 还被 Defender 实时扫描（或索引器）占着，目录不是独占状态。
+> 危害在于「旧目录**已经**改名成 `.old`、新目录**还没**顶上」的那个瞬间会卡住 ——
+> 若这里不写回滚，应用就直接从原位置消失（目录还在，只是名字变成 `.old`，
+> 快捷方式、`%APPDATA%` 之外的引用全失效）。
+>
+> 首次实测正是如此：`ADBAssistant.old`（旧版，91 文件）与 `ADBAssistant.tmp`
+> （新版，89 文件）并排躺着，`ADBAssistant` 不存在。
+>
+> 现在的做法：改名**重试 10 次 × 0.8s**；`try_rename(.tmp, dst)` 失败时
+> **把 `.old` 改回 `dst`** 再抛异常，保证「原位置始终有一个能跑的应用」。
+> 复制阶段失败则清掉 `.tmp`（不留残骸）。
 
 > **别直接 `npm run dist`**：它去官方源下载 `winCodeSign-2.6.0.7z`，该包内含 macOS 符号链接，
 > Windows 非管理员环境解压必然失败，会导致 exe 资源未被改写（产物退化为裸 Node 模式且静默失效）。
