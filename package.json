@@ -40,6 +40,7 @@
     "make:update": "python scripts/make-update.py --out out-v1.0.16",
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
     "check:aab-install": "node scripts/check-aab-install.cjs",
+    "check:aab-universal": "node scripts/check-aab-universal.cjs",
     "check:aab-signing": "node scripts/check-aab-signing.cjs",
     "check:aab-ui": "python scripts/run-electron.py scripts/check-aab-ui.cjs --watch ui-shots/_aab-ui.log --until \"AAB UI CHECK DONE\" --timeout 600",
     "check:aab-ui:installed": "python scripts/run-electron.py scripts/check-aab-ui.cjs --watch ui-shots/_aab-ui.log --until \"AAB UI CHECK DONE\" --timeout 600 -- --installed",

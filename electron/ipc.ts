@@ -55,6 +55,7 @@ import {
   installBundle,
   installApksFile,
   convertBundle,
+  buildUniversalApk,
   inspectAabEnv,
   downloadBundletool,
   bundletoolJarPath,
@@ -506,6 +507,55 @@ export function registerIpc() {
         });
         log('success', 'AAB', `拆包产物已导出：${conv.apksPath}`);
         return conv;
+      },
+    ),
+  );
+
+  /**
+   * 导出通用 APK：AAB → 一个能装进任何设备的 .apk。
+   *
+   * 与「另存 .apks」最大的区别是**不需要设备**：universal 模式不按设备挑
+   * split，全程不碰 adb。所以这里不收 serial，页面上也不要求先选设备 ——
+   * 手边几十个 AAB 想批量转成能分发的 APK 时，连手机都不用插。
+   */
+  ipcMain.handle(
+    IPC.AAB_EXPORT_UNIVERSAL,
+    wrap(
+      async (
+        e,
+        aabPath: string,
+        defaultName: string | undefined,
+        signing?: Partial<AabSigningConfig>,
+      ) => {
+        if (!existsSync(aabPath)) throw new Error(`文件不存在：${aabPath}`);
+
+        const win = BrowserWindow.fromWebContents(e.sender) ?? undefined;
+        const base = basename(aabPath).replace(/\.aab$/i, '');
+        const suggested = (defaultName || '').trim() || `${base}-universal.apk`;
+
+        const r = await dialog.showSaveDialog(win as BrowserWindow, {
+          title: '导出通用 APK',
+          defaultPath: join(resolveDir('pull'), suggested),
+          filters: [{ name: 'Android 安装包', extensions: ['apk'] }],
+        });
+        // 取消返回 null，由渲染层当作「用户放弃」，不弹错误
+        if (r.canceled || !r.filePath) return null;
+
+        const out = await buildUniversalApk(aabPath, {
+          outPath: r.filePath,
+          signing,
+          useCache: true,
+          onLine: (line) => send(IPC.PUSH_AAB_OUTPUT, { line }),
+        });
+
+        if (/调试密钥库/.test(out.signingDesc)) {
+          log(
+            'warn',
+            'AAB',
+            '这份通用 APK 用的是调试密钥库，签名已与原包不同 —— 分发前请确认对三方登录 / 推送无影响。',
+          );
+        }
+        return out;
       },
     ),
   );

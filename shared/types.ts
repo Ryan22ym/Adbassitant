@@ -634,6 +634,8 @@ export const IPC = {
   /* 拆包与安装分离：AAB → .apks（可另存、可复用），.apks 直接安装 */
   AAB_CONVERT: 'aab:convert',
   AAB_SAVE_APKS: 'aab:saveApks',
+  /* 通用 APK：AAB → 单个可分发 .apk（与设备无关，不需要连设备） */
+  AAB_EXPORT_UNIVERSAL: 'aab:exportUniversal',
   APKS_INSTALL: 'apks:install',
   /* AAB 签名（解决三方登录 / 推送的 key hash 失配问题） */
   AAB_SIGNING_GET: 'aab:signingGet',

@@ -42,6 +42,8 @@ const IPC = {
   /* 拆包与安装分离 */
   AAB_CONVERT: 'aab:convert',
   AAB_SAVE_APKS: 'aab:saveApks',
+  /* 通用 APK：AAB → 单个可分发 .apk（与设备无关，不需要连设备） */
+  AAB_EXPORT_UNIVERSAL: 'aab:exportUniversal',
   APKS_INSTALL: 'apks:install',
   /* AAB 签名 */
   AAB_SIGNING_GET: 'aab:signingGet',
@@ -212,6 +214,17 @@ const api = {
     defaultName?: string,
     signing?: Record<string, unknown>,
   ) => invoke(IPC.AAB_SAVE_APKS, serial, aabPath, defaultName, signing),
+  /**
+   * 导出通用 APK：AAB → 一个能装进任何设备的 .apk（可微信发给别人）。
+   *
+   * 参数里**没有 serial** —— universal 模式不按设备挑 split、全程不碰 adb，
+   * 所以连设备都不用插。用户在保存框里取消时返回 null。
+   */
+  exportUniversalApk: (
+    aabPath: string,
+    defaultName?: string,
+    signing?: Record<string, unknown>,
+  ) => invoke(IPC.AAB_EXPORT_UNIVERSAL, aabPath, defaultName, signing),
   /** 安装一份现成的 .apks（本工具拆出来的产物，跳过拆包） */
   installApks: (
     serial: string | undefined,

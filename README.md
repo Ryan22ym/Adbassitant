@@ -3,6 +3,19 @@
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
 
+> **v1.0.20 更新（future 分支，开发中）**
+> - **新增「导出通用 APK」**：把 AAB 转成一个**能装进任何设备**的普通 `.apk`
+>   （bundletool `build-apks --mode=universal`），可直接发给别人、或随手装到任意手机；
+> - 这条路**完全不需要设备** —— universal 不按设备挑 split，不取 device-spec、不碰 adb，
+>   手机没插也能批量转换（这正是它与「按设备拆包」最大的区别）；
+> - 代价只有体积：全部 ABI 的 so、所有屏幕密度的资源都打进同一个包
+>   （实测 202MB 的游戏 AAB → 205MB 通用 APK，耗时约 10s）；
+> - 缓存键是 `<文件指纹>-universal-<签名tag>`，**不含设备 key** ——
+>   同一份 AAB + 同一份签名只会产出一份通用产物；换签名仍然会重做；
+> - `.apks` 只是中间产物：抠出 `universal.apk` 落盘后立即删除，不占两倍磁盘；
+> - 新增验收 `npm run check:aab-universal`（38 项，**纯 Node、不需要设备**；
+>   有模拟器在线时额外做一次真实安装验证，真机自动跳过、不动用户设备）。
+
 > **v1.0.19 更新**
 > - **拆包与安装拆成两件事**：新增「仅拆包并另存为 .apks」——AAB 按目标设备拆一次，
 >   产物导出到磁盘；之后直接拖这个 `.apks` 进来装，不再重复拆包（同一份大包省几十秒）；
@@ -843,6 +856,41 @@ installBundle()  →  调 convertBundle 拿产物，再 install-apks
 **验收**：`npm run check:aab-install` 已扩到 **78 项**，新增 E 段 30 项覆盖
 「仅拆包 / 命中缓存不重拆 / 另存 / 装现成产物 / 缓存外产物 / fresh·clean 语义」。
 
+### 🔴 「按设备拆包」之外还有一条路：通用 APK（universal）
+
+**问题**：`.apks` 是**按目标设备挑好 split** 的产物 —— 换个 ABI / 屏幕的机器未必合适，
+更没法直接发给别人（微信发过去是个装不上的 `.apks`）。
+而「把手上的 AAB 转成能分发的 APK」是个高频真实需求。
+
+**做法**：多开一条 `buildUniversalApk()`，走 bundletool 的 `--mode=universal`：
+
+```
+build-apks --bundle=x.aab --output=universal.apks --mode=universal <签名参数>
+        ↓   （.apks 本身就是 zip，从里面取出 universal.apk）
+universal.apk   ← 含全部 ABI / 屏幕资源的单文件 APK，任何设备都能装
+```
+
+**四条硬规矩**：
+
+1. **这条路不碰设备**。universal 与设备配置无关，不取 `device-spec`、不调 `adb` ——
+   手机没插也能跑。这不是巧合而是设计目标，所以验收里有一条**静态守卫**（B15）：
+   直接扫 dist 里 `buildUniversalApk` 的函数体，出现 `device-spec` 或 `runAdb(` 就判 FAIL，
+   防止以后有人「顺手」把设备逻辑加回来。
+2. **缓存键里不能有设备**。目录名是 `<文件指纹>-universal-<签名tag>`，
+   对比按设备拆包的 `<指纹>-<设备key>-<签名tag>`。加了设备 key 等于同一个文件在缓存里存好几份。
+   但**签名标签必须留在键里** —— 否则换签名会吃到旧产物，等于把一个签名不对的包发出去（E1）。
+3. **`.apks` 只是中间产物**。抠出 `universal.apk` 后立刻删掉 `universal.apks`：
+   universal 模式下它几乎是未压缩的同一份数据，留着就是占两倍磁盘（B13 断言）。
+4. **产物落盘前先验 ZIP 魔数**（`PK`）。`.apks` 里解出来的东西有可能是空壳，
+   宁可在这里报错，也不要往用户目录里写一个「看起来正常」的文件。
+
+**代价只有体积**：全部 ABI 的 so、每种屏幕密度的资源都在同一个包里 ——
+实测 202MB 的游戏 AAB 产出 205MB 通用 APK（按设备拆通常只有几十 MB）。
+所以界面上两个出口并存：**装自己的机器用「仅拆包并另存为 .apks」，要分发给别人用「导出通用 APK」**。
+
+**验收**：`npm run check:aab-universal`（38 项，纯 Node，**不需要设备**）——
+其中 G 段只在有**模拟器**在线时才做真实安装验证，真机自动跳过（不往用户手机里装东西）。
+
 ### ⚠️ `adb install` 不带 `-r` 也会覆盖已装应用
 
 老资料说「`adb install` 遇到已装包会报 `INSTALL_FAILED_ALREADY_EXISTS`，要覆盖得加 `-r`」——
@@ -1123,6 +1171,17 @@ npm run check:install-modes
 #   E8 缓存外的 .apks 也能装
 # 需要一台在线设备；素材默认取 ~/Downloads 下最小的 .aab（AAB_FILE 可覆盖）
 npm run check:aab-install
+
+# ---- 通用 APK（纯 Node，38 项，v1.0.20 新增；**不需要设备**）----
+# A 环境与素材 5 项 / B 生成与产物校验 16 项 / C 缓存复用 6 项
+# D 另存与一致性 7 项 / E 换签名必须重做 / F 输入校验
+#   B5·B6·B7 产物能被解析出包名与版本，且与源 AAB 一致
+#   B9·B10 ★缓存目录名不含设备 key（`<指纹>-universal-<签名tag>`）
+#   B15 ★静态守卫：实现里不许再出现 device-spec / adb（这条路与设备无关）
+#   E1 ★换签名后另起缓存，绝不吃旧产物
+# G 段（有模拟器在线才跑）：真实安装 + pm path 复核 + 单 APK（无 split）
+# 真机一律跳过 —— 不会往用户的手机里装东西
+npm run check:aab-universal
 
 # ---- 拆包签名 / key hash（32 项，v1.0.18 新增）----
 # A 段 key hash 计算 4 项 / B 段密钥库探测 7 项 / C 段配置 1 项

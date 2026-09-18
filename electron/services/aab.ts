@@ -63,6 +63,7 @@ import { adbPath, binDir, log, runAdb } from './adb';
 import { readAabInfo } from './apk';
 import { findJava, javaVersionOk, describeJava, JavaInfo } from './java';
 import { resolveSigning } from './aab-signing';
+import { listZipEntries, readZipEntry } from './zip';
 import { INSTALL_MODE_LABEL } from '../../shared/types';
 import type { InstallMode, InstallResult, AabEnv, AabSigningConfig } from '../../shared/types';
 
@@ -707,6 +708,274 @@ export async function convertBundle(
     versionName: info.versionName,
     versionCode: info.versionCode,
     sizeBytes: size,
+    fromCache: cacheHit,
+    rebuilt: !cacheHit,
+    buildMs,
+    signingDesc: signing.desc,
+    savedToOutPath,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 通用 APK（AAB → 单个 .apk，与设备无关）                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 通用 APK（universal）：一个能装进任何 Android 设备的 .apk。
+ *
+ * 与「按设备拆包」的关系
+ * ---------------------------------------------------------------
+ * build-apks 的默认行为是「按目标设备的 ABI / 屏幕密度 / SDK 挑一份 split 组合」，
+ * 装到别的机器上未必合适。`--mode=universal` 反其道而行：把 base 与**所有**配置的
+ * 资源、so 全塞进同一个 APK —— 任何设备都能装，也能直接发给别人（微信、网盘、
+ * 数据线拷贝都行），代价只有一个：体积大（每个 ABI 的 so、每种密度的图都在里面）。
+ *
+ * 三处结构性差异（所以没有复用 convertBundle）
+ * ---------------------------------------------------------------
+ *   1. **完全不碰设备**。universal 与设备配置无关，不需要 device-spec，
+ *      也就不依赖 adb —— 一台设备都没连也能导出，正好覆盖「把手上几十个 AAB
+ *      批量转成能分发的 APK」这个场景。
+ *   2. **缓存键里没有设备**。同一份 AAB + 同一份签名只会有一个通用产物，
+ *      把设备 key 拼进去等于同一份数据存好几份。
+ *   3. **产物是 .apk 而不是 .apks**。用户拿到的必须是一个能直接
+ *      `adb install` / 微信发送的单文件，所以要从 .apks 里把 universal.apk
+ *      抠出来（.apks 本身就是 zip，用项目自带的读取器即可，不引第三方依赖）。
+ */
+
+/** .apks 里那个「万能包」的条目名（bundletool --mode=universal 的固定输出） */
+const UNIVERSAL_APK_FILE = 'universal.apk';
+
+/** 通用产物的缓存目录：文件指纹 + 签名标签，**不含设备** */
+function cachedUniversalDir(file: string, signTag: string): string {
+  return join(cacheRoot(), `${fingerprint(file)}-universal-${signTag}`);
+}
+
+function quietRm(target: string, recursive = true): void {
+  try {
+    rmSync(target, { recursive, force: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * 从 universal 模式的 .apks 里取出那个 apk。
+ * 落盘前验一次 ZIP 魔数 —— 宁可在这里报错，也不要把坏文件写进用户的目录。
+ */
+function extractUniversalFromApks(apksPath: string, destFile: string): void {
+  const buf = readFileSync(apksPath);
+  const entries = listZipEntries(buf);
+  const hit =
+    entries.find((e) => !e.isDir && e.name === UNIVERSAL_APK_FILE) ||
+    entries.find((e) => !e.isDir && e.name.toLowerCase().endsWith(`/${UNIVERSAL_APK_FILE}`)) ||
+    entries.find((e) => !e.isDir && e.name.toLowerCase().endsWith('.apk'));
+
+  if (!hit) {
+    throw new Error(
+      `产物里没有 ${UNIVERSAL_APK_FILE}（实际条目：${entries.map((e) => e.name).join('、') || '空'}）` +
+        '，说明这份 .apks 不是 universal 模式生成的。',
+    );
+  }
+
+  const data = readZipEntry(buf, hit);
+  if (data.length < 4 || data[0] !== 0x50 || data[1] !== 0x4b) {
+    throw new Error(`提取出的 ${UNIVERSAL_APK_FILE} 不是有效的 APK（${data.length} 字节）`);
+  }
+
+  const part = `${destFile}.part`;
+  quietRm(part, false);
+  writeFileSync(part, data);
+  quietRm(destFile, false);
+  renameSync(part, destFile);
+}
+
+export interface UniversalApkOptions {
+  /** 另存路径（不传就只留在缓存目录里） */
+  outPath?: string;
+  /** 目标文件已存在时是否覆盖 */
+  overwrite?: boolean;
+  /** 是否允许复用上一次的产物（默认允许） */
+  useCache?: boolean;
+  /** 本次使用的签名配置（不传则用用户设置里那份） */
+  signing?: Partial<AabSigningConfig>;
+  /** 输出一行日志（往界面推） */
+  onLine?: (line: string) => void;
+}
+
+export interface UniversalApkResult {
+  /** 产出的 .apk 的绝对路径（另存时为 outPath） */
+  apkPath: string;
+  /** 本次工作的缓存目录 */
+  cacheDir: string;
+  packageName?: string;
+  versionName?: string;
+  versionCode?: number;
+  /** 源 AAB 的字节数 */
+  bundleBytes: number;
+  /** 产出的 .apk 的字节数（放缓存里那份，与另存无关） */
+  apkBytes: number;
+  /** 是否复用了上一次的产物 */
+  fromCache: boolean;
+  /** 是否真的重新生成（复用缓存时为 false） */
+  rebuilt: boolean;
+  /** 生成耗时（毫秒；复用缓存时为 0） */
+  buildMs: number;
+  signingDesc: string;
+  /** 产物是否直接落在用户指定的 outPath 上 */
+  savedToOutPath: boolean;
+}
+
+/**
+ * 把 AAB 转成一个能装进任何设备的通用 APK。
+ *
+ * 不读设备、不改设备状态、不需要设备在线 —— 纯本机转换。
+ */
+export async function buildUniversalApk(
+  aabPath: string,
+  options: UniversalApkOptions = {},
+): Promise<UniversalApkResult> {
+  const say = (line: string) => {
+    options.onLine?.(line);
+  };
+
+  if (!existsSync(aabPath)) throw new Error(`文件不存在：${aabPath}`);
+  if (!basename(aabPath).toLowerCase().endsWith('.aab')) throw new Error('所选文件不是 .aab 文件');
+
+  /* ---- 0. 先认文件 ---- */
+  const info = readAabInfo(aabPath);
+  const pkg = info.packageName;
+  const bundleBytes = statSync(aabPath).size;
+
+  /* ---- 1. 运行时 ---- */
+  const rt = await resolveAabRuntime();
+  if (!rt.ready) throw new Error(rt.reason || 'AAB 环境不完整（需要 Java 11+ 与 bundletool）');
+  say(`Java：${describeJava(rt.java)}`);
+  say(`bundletool：${basename(rt.jar!)}`);
+
+  /* ---- 2. 签名 ---- */
+  // 签名同样必须显式给：bundletool 找不到 ~/.android/debug.keystore 时会
+  // 静默产出未签名 APK，用户拿去装才会发现装不上。
+  const signing = await signingArgs(options.signing);
+  if (!signing.ok) {
+    throw new Error(
+      `签名配置不可用：${signing.reason || signing.desc}。` +
+        '可在安装页的「签名方式」里改用随包调试密钥库，或指定自己的密钥库。',
+    );
+  }
+  say(`签名：${signing.desc}`);
+
+  /* ---- 3. 缓存（键里没有设备） ---- */
+  const cacheDir = cachedUniversalDir(aabPath, signingKeyTag(signing.args));
+  const apkFile = join(cacheDir, UNIVERSAL_APK_FILE);
+  const rawApks = join(cacheDir, 'universal.apks');
+  const cacheHit = options.useCache !== false && existsSync(apkFile);
+
+  let buildMs = 0;
+  if (cacheHit) {
+    say(`复用上次的通用 APK：${apkFile}`);
+    log('info', 'AAB', '复用上次的通用 APK 产物（同一个 AAB、同一份签名）');
+  } else {
+    quietRm(cacheDir);
+    mkdirSync(cacheDir, { recursive: true });
+
+    // 顺手记下这份缓存的来源与签名，便于以后诊断
+    try {
+      writeFileSync(join(cacheDir, 'signing.txt'), signing.desc, 'utf8');
+    } catch {
+      /* ignore */
+    }
+    try {
+      writeFileSync(join(cacheDir, APKS_SOURCE_FILE), resolve(aabPath), 'utf8');
+    } catch {
+      /* ignore */
+    }
+
+    say(
+      `正在生成通用 APK（源包 ${(bundleBytes / 1024 / 1024).toFixed(1)} MB，` +
+        '含全部 ABI 与屏幕资源，产物体积会明显更大、首次较慢）…',
+    );
+    log('info', 'AAB', `bundletool build-apks --mode=universal（${signing.desc}）`);
+
+    const started = Date.now();
+    const build = await runJava(
+      rt.java!.path,
+      [
+        '-jar',
+        rt.jar!,
+        'build-apks',
+        `--bundle=${aabPath}`,
+        `--output=${rawApks}`,
+        // universal：不分设备挑 split，产出一个包含全部资源的 APK
+        '--mode=universal',
+        ...signing.args,
+        '--overwrite',
+      ],
+      (l) => say(l),
+      10 * 60 * 1000,
+    );
+    buildMs = Date.now() - started;
+
+    if (build.code !== 0 || !existsSync(rawApks)) {
+      const reason = pickErrorLine(build.stderr, build.stdout);
+      quietRm(cacheDir);
+      throw new Error(
+        `生成通用 APK 失败（bundletool build-apks --mode=universal）：${reason || '未知原因'}` +
+          (/unsigned|not signed|签名/i.test(reason)
+            ? '。这个 AAB 没有签名或签名方式不受支持，请改用已经签好名的 APK。'
+            : ''),
+      );
+    }
+
+    try {
+      extractUniversalFromApks(rawApks, apkFile);
+    } catch (e) {
+      quietRm(cacheDir);
+      throw new Error(`通用 APK 已生成但提取失败：${(e as Error).message}`);
+    }
+
+    // 中间产物用完即弃：universal.apks 解出来几乎就是那个 apk 本身
+    // （uncompressed），留着等于同一份数据占两倍磁盘
+    quietRm(rawApks, false);
+
+    const apkSize = statSync(apkFile).size;
+    say(
+      `通用 APK 完成（${((Date.now() - started) / 1000).toFixed(1)}s，` +
+        `${(apkSize / 1024 / 1024).toFixed(1)} MB）`,
+    );
+    log('success', 'AAB', `通用 APK 已生成：${apkFile}`);
+  }
+
+  /* ---- 4. 另存（与拆包产物同一套写法：先 .part 再改名） ---- */
+  const outPath = options.outPath;
+  let apkPathOut = apkFile;
+  let savedToOutPath = false;
+
+  if (outPath) {
+    if (resolve(outPath) !== resolve(apkFile)) {
+      if (existsSync(outPath) && options.overwrite === false) {
+        throw new Error(`目标文件已存在：${outPath}`);
+      }
+      mkdirSync(dirname(outPath), { recursive: true });
+      const part = `${outPath}.part`;
+      quietRm(part, false);
+      copyFileSync(apkFile, part);
+      quietRm(outPath, false);
+      renameSync(part, outPath);
+      say(`已保存到：${outPath}`);
+      log('success', 'AAB', `通用 APK 已另存：${outPath}`);
+    }
+    apkPathOut = outPath;
+    savedToOutPath = true;
+  }
+
+  return {
+    apkPath: apkPathOut,
+    cacheDir,
+    packageName: pkg,
+    versionName: info.versionName,
+    versionCode: info.versionCode,
+    bundleBytes,
+    apkBytes: statSync(apkFile).size,
     fromCache: cacheHit,
     rebuilt: !cacheHit,
     buildMs,

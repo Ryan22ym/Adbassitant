@@ -713,6 +713,9 @@ function ApkPanel() {
   /** 「另存 .apks」进行中 —— 与安装互斥，避免同时跑两个 bundletool */
   const [converting, setConverting] = useState(false);
   const [convertMsg, setConvertMsg] = useState('');
+  /** 「导出通用 APK」进行中 —— 同样要独占 bundletool */
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState('');
 
   /**
    * AAB 环境（Java 11+ 与 bundletool）。
@@ -763,6 +766,7 @@ function ApkPanel() {
       setApkPath(files[0]);
       setApkSize(undefined);
       setConvertMsg('');
+      setExportMsg('');
     }
   };
 
@@ -823,6 +827,47 @@ function ApkPanel() {
       toast('error', '拆包失败', msg);
     } finally {
       setConverting(false);
+    }
+  };
+
+  /**
+   * 导出通用 APK：AAB → 一个不挑设备的 .apk（可直接发给别人）。
+   *
+   * 与「仅拆包并另存为 .apks」的关键差别：这一步**不需要选设备**，也不碰 adb。
+   * universal 把全部 ABI 与屏幕资源打进同一个包，谁都能装，代价是体积更大。
+   */
+  const exportUniversal = async () => {
+    if (!apkPath || busy || exporting || converting) return;
+    if (!aabReady) return toast('warn', 'AAB 环境未就绪', aabReason);
+
+    setExporting(true);
+    setExportMsg('正在生成通用 APK…');
+    try {
+      const r = await call<{ apkPath: string; fromCache: boolean; apkBytes: number } | null>(
+        () =>
+          window.adbApi.exportUniversalApk(
+            apkPath,
+            undefined,
+            installSigning as unknown as Record<string, unknown>,
+          ),
+        { silent: true },
+      );
+      // null = 用户在保存框里点了取消，不是错误
+      if (!r) {
+        setExportMsg('');
+      } else {
+        setExportMsg(
+          `${r.fromCache ? '复用了已有通用产物' : '生成完成'}（${formatBytes(r.apkBytes)}），` +
+            `已导出到：\n${r.apkPath}`,
+        );
+        toast('success', '通用 APK 已导出', r.apkPath);
+      }
+    } catch (e) {
+      const msg = (e as Error).message || '导出失败';
+      setExportMsg(`导出失败：${msg}`);
+      toast('error', '导出通用 APK 失败', msg);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -932,20 +977,37 @@ function ApkPanel() {
               data-convert-apks="1"
               onClick={() => void convertAndSave()}
               loading={converting}
-              disabled={busy || converting || !current || !aabReady}
+              disabled={busy || converting || exporting || !current || !aabReady}
             >
               仅拆包并另存为 .apks
+            </Button>
+          )}
+          {/*
+            通用 APK：唯一一个不需要设备的 AAB 出口 —— universal 不按设备
+            挑 split，产物任何机器都能装，适合分发给别人。
+          */}
+          {isAab && (
+            <Button
+              variant="default"
+              size="sm"
+              data-export-universal="1"
+              onClick={() => void exportUniversal()}
+              loading={exporting}
+              disabled={busy || exporting || converting || !aabReady}
+            >
+              导出通用 APK（.apk）
             </Button>
           )}
           {apkPath && (
             <Button
               variant="ghost"
               size="sm"
-              disabled={busy || converting}
+              disabled={busy || converting || exporting}
               onClick={() => {
                 setApkPath('');
                 setApkSize(undefined);
                 setConvertMsg('');
+                setExportMsg('');
               }}
             >
               清除
@@ -956,6 +1018,12 @@ function ApkPanel() {
         {convertMsg && (
           <pre className="output-block" data-convert-result="1" style={{ maxHeight: 120 }}>
             {convertMsg}
+          </pre>
+        )}
+
+        {exportMsg && (
+          <pre className="output-block" data-export-result="1" style={{ maxHeight: 120 }}>
+            {exportMsg}
           </pre>
         )}
 
@@ -990,7 +1058,7 @@ function ApkPanel() {
           </Notice>
         )}
 
-        {isAab && <SigningPanel busy={busy || converting} />}
+        {isAab && <SigningPanel busy={busy || converting || exporting} />}
 
         {isAab && mode === 'overwrite' && (
           <Notice tone="accent">
@@ -1013,12 +1081,15 @@ function ApkPanel() {
             variant="primary"
             onClick={installSelected}
             loading={installing}
-            disabled={!current || !apkPath || busy || converting || (needsBundleTool && !aabReady)}
+            disabled={
+              !current || !apkPath || busy || converting || exporting || (needsBundleTool && !aabReady)
+            }
           >
             开始安装
           </Button>
           {installing && <span className="text-dim">正在安装中，请勿重复操作…</span>}
           {converting && <span className="text-dim">正在拆包，请勿重复操作…</span>}
+          {exporting && <span className="text-dim">正在生成通用 APK，请勿重复操作…</span>}
           {pendingInstall && <span className="text-dim">请先在上方弹窗里选择装到哪台设备…</span>}
         </div>
 
@@ -1048,6 +1119,10 @@ function ApkPanel() {
           同一份 AAB 要反复装（换机器、反复重装）时，可以先点
           <b>「仅拆包并另存为 .apks」</b>导出一次产物，之后直接拖这个 .apks 进来装，
           省掉每次几十秒的拆包。产物留在本机的缓存里，同一个 AAB + 同一颗设备第二次起自动复用。
+          <br />
+          <b>「导出通用 APK」</b>走的是另一条路（bundletool 的 universal 模式）：不挑设备、
+          <b>不需要连手机</b>，把全部 ABI 与屏幕资源打进同一个 .apk，<b>任何机器都能装，也能直接发给别人</b>，
+          代价是体积明显更大 —— 想留档或分发用这个，想装到自己的测试机上还是用按设备拆包更省空间。
           <br />
           安装完成后会按包名在设备上复核一遍 —— <b>只有设备上确实查到了这个包才会显示成功</b>，
           避免「界面说成功了、手机上却没有」。但只要有多台设备同时在线，
@@ -1120,7 +1195,8 @@ function AabEnvNotice() {
         <Notice tone="success">
           <b>AAB 安装环境已就绪</b>：{env.javaDesc}，bundletool {env.bundletoolVersion}。
           AAB 会先按目标设备的配置拆包，再以 install-multiple 安装（同一台设备第二次起复用缓存）；
-          想只拆包不安装，可用下方的「仅拆包并另存为 .apks」。
+          想只拆包不安装，可用下方的「仅拆包并另存为 .apks」；
+          想导出一个能发给别人的通用 APK，用「导出通用 APK（.apk）」（这一步不需要连设备）。
         </Notice>
       </div>
     );
