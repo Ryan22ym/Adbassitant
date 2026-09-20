@@ -108,6 +108,8 @@ const NAV = [
 export function Sidebar() {
   const devices = useApp((s) => s.devices);
   const onlineCount = devices.filter((d) => d.state === 'device').length;
+  // 在线更新：静默自检到有新版本就在「设置」上挂个点（不弹窗）
+  const updateAvailable = useApp((s) => s.updateAvailable);
 
   return (
     <aside className="sidebar">
@@ -131,6 +133,9 @@ export function Sidebar() {
             <span className="nav-label">{item.label}</span>
             {item.to === '/' && onlineCount > 0 && (
               <span className="nav-count">{onlineCount}</span>
+            )}
+            {item.to === '/settings' && updateAvailable && (
+              <span className="nav-dot" title="有新版本可以更新" />
             )}
           </NavLink>
         ))}

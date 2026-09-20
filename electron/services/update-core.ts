@@ -10,8 +10,21 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, sep } from 'path';
 import { extractZip, listZipEntries, readZipEntry, fileSize } from './zip';
 import { readPeVersion } from './pe-version';
-import type { UpdateManifest, LocalKind } from '../../shared/types';
-import { UPDATE_SCHEMA, UPDATE_PRODUCT_NAME, UPDATE_APP_ID } from '../../shared/types';
+import type {
+  UpdateManifest,
+  LocalKind,
+  UpdateKind,
+  UpdateChannel,
+  UpdateLatestDoc,
+  UpdateLatestEntry,
+  UpdatePackageRef,
+} from '../../shared/types';
+import {
+  UPDATE_SCHEMA,
+  UPDATE_PRODUCT_NAME,
+  UPDATE_APP_ID,
+  UPDATE_LATEST_SCHEMA,
+} from '../../shared/types';
 
 /** 本机状态快照（由 update.ts 依 app / process 组装） */
 export interface LocalSnapshot {
@@ -313,4 +326,164 @@ export function verifyPortableExe(exePath: string, manifestVersion: string): Val
 
 export function sizeOf(p: string): number {
   return fileSize(p);
+}
+
+/* ------------------------------------------------------------------ */
+/* 在线更新：latest.json 解析与选包（纯函数，验收脚本可直接 require）    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 规整用户填的更新源地址：缺协议时补 https://，补结尾斜杠。
+ * 非法（含非 http/https、乱写的字符串）返回 null。
+ * 丢掉 query / hash —— 更新源不该带这些。
+ */
+export function normalizeBaseUrl(raw: string): string | null {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  const withProto = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  try {
+    const u = new URL(withProto);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (!u.hostname) return null;
+    const path = u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`;
+    return `${u.protocol}//${u.host}${path}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 更新源地址 → latest.json 的完整 URL */
+export function latestUrlFor(baseUrl: string): string | null {
+  const b = normalizeBaseUrl(baseUrl);
+  if (!b) return null;
+  try {
+    return new URL('latest.json', b).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把清单里的包地址解析成绝对 URL。
+ * 允许清单写相对路径（如 `ADB桌面助手-v1.0.22-patch.zip`）—— 这样换域名 / 换 CDN
+ * 不用重新生成清单，清单本身也不用知道自己的公网地址。
+ */
+export function resolvePackageUrl(raw: string, baseUrl: string): string | null {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  const b = normalizeBaseUrl(baseUrl);
+  if (!b) return null;
+  try {
+    const u = new URL(s, b);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** 版本号形状：纯数字点分（1.0.22 / 1.0.22.1） */
+function looksLikeVersion(v: unknown): boolean {
+  return typeof v === 'string' && /^\d+(\.\d+)*$/.test(v.trim());
+}
+
+export interface LatestParseResult {
+  ok: boolean;
+  /** ok=false 时面向用户的原因 */
+  reason?: string;
+  /** 解析成功即有（服务端声明的最新版本） */
+  entry?: UpdateLatestEntry;
+  /** 是否比本机版本新 */
+  newer?: boolean;
+  /** 与本机形态匹配的包；null = 该版本未提供此形态 */
+  pkg?: UpdatePackageRef | null;
+}
+
+/**
+ * 解析并校验 latest.json。
+ *
+ * 校验原则与 manifest 一致：拿不准就拒绝，宁可让用户去下全量包。
+ * 这里**不做**安全判定（那在包内 manifest 里），只保证「这份清单是本产品的、
+ * 结构可认、指向的包形态对得上」。
+ */
+export function parseLatestJson(
+  text: string,
+  localVersion: string,
+  kind: LocalKind,
+  channel: UpdateChannel,
+): LatestParseResult {
+  const raw = String(text || '').trim();
+  if (!raw) return { ok: false, reason: '更新源返回了空内容，请稍后重试。' };
+
+  let doc: UpdateLatestDoc;
+  try {
+    doc = JSON.parse(raw) as UpdateLatestDoc;
+  } catch {
+    return {
+      ok: false,
+      reason: '更新源返回的内容不是合法 JSON —— 可能是网络网关、公司代理或 CDN 的错误页。',
+    };
+  }
+  if (!doc || typeof doc !== 'object') {
+    return { ok: false, reason: '更新源返回的内容结构不对（不是对象）。' };
+  }
+
+  if (doc.schema !== UPDATE_LATEST_SCHEMA) {
+    return {
+      ok: false,
+      reason: `更新源使用格式版本 ${doc.schema ?? '(缺失)'}，当前程序只认识 ${UPDATE_LATEST_SCHEMA}，请改用完整安装包升级。`,
+    };
+  }
+  if (doc.productName !== UPDATE_PRODUCT_NAME) {
+    return {
+      ok: false,
+      reason: `这个更新源提供的是「${doc.productName || '未知产品'}」的更新，不是 ${UPDATE_PRODUCT_NAME}。`,
+    };
+  }
+  if (doc.appId !== UPDATE_APP_ID) {
+    return {
+      ok: false,
+      reason: `更新源的产品标识（${doc.appId || '缺失'}）与当前程序（${UPDATE_APP_ID}）不符，已拒绝。`,
+    };
+  }
+  if (doc.channel !== channel) {
+    return {
+      ok: false,
+      reason: `更新源当前提供的是「${doc.channel || '未知'}」通道，本机设置的是「${channel}」通道。`,
+    };
+  }
+
+  const entry = doc.latest;
+  if (!entry || typeof entry !== 'object') {
+    return { ok: false, reason: '更新源里没有 latest 版本信息。' };
+  }
+  if (!looksLikeVersion(entry.version)) {
+    return { ok: false, reason: `更新源里的版本号「${String(entry.version)}」不是合法版本号。` };
+  }
+  if (!entry.packages || typeof entry.packages !== 'object') {
+    return { ok: false, reason: '更新源里没有列出任何更新包。' };
+  }
+
+  const newer = cmpVersion(entry.version, localVersion) > 0;
+  const pkgRaw = kind === 'dev' ? undefined : entry.packages[kind as UpdateKind];
+  const pkg: UpdatePackageRef | null =
+    pkgRaw && typeof pkgRaw === 'object' && String(pkgRaw.url || '').trim() ? pkgRaw : null;
+
+  return { ok: true, entry, newer, pkg };
+}
+
+/** 该版本没有本机形态的包时，给一句人话（两种形态的说法不一样） */
+export function noPackageReason(kind: LocalKind, version: string): string {
+  if (kind === 'portable') {
+    return `v${version} 没有提供便携版整包（只有安装版增量包）。便携版无法就地替换内部文件，请下载完整便携包手动替换。`;
+  }
+  return `v${version} 没有提供安装版增量包（可能只带了便携版整包）。请下载完整安装包。`;
+}
+
+/** 人类可读的包体积 */
+export function humanSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
 }

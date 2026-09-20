@@ -583,6 +583,18 @@ export interface AppSettings {
   pullDir: string;
   /** 默认目标设备序列号 */
   defaultSerial?: string;
+  /*
+   * 在线更新（v1.0.22）。服务器就绪前 updateBaseUrl 一直是空串 ——
+   * 此时「检查更新」提示「更新源未配置」是**正常状态**，不是错误。
+   */
+  /** 更新源根地址（如 https://example.com/adb-assistant/），空 = 未配置 */
+  updateBaseUrl: string;
+  /** 更新通道；本次只实现 stable，协议里预留 beta */
+  updateChannel: UpdateChannel;
+  /** 启动后静默检查一次（失败不打扰用户） */
+  autoCheckUpdate: boolean;
+  /** 上次检查时间（ISO），仅用于界面展示 */
+  lastCheckAt: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -707,6 +719,11 @@ export const IPC = {
   UPDATE_HANDSHAKE: 'update:handshake',
   UPDATE_OPEN_DIR: 'update:openDir',
 
+  /* 在线更新（v1.0.22）：联网检查 + 下载，校验与替换仍走上面那套 */
+  UPDATE_CHECK: 'update:check',
+  UPDATE_DOWNLOAD: 'update:download',
+  UPDATE_CANCEL_DOWNLOAD: 'update:cancelDownload',
+
   /* 主进程 -> 渲染进程 推送 */
   PUSH_LOG: 'push:log',
   PUSH_MIRROR_STATUS: 'push:mirrorStatus',
@@ -720,6 +737,8 @@ export const IPC = {
   PUSH_AAB_OUTPUT: 'push:aabOutput',
   /** bundletool 下载进度 */
   PUSH_AAB_DOWNLOAD: 'push:aabDownload',
+  /** 在线更新包下载进度（v1.0.22） */
+  PUSH_UPDATE_DOWNLOAD: 'push:updateDownload',
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -831,6 +850,8 @@ export interface UpdateInfo {
   totalBytes?: number;
   /** 会新增/覆盖运行库文件时的清单 */
   runtimeFiles?: string[];
+  /** 在线下载得到时记录来源 URL（本地选包时为空） */
+  sourceUrl?: string;
 }
 
 /** helper 落盘、新版启动后回读的更新结果 */
@@ -848,4 +869,83 @@ export interface UpdateResult {
   rolledBack?: boolean;
   /** helper 日志路径 */
   logPath?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* 在线更新（v1.0.22）                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 服务器上的 latest.json 只能是静态文件（本次确认不走后端接口）。
+ * 它只负责「指路」—— 真正的安全判定仍在包内 manifest（产品、版本、
+ * Electron 版本、运行库指纹、逐文件 sha256），所以清单本身不签名也能接受。
+ */
+export const UPDATE_LATEST_SCHEMA = 1;
+
+/** 更新通道；本次只实现 stable（beta 只在协议与类型里预留） */
+export type UpdateChannel = 'stable' | 'beta';
+
+/** 更新源返回的单个包引用（url 允许是相对 latest.json 的相对路径） */
+export interface UpdatePackageRef {
+  url: string;
+  size?: number;
+  sha256?: string;
+}
+
+/** latest.json 的 latest 节点 */
+export interface UpdateLatestEntry {
+  version: string;
+  publishedAt?: string;
+  /** 更新说明，界面直接显示 */
+  notes?: string;
+  /** 是否重要更新（本次只做展示，不强制） */
+  critical?: boolean;
+  packages: Partial<Record<UpdateKind, UpdatePackageRef>>;
+}
+
+/** 服务器上的 latest.json 全文 */
+export interface UpdateLatestDoc {
+  schema: number;
+  productName: string;
+  appId: string;
+  channel: string;
+  generatedAt?: string;
+  latest: UpdateLatestEntry;
+}
+
+/** 下载进度（主进程 → 渲染层推送，走 push:updateDownload） */
+export interface UpdateDownloadProgress {
+  received: number;
+  total: number;
+  /** total 未知（无 Content-Length）时为 0 */
+  percent: number;
+  phase: 'download' | 'verify';
+}
+
+/**
+ * checkOnlineUpdate 的返回值。
+ * 注意 ok 与 hasUpdate 是两件事：网络挂了是 ok=false，服务端说「没新版」是 ok=true + hasUpdate=false。
+ */
+export interface UpdateCheckResult {
+  ok: boolean;
+  /** ok=false 时面向用户的原因（直接展示，不加工） */
+  reason?: string;
+  /** 源描述，如「官方更新源」/「未配置」 */
+  sourceDesc: string;
+  /** 是否配置了更新源地址（未配置是正常状态，不是错误） */
+  configured: boolean;
+  /** 是否有比当前更新的版本 */
+  hasUpdate: boolean;
+  currentVersion: string;
+  /** 本次检查时间（ISO 本地格式） */
+  checkedAt: string;
+  /** hasUpdate 时有值 */
+  latest?: {
+    version: string;
+    publishedAt?: string;
+    notes?: string;
+    critical?: boolean;
+    /** 与本机形态匹配的包；null = 该版本未提供此形态的更新包 */
+    pkg: UpdatePackageRef | null;
+  };
 }

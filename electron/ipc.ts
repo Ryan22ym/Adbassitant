@@ -94,11 +94,15 @@ import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog } from './servic
 import { getSettings, saveSettings, resolveDir } from './services/settings';
 import {
   applyUpdate,
+  cancelOnlineDownload,
   cancelUpdate,
+  checkOnlineUpdate,
   getUpdateContext,
   openUpdateDir,
   prepareUpdate,
+  prepareUpdateFromUrl,
   rollbackUpdate,
+  setUpdateDownloadSink,
   updateHandshake,
 } from './services/update';
 import { checkEnv } from './env-check';
@@ -145,6 +149,9 @@ export function registerIpc() {
   setLogcatStatusSink((s) => send(IPC.PUSH_LOGCAT_STATUS, s));
 
   setWeakNetStatusSink((s) => send(IPC.PUSH_WEAKNET_STATUS, s));
+
+  // 在线更新包下载进度（v1.0.22）
+  setUpdateDownloadSink((p) => send(IPC.PUSH_UPDATE_DOWNLOAD, p));
 
   /* ---------------- 环境 ---------------- */
 
@@ -864,6 +871,22 @@ export function registerIpc() {
   ipcMain.handle(IPC.UPDATE_ROLLBACK, wrap(() => rollbackUpdate()));
   ipcMain.handle(IPC.UPDATE_HANDSHAKE, wrap(() => updateHandshake()));
   ipcMain.handle(IPC.UPDATE_OPEN_DIR, wrap(() => openUpdateDir()));
+
+  /* ---------------- 在线更新（v1.0.22） ---------------- */
+
+  // 检查更新：force=true 绕过 5 分钟缓存（用户手点的场景）
+  ipcMain.handle(
+    IPC.UPDATE_CHECK,
+    wrap((_e, force?: boolean) => checkOnlineUpdate(!!force)),
+  );
+
+  // 下载 + 校验：进度走 push:updateDownload，返回值与「选择本地更新包」完全同构
+  ipcMain.handle(
+    IPC.UPDATE_DOWNLOAD,
+    wrap((_e, pkgUrl: string, sha256?: string) => prepareUpdateFromUrl(pkgUrl, sha256)),
+  );
+
+  ipcMain.handle(IPC.UPDATE_CANCEL_DOWNLOAD, wrap(() => cancelOnlineDownload()));
 }
 
 /* ------------------------------------------------------------------ */

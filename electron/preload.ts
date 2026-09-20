@@ -101,6 +101,11 @@ const IPC = {
   UPDATE_ROLLBACK: 'update:rollback',
   UPDATE_HANDSHAKE: 'update:handshake',
   UPDATE_OPEN_DIR: 'update:openDir',
+
+  /* 在线更新（v1.0.22） */
+  UPDATE_CHECK: 'update:check',
+  UPDATE_DOWNLOAD: 'update:download',
+  UPDATE_CANCEL_DOWNLOAD: 'update:cancelDownload',
   PUSH_LOG: 'push:log',
   PUSH_MIRROR_STATUS: 'push:mirrorStatus',
   PUSH_RECORD_STATUS: 'push:recordStatus',
@@ -111,6 +116,7 @@ const IPC = {
   PUSH_WEAKNET_STATUS: 'push:weaknetStatus',
   PUSH_AAB_OUTPUT: 'push:aabOutput',
   PUSH_AAB_DOWNLOAD: 'push:aabDownload',
+  PUSH_UPDATE_DOWNLOAD: 'push:updateDownload',
 } as const;
 
 /**
@@ -333,6 +339,18 @@ const api = {
   updateHandshake: () => invoke(IPC.UPDATE_HANDSHAKE),
   openUpdateDir: () => invoke(IPC.UPDATE_OPEN_DIR),
 
+  /* 在线更新（v1.0.22）：检查 → 下载 → 复用上面那套校验与替换 */
+  /**
+   * 检查更新。
+   * force=true 绕过 5 分钟缓存（用户手点用 true，启动静默自检用 false）。
+   * 返回 UpdateCheckResult：configured / ok / hasUpdate / latest.pkg 四件事要分开看。
+   */
+  checkUpdate: (force = false) => invoke(IPC.UPDATE_CHECK, force),
+  /** 下载更新包并校验；进度走 push:updateDownload，返回 UpdateInfo（同 prepareUpdate） */
+  downloadUpdate: (pkgUrl: string, sha256?: string) =>
+    invoke(IPC.UPDATE_DOWNLOAD, pkgUrl, sha256),
+  cancelUpdateDownload: () => invoke(IPC.UPDATE_CANCEL_DOWNLOAD),
+
   /* 事件订阅，返回取消函数 */
   on: (channel: string, cb: (payload: any) => void) => {
     const allowed = [
@@ -346,6 +364,7 @@ const api = {
       IPC.PUSH_WEAKNET_STATUS,
       IPC.PUSH_AAB_OUTPUT,
       IPC.PUSH_AAB_DOWNLOAD,
+      IPC.PUSH_UPDATE_DOWNLOAD,
       'push:screenshot',
     ];
     if (!allowed.includes(channel as any)) {

@@ -1,14 +1,33 @@
 import { useState, useEffect } from 'react';
-import { Card, Button, Field, Input, Segmented, Notice, Badge, Spinner } from '@/components/ui';
+import {
+  Card,
+  Button,
+  Field,
+  Input,
+  Segmented,
+  Switch,
+  Progress,
+  Notice,
+  Badge,
+  Spinner,
+} from '@/components/ui';
 import { useApp } from '@/store/app';
 import { call } from '@/lib/ipc';
-import type { EnvCheckResult, UpdateContext, UpdateInfo } from '@shared/types';
+import { IPC } from '@shared/types';
+import type {
+  EnvCheckResult,
+  UpdateCheckResult,
+  UpdateContext,
+  UpdateDownloadProgress,
+  UpdateInfo,
+} from '@shared/types';
 
 /**
  * 每个版本的一句话亮点，key 为 package.json 的完整版本号。
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.0.22': '本版本给「应用内增量更新」接上了在线这条腿。以前更新包只能自己从本地挑一个文件，现在新增「更新源」：填一个网址（服务器端就是一个静态目录，里面放 latest.json 和更新包），程序会去读它。你手上这版之后有新版本时，左侧「设置」上会冒一个小红点，进设置页点「检查更新」就能看到版本号、更新说明和发布时间，确认后点「下载并更新」。下载走系统代理，边下边显示进度、随时能取消；下载完仍然要先过原来那套校验（产品名、版本号、包体 SHA-256、逐文件清单），校验不过就地删掉，不会把半个包留在机器上。三点说明：① 服务器还没就绪，所以「更新源」默认是空的，显示为「未配置」这个正常状态、不是报错，离线那条「选择更新包…」的老路一点没动；② 通道只做 stable，beta 先占位；③ 开发模式（未打包）下不提供应用内更新，这是刻意的。',
   '1.0.21': '本版本修一个「明明配好了正式签名，装 AAB 时却又被换成调试签名」的问题：签名配置以前只有在你打开「安装安装包」页、并且选中了 AAB（签名面板这时才出现）之后才会被读进界面，于是「把安装包直接拖到窗口上装」这条最常用的路径永远拿着默认的调试签名去装 —— 后端存的正式签名根本没机会生效，装完应用能跑，但 Facebook / 微信登录当场报 Invalid key hash。现在程序一启动就把签名配置读进来，拖放和按钮两条路径用的是同一份。另外安装结果里会直接写明本次用的是哪种签名：用了调试密钥库时会明确警告「应用签名已被替换，三方登录 / 推送可能失效」，不再只悄悄写进运行日志。',
   '1.0.20': '本版本给 AAB 多开了一条出口：新增「导出通用 APK」—— 不需要任何设备在线，直接把 .aab 转成一个能装在所有安卓机型上的通用 APK（用 Google 官方 bundletool 的 universal 模式），选好保存位置即可。适合把包发给别人，或丢进其它工具与平台使用。要注意体积代价：按设备拆包通常只有几十 MB，通用包会把所有机型的资源与原生库都塞进去（一个 200 MB 的 AAB 出来约 205 MB），所以它和「按设备拆包安装」是并存的两条路，不是替代关系。',
   '1.0.19': '本版本把「拆包」和「安装」拆成两件事：AAB 要装必须先用 bundletool 拆成一组 APK，以前这步和安装绑在一起，于是每换一台设备、每重装一次都要再拆一遍，一个大包要等几十秒。现在「安装安装包」页多了「仅拆包并另存为 .apks」——选好 AAB 与设备，点一下就把拆包产物导出到你指定的位置；这个 .apks 文件之后可以直接拖进程序安装，不再拆包，装得比 AAB 快得多。同时拖放区与文件选择器都开始接受 .apks（本工具拆出来的产物），安装方式（覆盖 / 清洁 / 全新）与装后复核的规矩对它同样适用。',
@@ -176,6 +195,8 @@ export default function SettingsPage() {
       </Card>
 
       <UpdatePanel />
+
+      <UpdateSourceCard />
     </>
   );
 }
@@ -186,6 +207,11 @@ export default function SettingsPage() {
  * 更新这件事的代价很高（装坏了就打不开），所以这里的原则是「拿不准就不做」：
  * 任何一项校验不过，都只提示改用完整安装包，绝不硬来。校验在主进程做
  * （electron/services/update-core.ts），这里只负责展示与确认。
+ *
+ * v1.0.22 起多了「在线更新」这条入口（检查更新 → 下载 → 复用同一套校验与替换）。
+ * 两条入口的关系要摆清楚：
+ *   · 在线更新是**主路径**，但它依赖服务器 —— 服务器没就绪时「更新源未配置」是正常状态；
+ *   · 「选择更新包…」是**兜底路径**，断网、内网隔离、临时内测包全靠它，永远保留。
  */
 const KIND_LABEL: Record<string, string> = {
   asar: '安装版（增量更新）',
@@ -193,12 +219,32 @@ const KIND_LABEL: Record<string, string> = {
   dev: '开发模式（未打包）',
 };
 
+function fmtSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+/**
+ * 检查更新的六种状态。注意「未配置」不是错误 —— 服务器还没上线时它才是常态，
+ * 界面按灰字提示处理，不弹错、不飘红。
+ */
+type CheckState = 'idle' | 'checking' | 'unconfigured' | 'error' | 'latest' | 'available';
+
 function UpdatePanel() {
   const toast = useApp((s) => s.toast);
+  const settings = useApp((s) => s.settings);
+  const setSettings = useApp((s) => s.setSettings);
+  const setUpdateAvailable = useApp((s) => s.setUpdateAvailable);
+
   const [ctx, setCtx] = useState<UpdateContext | null>(null);
+  const [check, setCheck] = useState<UpdateCheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
   const [info, setInfo] = useState<UpdateInfo | null>(null);
-  const [busy, setBusy] = useState<'' | 'prepare' | 'go'>('');
+  const [busy, setBusy] = useState<'' | 'prepare' | 'download' | 'go'>('');
   const [confirming, setConfirming] = useState<null | 'apply' | 'rollback'>(null);
+  const [dl, setDl] = useState<UpdateDownloadProgress | null>(null);
 
   const refresh = async () => {
     const r = await call<UpdateContext>(() => window.adbApi.updateContext(), { silent: true });
@@ -207,7 +253,86 @@ function UpdatePanel() {
 
   useEffect(() => {
     void refresh();
+    /*
+     * 进页面先拿一次结果：主进程有 5 分钟缓存，启动时的静默自检若已跑过就立即返回；
+     * 没缓存也只是发一次请求（更新源没配时主进程直接返回，不发网络请求）。
+     * 这一次 silent —— 失败原因就摆在面板里，不用弹窗再打扰一遍。
+     */
+    void runCheck(false, true);
+
+    // 下载进度（主进程推送）
+    const off = window.adbApi.on(IPC.PUSH_UPDATE_DOWNLOAD, (p: UpdateDownloadProgress) => setDl(p));
+    return () => off();
+    // 仅在挂载时执行一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const runCheck = async (force: boolean, silent = false) => {
+    setChecking(true);
+    if (!silent) setConfirming(null);
+    try {
+      const r = await window.adbApi.checkUpdate(force);
+      const res = (r?.data ?? null) as UpdateCheckResult | null;
+      setCheck(res);
+      if (!res) {
+        if (!silent) toast('warn', '检查更新失败', r?.error);
+        return;
+      }
+      // 侧栏红点跟着结果走
+      setUpdateAvailable(!!(res.ok && res.hasUpdate));
+      /*
+       * 主进程会把这次检查时间写进设置（lastCheckAt），但渲染层的 settings 是启动时
+       * 读的那一份副本 —— 不同步的话界面上「最近检查」会一直停在旧值。
+       */
+      void window.adbApi.getSettings().then((s2) => {
+        if (s2?.ok && s2.data) setSettings(s2.data);
+      });
+      if (silent) return;
+      if (!res.configured) toast('info', '还没有配置更新源', res.reason);
+      else if (!res.ok) toast('warn', '检查更新失败', res.reason);
+      else if (res.hasUpdate) toast('success', `发现新版本 v${res.latest?.version ?? ''}`, res.reason);
+      else toast('success', '已是最新版本', `当前 v${res.currentVersion}`);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  /** 在线下载（下载完的校验与替换，跟「选择更新包…」走同一条链路） */
+  const download = async () => {
+    const pkg = check?.latest?.pkg;
+    if (!pkg) return;
+    setBusy('download');
+    setDl(null);
+    setConfirming(null);
+    try {
+      const r = await window.adbApi.downloadUpdate(pkg.url, pkg.sha256);
+      if (!r?.ok) {
+        toast('error', '下载更新包失败', r?.error);
+        return;
+      }
+      const res = r.data as UpdateInfo;
+      setInfo(res);
+      if (res.ok) {
+        toast(
+          'success',
+          `更新包已就绪：v${ctx?.version} → v${res.manifest?.version}`,
+          res.warning,
+        );
+      } else {
+        toast('warn', '下载到的更新包不能用', res.reason);
+      }
+    } catch (e) {
+      toast('error', '下载更新包失败', (e as Error).message);
+    } finally {
+      setBusy('');
+      setDl(null);
+    }
+  };
+
+  const cancelDownload = async () => {
+    await window.adbApi.cancelUpdateDownload();
+    toast('info', '已取消下载');
+  };
 
   const pick = async () => {
     const files = await call<string[]>(
@@ -267,6 +392,18 @@ function UpdatePanel() {
 
   const busyNow = busy !== '';
 
+  const checkState: CheckState = checking
+    ? 'checking'
+    : !check
+      ? 'idle'
+      : !check.configured
+        ? 'unconfigured'
+        : !check.ok
+          ? 'error'
+          : check.hasUpdate
+            ? 'available'
+            : 'latest';
+
   return (
     <Card
       title="软件更新"
@@ -288,13 +425,107 @@ function UpdatePanel() {
           <span className="text-dim">正在读取更新环境…</span>
         </div>
       ) : (
-        <div className="col" data-update-panel="1" data-update-kind={ctx.kind}>
+        <div
+          className="col"
+          data-update-panel="1"
+          data-update-kind={ctx.kind}
+          /* 检查状态也挂在外层：验收脚本按 [data-update-panel][data-update-check=...] 直接取 */
+          data-update-check={checkState}
+        >
           <div className="kv-list">
             <About k="当前版本" v={`v${ctx.version}`} />
             <About k="程序形态" v={KIND_LABEL[ctx.kind] ?? ctx.kind} />
+            <About
+              k="更新源"
+              v={check?.sourceDesc ?? (String(settings?.updateBaseUrl || '') ? '读取中…' : '未配置')}
+            />
+            <About k="最近检查" v={check?.checkedAt || settings?.lastCheckAt || '尚未检查'} />
             <About k="运行时" v={`Electron ${ctx.electronVersion || '未知'}`} />
             {/* 运行库指纹：更新包被「运行库不一致」拒掉时，拿它跟包里记录的一对就知道差在哪 */}
             <About k="运行库指纹" v={ctx.runtimeHash ? `${ctx.runtimeHash.slice(0, 16)}…` : '—'} />
+          </div>
+
+          {/* ---------------- 在线检查结果（六态，见 CheckState 注释） ---------------- */}
+          <div className="col">
+            {checkState === 'checking' && (
+              <div className="row">
+                <Spinner />
+                <span className="text-dim">正在检查更新…</span>
+              </div>
+            )}
+
+            {checkState === 'idle' && (
+              <div className="text-dim update-note">正在读取更新环境…</div>
+            )}
+
+            {/* 未配置：服务器没就绪时的**正常**状态，灰字一行，不飘红不弹错 */}
+            {checkState === 'unconfigured' && (
+              <div className="text-dim update-note" data-update-unconfigured="1">
+                {check?.reason ?? '还没有配置更新源地址。'}
+              </div>
+            )}
+
+            {checkState === 'error' && (
+              <div className="text-dim update-note" data-update-error="1">
+                检查更新失败：{check?.reason}
+                {check?.sourceDesc ? `（${check.sourceDesc}）` : ''}
+              </div>
+            )}
+
+            {checkState === 'latest' && (
+              <div className="text-dim update-note" data-update-latest="1">
+                已是最新版本 · 当前 v{check?.currentVersion}
+              </div>
+            )}
+
+            {checkState === 'available' && check?.latest && (
+              <div className="update-ready" data-update-available="1">
+                <div className="update-ready-head">
+                  <Badge tone="success">新版本</Badge>
+                  <span className="update-ver">
+                    v{check.currentVersion} → <b>v{check.latest.version}</b>
+                  </span>
+                  {check.latest.pkg?.size ? (
+                    <span className="text-dim">{fmtSize(check.latest.pkg.size)}</span>
+                  ) : null}
+                  {check.latest.critical ? <Badge tone="warn">重要更新</Badge> : null}
+                </div>
+
+                {check.latest.publishedAt ? (
+                  <div className="text-dim update-note">发布时间 {check.latest.publishedAt}</div>
+                ) : null}
+
+                {check.latest.notes ? (
+                  <div className="update-notes">{check.latest.notes}</div>
+                ) : null}
+
+                {/* 有新版本但没提供本机形态的包（例如便携版只发了安装版增量包） */}
+                {!check.latest.pkg && <Notice tone="warn">{check.reason}</Notice>}
+
+                {busy === 'download' && (
+                  <div className="col" data-update-progress="1">
+                    <Progress value={dl?.percent ?? 0} />
+                    <div className="row" style={{ justifyContent: 'space-between' }}>
+                      <span className="text-dim">
+                        {dl?.phase === 'verify'
+                          ? '正在校验下载内容…'
+                          : dl
+                            ? `正在下载 ${fmtSize(dl.received)}${
+                                dl.total ? ` / ${fmtSize(dl.total)}` : ''
+                              }（${dl.percent}%）`
+                            : '正在连接更新源…'}
+                      </span>
+                      <Button variant="ghost" size="sm" onClick={cancelDownload}>
+                        取消下载
+                      </Button>
+                    </div>
+                    <div className="text-dim update-note">
+                      下载完成后会自动走一遍与本地包完全相同的校验，通过后才会出现「立即更新并重启」。
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {!ctx.canUpdate && (
@@ -362,22 +593,47 @@ function UpdatePanel() {
 
           <div className="row">
             <Button
-              variant="primary"
-              onClick={pick}
-              loading={busy === 'prepare'}
-              disabled={!ctx.canUpdate || busyNow}
+              variant="default"
+              onClick={() => runCheck(true)}
+              loading={checking}
+              /* 检查更新是只读操作：即使当前形态不支持应用内更新（开发模式等），也允许点 */
+              disabled={busyNow}
+              data-update-check-btn="1"
             >
-              选择更新包…
+              检查更新
             </Button>
+            {checkState === 'available' &&
+              check?.latest?.pkg &&
+              !info?.ok &&
+              confirming !== 'apply' && (
+                <Button
+                  variant="primary"
+                  onClick={download}
+                  loading={busy === 'download'}
+                  disabled={busyNow}
+                  data-update-download="1"
+                >
+                  下载并更新
+                </Button>
+              )}
             {info?.ok && confirming !== 'apply' && (
               <Button
-                variant="default"
+                variant="primary"
                 onClick={() => setConfirming('apply')}
                 disabled={busyNow}
               >
                 立即更新并重启
               </Button>
             )}
+            <Button
+              variant="ghost"
+              onClick={pick}
+              loading={busy === 'prepare'}
+              disabled={!ctx.canUpdate || busyNow}
+              data-update-pick="1"
+            >
+              选择更新包…
+            </Button>
             {ctx.hasBackup && confirming !== 'rollback' && (
               <Button
                 variant="ghost"
@@ -398,12 +654,133 @@ function UpdatePanel() {
           )}
 
           <div className="text-dim update-note">
+            两条更新入口：<b>在线更新</b>从「更新源设置」里的地址取版本与更新包（下载过程可取消，
+            中途断网不会留下坏包）；<b>选择更新包…</b>用于离线 / 内网环境，行为与以前完全一致。
             更新包校验项：产品与版本号、Electron 运行时、运行库指纹（adb / scrcpy 等）、
             每个文件的 SHA-256。任一项不符都会拒绝，并提示改用完整安装包。
             日志与备份在 <span className="mono">{ctx.updateDir}</span>。
           </div>
         </div>
       )}
+    </Card>
+  );
+}
+
+/**
+ * 更新源设置（v1.0.22）。
+ *
+ * 服务器还没就绪，所以这里默认是空的 —— 留空即「不启用在线更新」，
+ * 点「检查更新」会回一句「还没有配置更新源地址」，这是设计内的**正常**状态，
+ * 不是错误：其它功能一律不受影响，离线的手动更新入口也照旧可用。
+ * 地址填到目录一级即可（程序自己去拼 latest.json）。
+ */
+function UpdateSourceCard() {
+  const settings = useApp((s) => s.settings);
+  const setSettings = useApp((s) => s.setSettings);
+  const toast = useApp((s) => s.toast);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const saved = String(settings?.updateBaseUrl || '');
+
+  useEffect(() => {
+    setDraft(saved);
+  }, [saved]);
+
+  const save = async (patch: Record<string, unknown>, okMsg: string) => {
+    setSaving(true);
+    try {
+      const r = await call<any>(() => window.adbApi.setSettings(patch), { silent: true });
+      if (r) {
+        setSettings(r);
+        toast('success', okMsg);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card
+      title="更新源"
+      subtitle="在线更新从哪里取版本清单与更新包；服务器未就绪时留空即可，不影响其它功能"
+    >
+      <div className="col">
+        <Field
+          label="更新源地址"
+          hint="填到目录一级，程序会请求该目录下的 latest.json；留空 = 不启用在线更新。例如 https://example.com/adb-assistant/"
+        >
+          <div className="row">
+            <Input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="https://example.com/adb-assistant/"
+              spellCheck={false}
+              data-update-source-input="1"
+            />
+            <Button
+              variant="default"
+              onClick={() =>
+                save({ updateBaseUrl: draft.trim() }, draft.trim() ? '更新源已保存' : '已清空更新源')
+              }
+              loading={saving}
+              disabled={draft.trim() === saved}
+              style={{ flex: 'none' }}
+              data-update-source-save="1"
+            >
+              保存
+            </Button>
+            {saved && (
+              <Button
+                variant="ghost"
+                onClick={() => save({ updateBaseUrl: '' }, '已清空更新源')}
+                style={{ flex: 'none' }}
+              >
+                清空
+              </Button>
+            )}
+          </div>
+        </Field>
+
+        <Field
+          label="自动检查更新"
+          hint="启动后延迟几秒静默检查一次；有新版本只在侧栏「设置」上挂个提示点，不弹窗"
+        >
+          <Switch
+            checked={!!settings?.autoCheckUpdate}
+            onChange={(v) =>
+              save({ autoCheckUpdate: v }, v ? '已开启自动检查更新' : '已关闭自动检查更新')
+            }
+            label={settings?.autoCheckUpdate ? '已开启' : '已关闭'}
+            disabled={saving}
+          />
+        </Field>
+
+        <Field
+          label="更新通道"
+          hint="通道名由更新源提供，本机只做匹配；当前只开放稳定版，测试版协议已预留"
+        >
+          <Segmented
+            value={settings?.updateChannel ?? 'stable'}
+            onChange={(v) => {
+              if (v === 'beta') {
+                toast('info', '测试版通道暂未开放', '协议已预留，等服务器就绪后再开');
+                return;
+              }
+              void save({ updateChannel: 'stable' }, '更新通道：稳定版');
+            }}
+            options={[
+              { value: 'stable', label: '稳定版' },
+              { value: 'beta', label: '测试版（未开放）' },
+            ]}
+          />
+        </Field>
+
+        <div className="text-dim update-note">
+          最近检查：{settings?.lastCheckAt || '尚未检查'}。这个地址只影响在线更新这一条路 ——
+          「选择更新包…」与「回滚」都不依赖网络。
+        </div>
+      </div>
     </Card>
   );
 }

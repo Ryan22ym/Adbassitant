@@ -162,6 +162,14 @@ interface AppState {
    */
   pendingInstall: PendingInstall | null;
   setPendingInstall: (p: PendingInstall | null) => void;
+
+  /*
+   * 在线更新（v1.0.22）：
+   * updateAvailable 只表示「检查到有新版本」，用于侧栏红点与页面提示；
+   * 真正的检查结果（版本、更新说明、包地址）由「关于」页自己按需拉取，不在这里复制一份。
+   */
+  updateAvailable: boolean;
+  setUpdateAvailable: (v: boolean) => void;
 }
 
 const MAX_LOGS = 3000;
@@ -265,6 +273,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   pendingInstall: null,
   setPendingInstall: (pendingInstall) => set({ pendingInstall }),
+
+  updateAvailable: false,
+  setUpdateAvailable: (updateAvailable) => set({ updateAvailable }),
 }));
 
 /* ------------------------------------------------------------------ */

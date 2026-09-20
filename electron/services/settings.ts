@@ -8,6 +8,11 @@ const DEFAULTS: AppSettings = {
   screenshotDir: '',
   recordDir: '',
   pullDir: '',
+  // 在线更新：默认不配置更新源 —— 服务器就绪前「检查更新」提示「更新源未配置」是正常状态
+  updateBaseUrl: '',
+  updateChannel: 'stable',
+  autoCheckUpdate: true,
+  lastCheckAt: '',
 };
 
 /** 空目录视为未设置，回落到系统默认目录 */
@@ -41,8 +46,15 @@ function defaultDirs(): AppSettings {
     screenshotDir: join(pictures, 'ADB助手'),
     recordDir: join(videos, 'ADB助手'),
     pullDir: join(downloads, 'ADB助手'),
+    updateBaseUrl: '',
+    updateChannel: 'stable',
+    autoCheckUpdate: true,
+    lastCheckAt: '',
   };
 }
+
+/** 允许被显式清空的字符串字段（其余空串一律视为「没设置」，不覆盖默认值） */
+const CLEARABLE_KEYS = new Set(['updateBaseUrl', 'lastCheckAt']);
 
 export function getSettings(): AppSettings {
   if (cached) return cached;
@@ -59,9 +71,10 @@ export function getSettings(): AppSettings {
 
   // 先铺默认目录，再合并已存配置；
   // 但空字符串视为「未设置」，不允许覆盖默认目录，否则会出现 dir='' 导致 mkdir 失败。
+  // 例外见 CLEARABLE_KEYS —— 更新源地址本来就允许为空（= 未配置）。
   const merged: AppSettings = { ...defaultDirs() };
   for (const [k, v] of Object.entries(stored) as [string, string][]) {
-    if (typeof v === 'string' && v.trim() === '') continue;
+    if (typeof v === 'string' && v.trim() === '' && !CLEARABLE_KEYS.has(k)) continue;
     (merged as unknown as Record<string, unknown>)[k] = v;
   }
 

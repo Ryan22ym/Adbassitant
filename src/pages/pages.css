@@ -1331,3 +1331,17 @@
 .update-ver {
   font-weight: 600;
 }
+
+/*
+ * 在线更新的「更新说明」正文（v1.0.22）。
+ * 服务器 latest.json 里的 notes 可能带换行，pre-line 保留它；
+ * 左边一条细线让它跟周围的 kv / 按钮区分开。
+ */
+.update-notes {
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-line;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+}

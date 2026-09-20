@@ -4,7 +4,7 @@ import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
 import { IPC } from '@shared/types';
-import type { UpdateResult, AabSigningInfo } from '@shared/types';
+import type { UpdateResult, UpdateCheckResult, AabSigningInfo } from '@shared/types';
 
 import DevicePage from './pages/DevicePage';
 import MirrorPage from './pages/MirrorPage';
@@ -106,6 +106,40 @@ export default function App() {
         } else {
           st.toast('warn', '更新未完成', r.error ?? '');
         }
+      }
+
+      /*
+       * 在线更新静默自检（v1.0.22）。
+       *
+       * 三条约定：
+       *  1. 延迟 8 秒再发 —— 别和启动时的设备扫描 / 环境自检抢带宽与 CPU；
+       *  2. 必须真的配了更新源才发（服务器没就绪时 updateBaseUrl 为空，发了也是白跑）；
+       *  3. 任何失败都**不打扰用户** —— 只在有新版时提示一次，其余情况静默（理由写进运行日志）。
+       *     手动的「检查更新」在「关于」页，那条路才需要把失败原因摆出来。
+       */
+      const maybeAutoCheck = useApp.getState().settings;
+      if (alive && maybeAutoCheck?.autoCheckUpdate && String(maybeAutoCheck.updateBaseUrl || '').trim()) {
+        setTimeout(() => {
+          if (!alive) return;
+          void window.adbApi
+            .checkUpdate(false)
+            .then((r) => {
+              const res2 = r?.data as UpdateCheckResult | undefined;
+              if (alive && res2?.ok && res2.hasUpdate) {
+                useApp.getState().setUpdateAvailable(true);
+                useApp
+                  .getState()
+                  .toast(
+                    'info',
+                    `发现新版本 v${res2.latest?.version ?? ''}`,
+                    '可在「设置 → 软件更新」里一键更新',
+                  );
+              }
+            })
+            .catch(() => {
+              /* 静默自检失败不打扰 */
+            });
+        }, 8000);
       }
     })();
 

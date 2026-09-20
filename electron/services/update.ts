@@ -34,7 +34,18 @@ import {
   type LocalSnapshot,
 } from './update-core';
 import { readZipFileText } from './zip';
-import type { LocalKind, UpdateContext, UpdateInfo, UpdateManifest, UpdateResult } from '../../shared/types';
+import type {
+  LocalKind,
+  UpdateCheckResult,
+  UpdateContext,
+  UpdateDownloadProgress,
+  UpdateInfo,
+  UpdateManifest,
+  UpdateResult,
+} from '../../shared/types';
+import { getSettings, saveSettings } from './settings';
+import { httpSource, safeFileNameFromUrl } from './update-source';
+import { DownloadCancelledError, cancelActiveDownload, downloadToFile } from './update-net';
 
 /* ------------------------------------------------------------------ */
 /* 路径                                                                */
@@ -702,4 +713,161 @@ export function helperLog(): string {
   } catch {
     return '';
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 在线更新（v1.0.22）                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 本进程内的检查结果缓存。
+ *
+ * 为什么要有：静默自检（启动后延迟几秒）和用户手点「检查更新」很可能撞在一起，
+ * 没有缓存就会打两次网络请求；而且「关于」页每次挂载都能直接复用上次结果。
+ * TTL 之外的 force=true 会绕过它。
+ */
+const CHECK_TTL_MS = 5 * 60 * 1000;
+let cachedCheck: { at: number; key: string; result: UpdateCheckResult } | null = null;
+
+/** 下载进度出口（由 ipc.ts 注册，转成 push:updateDownload） */
+let downloadSink: ((p: UpdateDownloadProgress) => void) | null = null;
+
+export function setUpdateDownloadSink(fn: (p: UpdateDownloadProgress) => void): void {
+  downloadSink = fn;
+}
+
+function stamp(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+export function lastCheckResult(): UpdateCheckResult | null {
+  return cachedCheck?.result ?? null;
+}
+
+/**
+ * 检查更新。
+ *
+ * 返回值的语义要分清楚（界面也按这个分）：
+ *   configured=false          → 还没配更新源（服务器没就绪时的**正常**状态，不是错误）
+ *   ok=false, configured=true → 检查失败（网络 / 清单不合法），界面只提示不打扰
+ *   ok=true, hasUpdate=false  → 已是最新
+ *   ok=true, hasUpdate=true, latest.pkg=null → 有新版本，但没提供本机形态的包
+ *   ok=true, hasUpdate=true, latest.pkg=有值 → 可以一键更新
+ */
+export async function checkOnlineUpdate(force = false): Promise<UpdateCheckResult> {
+  const s = localSnapshot();
+  const settings = getSettings();
+  const baseUrl = String(settings.updateBaseUrl || '').trim();
+  const channel = settings.updateChannel || 'stable';
+  const checkedAt = stamp();
+  const key = `${baseUrl}|${channel}|${s.version}|${s.kind}`;
+
+  if (!baseUrl) {
+    return {
+      ok: false,
+      configured: false,
+      sourceDesc: '未配置',
+      reason: '还没有配置更新源地址 —— 服务器就绪后在「设置」里填入更新源即可启用在线更新。',
+      hasUpdate: false,
+      currentVersion: s.version,
+      checkedAt,
+    };
+  }
+
+  if (!force && cachedCheck && cachedCheck.key === key && Date.now() - cachedCheck.at < CHECK_TTL_MS) {
+    return cachedCheck.result;
+  }
+
+  const src = httpSource({ baseUrl, localVersion: s.version, kind: s.kind, channel });
+  try {
+    const info = await src.check();
+    const result: UpdateCheckResult = {
+      ok: true,
+      configured: true,
+      sourceDesc: info.sourceDesc,
+      hasUpdate: info.newer,
+      currentVersion: s.version,
+      checkedAt,
+      latest: {
+        version: info.version,
+        publishedAt: info.publishedAt,
+        notes: info.notes,
+        critical: info.critical,
+        pkg: info.pkg,
+      },
+    };
+    if (info.newer && !info.pkg && s.kind !== 'dev') {
+      result.reason = `发现新版本 v${info.version}，但没有提供${
+        s.kind === 'portable' ? '便携版整包' : '安装版增量包'
+      }，请到更新源下载完整安装包。`;
+    }
+    cachedCheck = { at: Date.now(), key, result };
+    if (settings.lastCheckAt !== checkedAt) {
+      try {
+        saveSettings({ lastCheckAt: checkedAt });
+      } catch {
+        /* 写不了也不影响这次检查 */
+      }
+    }
+    return result;
+  } catch (e) {
+    const result: UpdateCheckResult = {
+      ok: false,
+      configured: true,
+      sourceDesc: src.describe(),
+      reason: (e as Error).message || String(e),
+      hasUpdate: false,
+      currentVersion: s.version,
+      checkedAt,
+    };
+    // 失败不写缓存 —— 否则用户点「检查更新」要等 TTL 过去才有反应
+    log('warn', '更新', `检查更新失败：${result.reason}`);
+    return result;
+  }
+}
+
+/**
+ * 下载更新包并走一遍现有校验，返回与「选择本地包」完全一致的 UpdateInfo。
+ *
+ * 分工：update-source.ts / update-net.ts 只把字节弄到本地，
+ * **校验一行都没绕开** —— prepareUpdate() 里的 manifest、sha256、运行库指纹照样跑。
+ */
+export async function prepareUpdateFromUrl(pkgUrl: string, sha256?: string): Promise<UpdateInfo> {
+  const url = String(pkgUrl || '').trim();
+  const base: UpdateInfo = { ok: false, zipPath: '', zipSize: 0, sourceUrl: url };
+  if (!/^https?:\/\//i.test(url)) return { ...base, reason: '更新包地址无效' };
+
+  const dir = join(tmpdir(), `adba-update-dl-${Date.now()}`);
+  const dest = join(dir, safeFileNameFromUrl(url));
+  log('info', '更新', `开始下载更新包：${url}`);
+
+  try {
+    await downloadToFile(url, dest, sha256, {
+      onProgress: (p) => downloadSink?.(p),
+    });
+  } catch (e) {
+    if (e instanceof DownloadCancelledError) {
+      return { ...base, reason: '下载已取消' };
+    }
+    return { ...base, reason: `下载更新包失败：${(e as Error).message}` };
+  }
+
+  let size = 0;
+  try {
+    size = statSync(dest).size;
+  } catch {
+    return { ...base, reason: '下载完成后找不到更新包文件' };
+  }
+  log('info', '更新', `下载完成（${(size / 1024).toFixed(0)} KB），开始校验…`);
+
+  // 复用「选择本地更新包」那条完全相同的链路
+  const info = await prepareUpdate(dest);
+  return { ...info, sourceUrl: url };
+}
+
+/** 取消正在进行的下载 */
+export function cancelOnlineDownload(): boolean {
+  return cancelActiveDownload();
 }

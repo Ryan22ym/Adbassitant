@@ -17,10 +17,16 @@
  *      update-core.ts 刻意不 import electron，就是为了让普通 Node 能直接 require。
  *   B. 助手沙箱：在临时目录里造一套假的「安装目录 + 假启动器」，真跑
  *      update-helper.ps1，验证替换 / 备份 / 握手超时回滚 / 还原四条路径。
- *      假启动器是 node.exe 的一份副本改名（避免 Stop-Process 按进程名误杀本脚本）。
+ *      假启动器是**独立 node.exe** 的一份副本改名（避免 Stop-Process 按进程名误杀
+ *      本脚本）；不能用 process.execPath —— 经 Electron 跑时那是 electron.exe，
+ *      离开同目录的 dll 就起不来，见 resolveNodeExe() 的注释。
  *   C. 安装版界面：更新面板真的在、形态/版本对、按钮在、无渲染层异常。
  *
  * 注意：这里的 hash / 校验全是纯计算，不碰真实安装目录，也不碰设备。
+ *
+ * 宿主无关：A/B/C 段在「普通 Node」和「Electron 主进程」下都必须给出同样结论。
+ * 沙箱里的文件读写走 FS（Electron 下是 original-fs），因为宿主给 fs 打了 asar 补丁，
+ * 会把普通文件 `app.asar` 当容器解析 —— 详见 FS 的注释。
  */
 const path = require('path');
 const fs = require('fs');
@@ -73,20 +79,40 @@ const CORE = require(path.join(ROOT, 'dist-electron', 'electron', 'services', 'u
 const ZIP = require(path.join(ROOT, 'dist-electron', 'electron', 'services', 'zip.js'));
 const PE = require(path.join(ROOT, 'dist-electron', 'electron', 'services', 'pe-version.js'));
 
+/**
+ * 沙箱里的文件读写走这份 FS，而不是直接 fs。
+ *
+ * 🔴 在 Electron 宿主里跑时（`npm run check:update` 就是），Electron 给 `fs` 打了
+ *    asar 补丁：任何**以 `.asar` 结尾的路径**会被当成 asar 容器去解析，普通文件因此
+ *    读不出来（抛错 → 我们这里的 read() 返回 null）。
+ *    于是沙箱里的 cur/resources/app.asar 明明是 11 字节的 "NEW-ASAR-V2"，断言却报 null ——
+ *    看着像「助手没替换」，其实是测试脚本被宿主骗了。
+ *    这正是更新代码要把落盘名改成 `app.asar.__asar` 的同一个坑，方向反过来而已。
+ *
+ * `original-fs` 是 Electron 提供的未打补丁版本；纯 Node 下不存在，退回普通 fs。
+ */
+const FS = (() => {
+  try {
+    return process.versions.electron ? require('original-fs') : fs;
+  } catch {
+    return fs;
+  }
+})();
+
 /* ------------------------------------------------------------------ */
 /* A. 纯逻辑                                                            */
 /* ------------------------------------------------------------------ */
 
 function rmdir(p) {
   try {
-    fs.rmSync(p, { recursive: true, force: true });
+    FS.rmSync(p, { recursive: true, force: true });
   } catch {
     /* ignore */
   }
 }
 const wr = (p, s) => {
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, s);
+  FS.mkdirSync(path.dirname(p), { recursive: true });
+  FS.writeFileSync(p, s);
 };
 
 function baseLocal(over = {}) {
@@ -255,6 +281,37 @@ function partA() {
 
 const PS = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 
+/**
+ * 找一个**独立的 node.exe**，用来做沙箱里的假启动器。
+ *
+ * 🔴 这里曾经直接写 `process.execPath`，注释却说是「node.exe 的副本」——
+ *    于是从 `run-electron.py`（npm 脚本就是这条）跑时，execPath 是 electron.exe，
+ *    而 electron.exe **必须和它同目录的那堆 dll 在一起**（ffmpeg.dll / libEGL.dll /
+ *    vk_swiftshader.dll …）。单独拷到一个空目录再启动，Windows 直接给
+ *    STATUS_DLL_NOT_FOUND(0xC0000135)，假启动器根本不跑：
+ *      → 健康标记永不出现 → 助手按「新版白屏」回滚 → 9 条断言连锁失败。
+ *    症状极具误导性：看着像「助手替换坏了」，其实是启动器没起来。
+ *
+ * 优先用 electron 以外、能独立启动的 node.exe；实在找不到就让调用方明确失败，
+ * 不要退化成「假装通过」。
+ */
+let _nodeExe;
+function resolveNodeExe() {
+  if (_nodeExe !== undefined) return _nodeExe;
+  const cands = [];
+  if (path.basename(process.execPath).toLowerCase() === 'node.exe') cands.push(process.execPath);
+  if (process.env.npm_node_execpath) cands.push(process.env.npm_node_execpath);
+  if (process.env.NODE_EXE) cands.push(process.env.NODE_EXE);
+  for (const d of String(process.env.PATH || '').split(path.delimiter)) {
+    if (!d) continue;
+    const p = path.join(d, 'node.exe');
+    if (fs.existsSync(p)) cands.push(p);
+  }
+  cands.push('C:\\Program Files\\nodejs\\node.exe', 'C:\\Program Files (x86)\\nodejs\\node.exe');
+  _nodeExe = cands.find((p) => p && path.basename(p).toLowerCase() === 'node.exe' && fs.existsSync(p)) || null;
+  return _nodeExe;
+}
+
 function runHelper(staging, timeoutMs = 90_000) {
   let text = fs.readFileSync(path.join(ROOT, 'electron', 'assets', 'update-helper.ps1'), 'utf8');
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
@@ -285,9 +342,12 @@ function makeSandbox(tag, { health = true, breakSrc = false, mode = 'apply', hea
   fs.mkdirSync(state, { recursive: true });
   fs.mkdirSync(launcher, { recursive: true });
 
-  // 假启动器 = node.exe 的副本改名（名字唯一，Stop-Process 按名字杀不会误伤本脚本）
+  // 假启动器 = 独立 node.exe 的副本改名（名字唯一，Stop-Process 按名字杀不会误伤本脚本）
+  // ⚠️ 不能用 process.execPath：electron.exe 离了同目录的 dll 起不来，见 resolveNodeExe()
   const myApp = path.join(launcher, 'MyApp.exe');
-  fs.copyFileSync(process.execPath, myApp);
+  const nodeExe = resolveNodeExe();
+  if (!nodeExe) throw new Error('沙箱需要一份独立的 node.exe 做假启动器，但 PATH 与常见安装位置都没找到');
+  fs.copyFileSync(nodeExe, myApp);
 
   const healthPath = path.join(state, 'health.ok');
   const src = health
@@ -331,16 +391,24 @@ function makeSandbox(tag, { health = true, breakSrc = false, mode = 'apply', hea
   return { sb, cur, staging, state, job };
 }
 
+/**
+ * 读文件；读不出来时**返回带错误码的标记**而不是裸 null。
+ * 裸 null 分不清「文件不在（ENOENT）」和「内容不对」，排查时白猜一轮；
+ * 而且 Electron 宿主的 asar 补丁会把普通的 `*.asar` 文件读成 `Invalid package`，
+ * 这种情况更得把错误原样带出来。
+ */
 const read = (p) => {
   try {
-    return fs.readFileSync(p, 'utf8');
-  } catch {
-    return null;
+    return FS.readFileSync(p, 'utf8');
+  } catch (e) {
+    const code = (e && e.code) || '';
+    const msg = String((e && e.message) || e).slice(0, 60);
+    return `<ERR ${code || '?'} ${msg}>`;
   }
 };
 const readJson = (p) => {
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    return JSON.parse(FS.readFileSync(p, 'utf8'));
   } catch {
     return null;
   }

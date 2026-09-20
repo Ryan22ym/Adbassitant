@@ -125,6 +125,16 @@
   flex: none;
 }
 
+/* 有新版可更新时挂在「设置」上的小圆点（不打扰，只是提示） */
+.nav-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--danger, #e24b4a);
+  flex: none;
+  margin-left: 2px;
+}
+
 .sidebar-foot {
   display: flex;
   align-items: center;
