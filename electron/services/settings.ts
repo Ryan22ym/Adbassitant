@@ -9,7 +9,7 @@ const DEFAULTS: AppSettings = {
   recordDir: '',
   pullDir: '',
   // 在线更新：默认不配置更新源 —— 服务器就绪前「检查更新」提示「更新源未配置」是正常状态
-  updateBaseUrl: '',
+  updateBaseUrl: 'https://buddybase-d8g4m4rz6306e4648-1485935404.tcloudbaseapp.com/adb-assistant/',
   updateChannel: 'stable',
   autoCheckUpdate: true,
   lastCheckAt: '',
@@ -46,7 +46,7 @@ function defaultDirs(): AppSettings {
     screenshotDir: join(pictures, 'ADB助手'),
     recordDir: join(videos, 'ADB助手'),
     pullDir: join(downloads, 'ADB助手'),
-    updateBaseUrl: '',
+    updateBaseUrl: 'https://buddybase-d8g4m4rz6306e4648-1485935404.tcloudbaseapp.com/adb-assistant/',
     updateChannel: 'stable',
     autoCheckUpdate: true,
     lastCheckAt: '',

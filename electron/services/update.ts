@@ -546,9 +546,31 @@ export async function applyUpdate(): Promise<{ started: boolean }> {
 
   log('success', '更新', `更新助手已启动（PID ${pid}），应用即将退出并替换文件…`);
   prepared = null;
-  // app.exit 会跳过 before-quit / will-quit：上面的清理已经显式做完了，
-  // 走正常退出反而可能被 will-quit 里的弱网恢复逻辑卡住，让助手白等 60 秒超时。
-  setTimeout(() => app.exit(0), 600);
+  /*
+   * ⚠️ 这里必须「硬终止自己」，不能用 app.exit(0)。
+   *
+   * 实测（本机 Win11）：app 退出会卡在 ExitProcess 的 DLL_PROCESS_DETACH 阶段 ——
+   * 其它线程都收掉了，只剩一根线程卡在那里不退，句柄一个都没关（903 个），
+   * resources/app.asar 因此长时间保持独占锁定，更新助手怎么等都拿不到文件。
+   * 而且**换成正常关窗口也是同样结果**，跟更新逻辑无关，是这条退出路径本身的问题；
+   * 更麻烦的是进程进入「正在终止」状态后，外部再 TerminateProcess 也会被拒（err=5），
+   * 谁救不回来。所以不能先软退、再指望别人兜底，只能一开始就别走软退。
+   *
+   * process.kill(自己, SIGKILL) → libuv 走 TerminateProcess，
+   * **不调用 DllMain(PROCESS_DETACH)**，因此绕过这个卡点，句柄由内核直接回收，
+   * 文件随即解锁（实测强杀后 1~3 秒内即可独占打开）。
+   *
+   * 该做的收尾在 stopRunningTasks() 里已经显式做完了（停投屏/Logcat/弱网 + kill adb server），
+   * job.json / pending.json 也早已落盘，所以这里不需要再跑任何清理逻辑。
+   */
+  setTimeout(() => {
+    try {
+      process.kill(process.pid, 'SIGKILL');
+    } catch {
+      // 真动不了就退而求其次，让助手那边去强杀（它有 15 秒快速通道 + 按名清进程的兜底）
+      app.exit(0);
+    }
+  }, 600);
   return { started: true };
 }
 

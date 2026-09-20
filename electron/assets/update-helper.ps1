@@ -94,8 +94,13 @@ function Start-App() {
   }
 }
 
-# 超时回滚时先杀掉「刚启动的新版」，否则它可能还占着文件 / 和旧版抢单实例锁
-function Stop-NewApp() {
+# 按 exe 名强杀所有同名进程（含旧版残留的各路子进程）。
+#
+# 两个时机用它：
+#   · 替换前 —— 旧进程「退而不走」（窗口没了、主进程还在）时强杀它，放掉 app.asar 的独占锁；
+#   · 回滚时 —— 先杀掉「刚启动的新版」，否则它可能还占着文件 / 和旧版抢单实例锁。
+# 两处都安全：调用时在场的只有该杀的那一方。
+function Stop-AppByName() {
   if (-not $job.launchExe) { return }
   $n = [System.IO.Path]::GetFileNameWithoutExtension($job.launchExe)
   Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object {
@@ -109,21 +114,42 @@ Write-Log ('staging=' + $staging)
 $restore = $null
 
 try {
-  # ---- 1) 等旧进程退出 ----
+  # ---- 1) 等旧进程退出（快速通道）----
+  # 这一步只是给「正常退出」留点体面时间，超时不算失败 —— 真正决定能不能动手的
+  # 是下一步「目标文件能否独占打开」。把「进程对象还在」当成失败是错的：
+  # 进程可能已经终止、只是句柄还没被释放（PcaSvc 之类的会攥一会儿），
+  # Get-Process -Id 照样返回对象，于是白等 60 秒放弃替换。
   if ([int]$job.pid -gt 0) {
-    $dl = (Get-Date).AddSeconds(60)
+    $dl = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $dl) {
       if (-not (Get-Process -Id ([int]$job.pid) -ErrorAction SilentlyContinue)) { break }
       Start-Sleep -Milliseconds 300
     }
+  }
+
+  # ---- 1b) 旧进程要是「退而不走」，直接强杀 ----
+  # 实测 v1.0.22：客户端把窗口和渲染/GPU 子进程都收干净了，主进程自己却留在原地
+  # 一百多秒不退出，app.asar 因此一直处于独占锁定状态 —— 助手只能等到文件解锁超时，
+  # 用户看到的是「弹了更新、重启一趟、版本没变」。被替换的一方本来就该退出，
+  # 这里强杀没有副作用（新版此刻还没启动，同名的只有它）。
+  if ([int]$job.pid -gt 0) {
     if (Get-Process -Id ([int]$job.pid) -ErrorAction SilentlyContinue) {
-      throw ('等待旧进程退出超时（pid=' + $job.pid + '）')
+      Write-Log ('kill: 旧进程 pid ' + $job.pid + ' 15 秒内没退出，强制结束')
+      try { Stop-Process -Id ([int]$job.pid) -Force -ErrorAction Stop }
+      catch { Write-Log ('kill: 强杀失败（' + $_.Exception.Message + '）') }
+      Start-Sleep -Milliseconds 800
     }
   }
   Write-Log 'old process gone'
 
   # ---- 2) 等目标文件解锁 ----
+  # 「文件能否独占打开」是唯一可靠的判据。一次不成就按进程名清一遍同名进程再等 ——
+  # 能压着文件的只可能是这个应用自己的进程，清完还锁着就真没招了，只能报错回退。
   foreach ($t in $job.targets) {
+    if (Wait-FileFree $t.dest 45) { continue }
+    Write-Log ('targets busy: ' + $t.dest + ' 仍被占用，按进程名强杀后重试')
+    Stop-AppByName
+    Start-Sleep -Milliseconds 1000
     if (-not (Wait-FileFree $t.dest 60)) { throw ('目标文件被占用，无法替换：' + $t.dest) }
   }
   Write-Log 'targets unlocked'
@@ -208,7 +234,7 @@ try {
       })
     } else {
       Write-Log 'health timeout -> rollback'
-      Stop-NewApp
+      Stop-AppByName
       Start-Sleep -Seconds 2
       Restore-Files $restore
       # 先落结果再拉起旧版：旧版启动后第一件事就是找这份结果，写晚了它会读不到
