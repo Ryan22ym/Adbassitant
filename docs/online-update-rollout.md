@@ -30,6 +30,69 @@
 
 **不需要**的：后端程序、数据库、鉴权、签名证书、CDN 回源规则（有更好，不是必需）。
 
+### 1.1 🔴 别填 `https://服务器IP` —— 证书这关过不去
+
+一句话：**HTTPS 的信任根是证书，而公共 CA 不给裸 IP 签证书。**
+
+- 公共 CA（Let's Encrypt、DigiCert…）的 DV 证书只签**域名**，不签 IP。给 IP 上证书要么买昂贵的 IP 证书，要么自签。
+- **自签 = 客户端直接拒绝**。Electron 走 Chromium 的证书链校验，而客户端**刻意没有**注册 `certificate-error` / `setCertificateVerifyProc` 去忽略证书错误 —— 在软件更新链路上"忽略证书错误"等于给中间人开门。
+- 界面会显示「更新源地址不可用」，底层错误是 `ERR_CERT_COMMON_NAME_INVALID` 或 `ERR_CERT_AUTHORITY_INVALID`。
+
+**那用 `http://` 明文呢？** 代码**允许**（`normalizeBaseUrl` 不拦协议）—— 但别这么干：
+
+> `latest.json` 里的 `productName` / `appId` / `sha256` 就是客户端全部的安全判据，而它们**全部来自 `latest.json` 自己**，没有独立的签名根。也就是说，谁能在传输途中改写 `latest.json`，谁就能把更新指向自己的包并给出配套的 sha256。
+> **HTTPS 是这套方案唯一的信任根。** 去掉它等于把软件更新的经典攻击面完全敞开。
+>
+> 想要独立的信任根，就得给 `latest.json`（或包内 manifest）加签名并内置公钥验签 —— v1 明确不做，见设计文档「明确不做的事」。
+
+结论：**必须有一个域名 + 有效证书。** 下面两条路，选一条。
+
+### 1.2 两条路：自建 Nginx，或用对象存储
+
+**路线 A —— 域名 + Nginx（推荐，标准做法）**
+
+| # | 做什么 | 注意 |
+|---|---|---|
+| 1 | 买域名，加一条 **A 记录**指向服务器 IP | 域名不必贵，几块钱一年 |
+| 2 | ⚠️ **国内节点必须 ICP 备案** | 腾讯云 Lighthouse 广州/上海/北京等节点：域名不备案，443/80 访问会被拦。**香港/新加坡等境外节点免备案**（但大陆访问速度略慢） |
+| 3 | 控制台 → 防火墙 → 放行 **443**（和 80，签发证书要用） | Lighthouse 防火墙是独立于系统 `ufw` 的一层，别只改系统防火墙 |
+| 4 | 装 Nginx，产物传到 `/var/www/adb-assistant/` | 目录名随便，客户端填的地址跟它对齐即可 |
+| 5 | 上证书：`certbot` 自动签，或控制台申请免费 DV 证书再手动装 | 免费证书 90 天，`certbot` 可自动续期 |
+| 6 | 配 server 块 + 缓存头 | 用 §3 步骤 5 的现成配置 |
+| 7 | 客户端「更新源」填 `https://<域名>/adb-assistant/` | 见 §1.3 |
+
+**路线 B —— 对象存储（最省事，连服务器都不用）**
+
+腾讯云 COS / 阿里 OSS / 七牛：建 Bucket → 设**公有读** → 把 `latest.json` + zip 传上去 → 用它给的**自带 HTTPS 域名**。
+
+- 好处：不用买服务器、不用装 Nginx、不用配证书、不用备案（用厂商默认域名时）。
+- 代价：默认域名不好看、可能有限速、以后接 CDN 要额外配。
+- 如果你只是想把更新跑起来，**这条最快**。以后想换成自有域名，只需改客户端的「更新源」—— 清单里的包地址写的是**相对路径**，换域名不用重新生成 `latest.json`。
+
+### 1.3 地址到底填成什么样
+
+程序会把你填的地址规整成「以 `/` 结尾」，再拼 `latest.json`：
+
+| 你填的 | 规整后 | 实际请求 |
+|---|---|---|
+| `https://update.example.com/adb-assistant/` | 同上 | `…/adb-assistant/latest.json` |
+| `update.example.com/adb-assistant/` | 自动补 `https://` | 同上 |
+| `https://update.example.com/adb-assistant` | 自动补结尾斜杠 | 同上 |
+
+**填到"目录一级"**，不是填域名根。填 `https://example.com/` 会把 `latest.json` 要求到网站根目录，和你的站点头页打架 —— 用**子域名**（`update.example.com`）或**子目录**（`/adb-assistant/`）隔开，后者更省事。
+
+### 1.4 服务器还没买，也能先把链路验一遍
+
+不必等到买完服务器。本机起一个静态服务就能把「读清单 → 下载 → 校验 → 替换」整条链走通（客户端允许 `http`，仅限这种本机演练场景）：
+
+```powershell
+# 在 out-v1.0.22\update 的**上一级**目录起服务，让 /adb-assistant/ 正好对上
+python -m http.server 8000
+# 然后客户端「更新源」填： http://127.0.0.1:8000/adb-assistant/
+```
+
+> 开发模式（未打包）下客户端会拒绝应用内更新，所以这个演练**不会真的替换你的安装文件**，只是把网络与解析这一段走通。
+
 ---
 
 ## 2. 服务器目录结构（最终长这样）
@@ -321,5 +384,5 @@ python scripts/make-update.py --out out-v1.0.24
 | `electron/services/settings.ts` | `updateBaseUrl` / `updateChannel` / `autoCheckUpdate` / `lastCheckAt` |
 | `src/pages/SettingsPage.tsx` | 设置页「软件更新」面板 + 「更新源」卡片 |
 | `scripts/check-update-online.cjs` | 纯逻辑 + 下载器验收（47 项，离线可跑） |
-| `scripts/check-update-online-ui.cjs` | 界面与下载链路验收（27 项，需要 Electron） |
+| `scripts/check-update-online-ui.cjs` | 界面与下载链路验收（29 项，需要 Electron） |
 | `docs/online-update-design.md` | 协议与设计的完整记录 |
