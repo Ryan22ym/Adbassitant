@@ -33,7 +33,7 @@
 
 | 能力 | 位置 | 说明 |
 |---|---|---|
-| 产物生成 | `scripts/make-update.py` | 出 `ADB桌面助手-vX-patch.zip`（安装版增量，~156 KB）、`ADB桌面助手-vX-portable-patch.zip`（便携版整包）、`runtime-vX.json`（下一版差分基准），每个 zip 旁带 `.sha256` |
+| 产物生成 | `scripts/make-update.py` | 出 `ADB桌面助手-vX-patch.zip`（安装版增量，~156 KB）与 `runtime-vX.json`（下一版差分基准），zip 旁带 `.sha256`。**v1.0.24 起不再产出便携版整包**（`-portable-patch.zip`）——打包只出 NSIS 安装包 |
 | 包校验 | `electron/services/update-core.ts` | schema / productName / appId / 版本递增 / Electron 版本 / `baseRuntimeHash` / 逐文件 sha256，任一不过直接拒绝 |
 | 执行替换 | `electron/services/update.ts` + `electron/assets/update-helper.ps1` | `cmd /c start` 代建 PowerShell 助手（绕开作业对象连坐），退出后原子替换，新版渲染层握手判定成功，30 s 无握手自动回滚 |
 | 界面 | `src/pages/SettingsPage.tsx` 的 `UpdatePanel` | 选择更新包 / 立即更新并重启 / 回滚到 vX |
@@ -54,11 +54,12 @@
 ```
 https://<域名>/adb-assistant/
   latest.json                                       ← 客户端唯一入口
-  ADB桌面助手-v1.0.22-patch.zip
-  ADB桌面助手-v1.0.22-patch.zip.sha256
-  ADB桌面助手-v1.0.22-portable-patch.zip
-  ADB桌面助手-v1.0.22-portable-patch.zip.sha256
+  ADB桌面助手-v1.0.24-patch.zip
+  ADB桌面助手-v1.0.24-patch.zip.sha256
 ```
+
+（v1.0.24 起不再有 `-portable-patch.zip`：打包只出 NSIS 安装包，更新只发安装版小包。
+客户端对便携形态的兼容代码保留，仅不再被新版本用到。）
 
 ### 2.1 `latest.json`
 
@@ -70,19 +71,14 @@ https://<域名>/adb-assistant/
   "channel": "stable",
   "generatedAt": "2026-09-25T10:00:00+08:00",
   "latest": {
-    "version": "1.0.22",
+    "version": "1.0.24",
     "publishedAt": "2026-09-25T09:50:00+08:00",
     "notes": "更新说明，界面直接显示（支持 \n 换行）",
     "critical": false,
     "packages": {
       "asar": {
-        "url": "ADB桌面助手-v1.0.22-patch.zip",
+        "url": "ADB桌面助手-v1.0.24-patch.zip",
         "size": 163840,
-        "sha256": "…"
-      },
-      "portable": {
-        "url": "ADB桌面助手-v1.0.22-portable-patch.zip",
-        "size": 92274688,
         "sha256": "…"
       }
     }
@@ -97,7 +93,7 @@ https://<域名>/adb-assistant/
 | `channel` | 本次只实现 `stable`；协议预留，将来加 `beta` 不动协议 |
 | `latest.version` | 用现有 `cmpVersion()` 与 `app.getVersion()` 比较；**小于等于当前不算更新**（不做降级） |
 | `latest.notes` / `critical` | 界面展示；`critical` 预留（强更提示），本次只做展示不强制 |
-| `packages.asar` / `packages.portable` | 按 `localKind()` 取对应形态；缺失 → 「该版本没有你这种形态的包，请下载完整安装包」 |
+| `packages.asar` / `packages.portable` | 按 `localKind()` 取对应形态；缺失 → 「该版本没有你这种形态的包，请下载完整安装包」。**v1.0.24 起只写 `asar`**（不再发便携整包），已装便携版的用户会看到上述提示 |
 | `packages.*.url` | **允许相对路径**，以 `latest.json` 的 URL 为 base 解析（`new URL(url, base)`）→ 换域名不用重发清单 |
 | `packages.*.size` / `sha256` | 下载完先按此校验（第一道）；包内 manifest 的逐文件 sha256 是第二道 |
 
@@ -171,12 +167,12 @@ check() 内部：
 ### 3.4 下载器
 
 - **传输层用 Electron `net.request`**（已确认）：自动跟随系统代理与 PAC，证书校验走 Chromium；`aab.ts` 那套 `https.get` 手动实现代理太麻烦，仅照抄它的 `.part` / 进度 / 校验思路。
-- 超时：连接 10 s、无数据 30 s（`request.setTimeout` + 手动 abort），总时长不设死限（便携整包 88 MB）。
+- 超时：连接 10 s、无数据 30 s（`request.setTimeout` + 手动 abort），总时长不设死限（历史便携整包 88 MB；v1.0.24 起只有 ~156 KB 的安装版小包）。
 - 落盘：`%TEMP%\adba-update-dl-<ts>\<原始文件名>`，先 `.part` 后改名 —— 断网不会留下一个"看起来正常"的坏包。
 - 校验：下载完先比 `size` 与 `sha256`（清单给的），不符即删并要求重试。
 - 进度：回调 `{ received, total, percent }` → 主进程 `push:updateDownload` → 界面进度条；下载可取消（`update:cancelDownload`）。
 - 重试：界面提供「重试」；程序内自动重试 1 次（网络抖动最常见）。
-- 不做断点续传（v1）：整包最大 88 MB，收益不值当；若将来验证下来确实慢，再加 `Range`。
+- 不做断点续传（v1）：当时整包最大 88 MB，收益不值当；v1.0.24 起只剩百 KB 级小包，更不需要。
 
 ### 3.5 与现有校验链的衔接
 
@@ -313,7 +309,7 @@ export interface UpdateCheckResult {
 | 更新源被投毒 / 指向别的产品 | 清单校验 productName + appId；包内 manifest 二次校验（产品、版本、运行库、逐文件 sha256） |
 | 代理环境下下载卡死 | 用 Electron `net.request` 走系统代理；连接 10 s / 无数据 30 s 超时 |
 | 下载中断留下坏包 | `.part` → 改名；下载后先验 sha256，不符即删并提示重试 |
-| 便携版整包 88 MB 下载慢 | 只在便携版形态下才下整包；安装版走 156 KB 小包（本方案的核心收益） |
+| 便携版整包 88 MB 下载慢 | 只在便携版形态下才下整包；安装版走 156 KB 小包。**v1.0.24 起只发安装版小包，这个风险已消失** |
 | 用户手动选包路径被新 UI 挤掉 | 明确保留为常驻次要按钮，验收脚本钉住它仍可用 |
 | 新增设置项漏同步到 `App.tsx` | 启动时读取设置的地方（v1.0.21 的教训：持久化配置只在某组件挂载时才读 → 必有入口绕过它） |
 

@@ -100,13 +100,14 @@ python -m http.server 8000
 ```
 https://<你的域名>/adb-assistant/
   latest.json                                     ← 客户端唯一入口，必须叫这个名字
-  ADB桌面助手-v1.0.22-patch.zip                    ← 安装版增量包（约 150–220 KB）
-  ADB桌面助手-v1.0.22-patch.zip.sha256             ← 可选：给人看的，客户端不读
-  ADB桌面助手-v1.0.22-portable-patch.zip           ← 便携版整包（约 88–110 MB）
-  ADB桌面助手-v1.0.22-portable-patch.zip.sha256
-  ADB桌面助手-v1.0.21-patch.zip                    ← 历史版本建议保留
-  ADB桌面助手-v1.0.21-portable-patch.zip
+  ADB桌面助手-v1.0.24-patch.zip                    ← 安装版增量包（约 150–220 KB）
+  ADB桌面助手-v1.0.24-patch.zip.sha256             ← 可选：给人看的，客户端不读
+  ADB桌面助手-v1.0.23-patch.zip                    ← 历史版本建议保留
 ```
+
+> **v1.0.24 起只发安装版小包**，不再产出/上传便携版整包
+> （`ADB桌面助手-vX-portable-patch.zip`，约 105 MB）。理由：打包已只出 NSIS 安装包，
+> 没有便携形态的新包可发。清单里不再写 `packages.portable`。
 
 - 客户端的「更新源」填 `https://<你的域名>/adb-assistant/`（**结尾斜杠可有可无**，程序会自动补；缺 `https://` 也会自动补）。
 - 它会去请求 `<更新源>latest.json`。
@@ -145,22 +146,23 @@ updateBaseUrl: 'https://<你的域名>/adb-assistant/',
 python scripts/make-update.py --out out-v1.0.23
 ```
 
-产物在 `out-v1.0.23\update\`：
+产物在 `out-v1.0.24\update\`：
 
 ```
-ADB桌面助手-v1.0.23-patch.zip            安装版增量包
-ADB桌面助手-v1.0.23-patch.zip.sha256
-ADB桌面助手-v1.0.23-portable-patch.zip   便携版整包
-ADB桌面助手-v1.0.23-portable-patch.zip.sha256
-runtime-v1.0.23.json                     下一版差分基准（自己留着，不用传）
+ADB桌面助手-v1.0.24-patch.zip            安装版增量包（唯一要传的包）
+ADB桌面助手-v1.0.24-patch.zip.sha256
+runtime-v1.0.24.json                     下一版差分基准（自己留着，不用传）
 ```
+
+> v1.0.24 起**不再产出** `ADB桌面助手-vX-portable-patch.zip`。跑这条命令时若在产物里
+> 看到 portable 包，说明 `make-update.py` 被改回去了 —— 检查它的注释段。
 
 ### 步骤 4 — 生成 `latest.json`
 
 > ⚠️ **目前这一步是手工的**（`make-update.py --manifest-out` 还没做，见 §8）。
 > 用下面的模板手写，或者跑本节末尾的小脚本。
 
-把 `latest.json` 建在 `out-v1.0.23\update\` 下：
+把 `latest.json` 建在 `out-v1.0.24\update\` 下：
 
 ```json
 {
@@ -170,18 +172,13 @@ runtime-v1.0.23.json                     下一版差分基准（自己留着，
   "channel": "stable",
   "generatedAt": "2026-09-26T10:00:00+08:00",
   "latest": {
-    "version": "1.0.23",
+    "version": "1.0.24",
     "publishedAt": "2026-09-26T09:50:00+08:00",
     "notes": "第一行更新说明\n第二行也会保留换行",
     "critical": false,
     "packages": {
       "asar": {
-        "url": "ADB桌面助手-v1.0.23-patch.zip",
-        "size": 0,
-        "sha256": ""
-      },
-      "portable": {
-        "url": "ADB桌面助手-v1.0.23-portable-patch.zip",
+        "url": "ADB桌面助手-v1.0.24-patch.zip",
         "size": 0,
         "sha256": ""
       }
@@ -189,6 +186,10 @@ runtime-v1.0.23.json                     下一版差分基准（自己留着，
   }
 }
 ```
+
+> v1.0.24 起 `packages` **只写 `asar` 一项**。老清单里那个 `portable` 项可以删掉；
+> 已装便携版的用户点更新时会看到「该版本没有你这种形态的包，请下载完整安装包」——
+> 预期行为（我们不再为便携版出新整包）。
 
 **必须逐字正确**的四个字段（客户端会硬校验，不符直接拒绝并给出原因）：
 
@@ -202,8 +203,8 @@ runtime-v1.0.23.json                     下一版差分基准（自己留着，
 `size` / `sha256` 用下面这段 PowerShell 填（`size` = 字节数）：
 
 ```powershell
-$dir = "out-v1.0.23\update"
-foreach ($f in @("ADB桌面助手-v1.0.23-patch.zip","ADB桌面助手-v1.0.23-portable-patch.zip")) {
+$dir = "out-v1.0.24\update"
+foreach ($f in @("ADB桌面助手-v1.0.24-patch.zip")) {
   $p = Join-Path $dir $f
   $size = (Get-Item $p).Length
   $sha  = (Get-FileHash -Algorithm SHA256 $p).Hash.ToLower()
@@ -219,7 +220,7 @@ foreach ($f in @("ADB桌面助手-v1.0.23-patch.zip","ADB桌面助手-v1.0.23-po
 把 `out-v1.0.23\update\` 里的东西（**`runtime-vX.json` 不用传**）上传到 `/adb-assistant/`：
 
 - 覆盖 `latest.json`（这是唯一会变的文件）
-- 新增本版的 4 个 zip / sha256 文件
+- 新增本版的 2 个文件（`-patch.zip` 与它的 `.sha256`）
 - **保留历史版本的 zip**，回退时要用
 
 Nginx 参考配置：
@@ -270,7 +271,7 @@ if ($a.sha256.ToLower() -eq $b) { "sha256 OK" } else { "不一致！清单=$($a.
 
 把 `latest.json` 的 `version` 改成真新版（如 `1.0.23`），重新点「检查更新」→ 应出现新版本卡片（版本号 / 发布时间 / 更新说明 / 包大小）→ 点「下载并更新」→ 进度条走满 → 变成「已就绪」→ 点「立即更新并重启」→ 重启后版本号变新。
 
-> 便携版会下 88 MB 整包，安装版只有 150 KB 左右。**第一次务必两种形态各测一遍**。
+> 安装版只下 150 KB 左右的增量包，几秒就完事，不会有明显的下载等待。
 
 ### 步骤 7 — 公网自洽性核查：把包下回来算一遍
 
@@ -334,7 +335,7 @@ python scripts/make-update.py --out out-v1.0.24
 
 # 3) 写 latest.json（version 改成 1.0.24，size/sha256 按 §3 步骤 4 填）
 
-# 4) 上传（覆盖 latest.json + 新增 4 个文件）
+# 4) 上传（覆盖 latest.json + 新增 2 个文件：patch.zip / patch.zip.sha256）
 
 # 5) 自检 4 项（§3 步骤 6）
 ```
@@ -342,7 +343,8 @@ python scripts/make-update.py --out out-v1.0.24
 **每次都要确认的三件事**：
 
 - `latest.json` 的 `version` **严格大于**客户端当前版本 —— 小于等于都算「已是最新」，**客户端不会降级**。
-- `asar` 与 `portable` 两个包**都在**。只给一个的话，另一种形态的用户会看到「该版本没有你这种形态的包」。
+- `packages.asar` **必须有**（v1.0.24 起只有这一项）。装的是安装版才会升上去；
+  只剩便携版的老用户会看到「该版本没有你这种形态的包」——不再管（见 §2 提示）。
 - `notes` 里别放引号嵌套或换行符的转义错误 —— JSON 里换行必须写 `\n`。
 - **上传顺序：先传所有包，`latest.json` 最后传。** 反过来的话，客户端可能先拿到新清单、
   再去下还没换上去的旧包，`sha256` 校验必然失败（哪怕只差几秒的窗口）。
@@ -398,7 +400,7 @@ python scripts/make-update.py --out out-v1.0.24
 | `产品标识不符` | `appId` 写错 | 必须逐字 `com.xiaoyang.adbassistant` |
 | `通道` | 清单 `channel` 与客户端设置不符 | 都用 `stable` |
 | `版本号不合法` | `latest.version` 写成了 `v1.0.24`（带 v） | **不能带 v**，只能是 `1.0.24` |
-| `没有提供便携版整包` | 清单缺 `packages.portable` | 补上；便携版无法就地替换，必须有整包 |
+| `没有提供便携版整包` | 本机是**已装的历史便携版**，但清单只有 `packages.asar` | v1.0.24 起不再发便携整包，**预期行为**；让用户装一次 NSIS 安装包即可转正 |
 | `下载更新包失败：HTTP 404` | `url` 写错，或文件没传上去 | 注意相对路径是相对 `latest.json` 所在目录 |
 | `校验值不符` | `sha256` 与 zip 实际内容不一致 | 按 §3 步骤 4 重算；确认传的是没被改过的文件 |
 | `下载中断：30 秒没有收到新数据` | 网络抖动 / 服务端卡住 | 点重试；服务端加 `Range` 支持会更好 |

@@ -622,26 +622,43 @@ function partC() {
   record(tamperCaught, '产物侧：被篡改一个字节的小包会被校验拦下', '');
 
   // PE 版本
-  const exe = fs.readdirSync(dir).find((f) => f.endsWith('.exe') && f.includes('portable'));
-  if (exe) {
-    const exePath = path.join(dir, exe);
+  // v1.0.24 起打包只出 NSIS 安装版（不再有便携版 exe），PE 校验对象改为 win-unpacked 主程序。
+  // verifyPortableExe 实质是「PE 身份 + 版本一致性」校验，与产物形态无关，继续覆盖这条能力。
+  const unpacked = path.join(dir, 'win-unpacked');
+  let exePath = null;
+  let exeLabel = '';
+  if (fs.existsSync(unpacked)) {
+    const m = fs.readdirSync(unpacked).find((f) => f.endsWith('.exe') && !f.includes('portable'));
+    if (m) {
+      exePath = path.join(unpacked, m);
+      exeLabel = 'win-unpacked/' + m;
+    }
+  }
+  if (!exePath) {
+    const p = fs.readdirSync(dir).find((f) => f.endsWith('.exe') && f.includes('portable'));
+    if (p) {
+      exePath = path.join(dir, p);
+      exeLabel = p;
+    }
+  }
+  if (exePath) {
     const pe = PE.readPeVersion(exePath);
     const v3 = String(pe.fileVersion).split('.').slice(0, 3).join('.');
-    record(v3 === PKG.version, 'PE：便携版 exe 内嵌版本与 package.json 一致', `${pe.fileVersion} ← ${exe}`);
-    record(pe.strings.ProductName === 'ADB桌面助手', 'PE：便携版 exe 内嵌 ProductName 正确（身份校验依据）', String(pe.strings.ProductName));
+    record(v3 === PKG.version, 'PE：主程序 exe 内嵌版本与 package.json 一致', `${pe.fileVersion} ← ${exeLabel}`);
+    record(pe.strings.ProductName === 'ADB桌面助手', 'PE：主程序 exe 内嵌 ProductName 正确（身份校验依据）', String(pe.strings.ProductName));
     const okv = CORE.verifyPortableExe(exePath, PKG.version);
-    record(okv.ok, 'PE：便携版整包身份校验通过', okv.ok ? '' : String(okv.reason));
+    record(okv.ok, 'PE：主程序身份校验通过', okv.ok ? '' : String(okv.reason));
     const badv = CORE.verifyPortableExe(exePath, '9.9.9');
     record(!badv.ok, 'PE：声明版本与实际不符即被拒', String(badv.reason || '').slice(0, 60));
 
-    // 用非 PE 文件冒充便携版整包必须被拒
+    // 用非 PE 文件冒充主程序必须被拒
     const fake = path.join(TMP, 'fake-portable.exe');
     fs.mkdirSync(TMP, { recursive: true });
     fs.writeFileSync(fake, Buffer.from('MZ not really a pe'));
     const fv = CORE.verifyPortableExe(fake, PKG.version);
-    record(!fv.ok, 'PE：非 PE 文件冒充便携版整包被拒', String(fv.reason || '').slice(0, 50));
+    record(!fv.ok, 'PE：非 PE 文件冒充主程序被拒', String(fv.reason || '').slice(0, 50));
   } else {
-    record(false, 'PE：找到便携版 exe', '目录里没有 portable exe');
+    record(false, 'PE：找到主程序 exe', 'win-unpacked 与产物根目录都没有可用 exe');
   }
 }
 

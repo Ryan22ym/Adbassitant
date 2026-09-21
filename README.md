@@ -3,14 +3,26 @@
 一个用 **Electron + React + TypeScript** 重构的 Android 设备管理工具。
 界面简洁、深色/浅色可切换，代码分层清晰，方便长期维护与迭代。
 
-> **发版策略调整（v1.0.21 之后）**
-> - 打包**只出免安装便携包（portable）+ 增量小包**，不再出 NSIS 安装包 ——
->   装一次要跑安装器、还得先关干净进程，日常自测太啰嗦；便携包双击即用；
-> - 配套把 `scripts/install-local.py` 扩成**双路**：产物里有安装包就走静默安装，
->   只有 `win-unpacked/` 就**免安装绿色部署**（整目录搬到
->   `%LOCALAPPDATA%\Programs\ADBAssistant`），且会自己先把在跑的进程结束掉；
-> - 应用内增量更新**不受影响**：`update.ts` 本来就按 `PORTABLE_EXECUTABLE_FILE`
->   区分便携形态（整包替换 exe）与 asar 形态（替换 `app.asar`），两条路都在。
+> **发版策略调整（v1.0.24 起）**
+> - 打包**只出 NSIS 安装包**（`ADB桌面助手-vX-x64.exe`），**不再产出免安装便携包**；
+> - 更新**只发安装版增量小包**（`ADB桌面助手-vX-patch.zip`，约 150–220 KB），
+>   不再生成便携版整包（`ADB桌面助手-vX-portable-patch.zip`）；
+> - `win-unpacked/` 仍是必需的中间产物（`make-update.py` 靠它取 `app.asar`），
+>   它本身也是一份完整绿色版；`install-local.py` 在产物里找不到安装包时会自动退到绿色部署；
+> - ⚠️ 已装历史便携版的用户：更新清单里没有 `packages.portable` 时客户端会提示
+>   「该版本没有你这种形态的包，请下载完整安装包」—— 这是预期行为。
+>   `update.ts` / `update-core.ts` 里对便携形态（整包换 exe）的兼容代码**保留不动**，
+>   只是不再为新版本生成 portable 整包。
+> - 若要临时恢复便携包（不建议）：`electron-builder.json` 的 `win.target` 加回 `"portable"`，
+>   并把 `scripts/make-update.py` 里注释掉的便携整包段恢复。
+>
+> <details><summary>旧策略（v1.0.21 之后，已被上面取代）</summary>
+>
+> 打包只出免安装便携包（portable）+ 增量小包，不出 NSIS 安装包；`install-local.py` 双路：
+> 有安装包走静默安装，只有 `win-unpacked/` 就走免安装绿色部署（整目录搬到
+> `%LOCALAPPDATA%\Programs\ADBAssistant`）。
+>
+> </details>
 
 > **v1.0.21 更新（future 分支，已装到本机）**
 > - **修「签名配置被默认值吃掉」**（真 bug）：`store.installSigning` 的初始值写死
@@ -313,27 +325,27 @@ python scripts/build.py --no-build
 python scripts/build.py --out out-v1.1
 ```
 
-产物目录由 `electron-builder.json` 的 `directories.output` 决定。**默认只出免安装便携包**
-（`ADB桌面助手-vX-portable.exe`，单文件自解压，双击即用），`scripts/build.py` 收尾时
-再追加产出 `update/` 下的增量小包（见下文「应用内更新」）。
+产物目录由 `electron-builder.json` 的 `directories.output` 决定。**默认只出 NSIS 安装包**
+（`ADB桌面助手-vX-x64.exe`，`win.target` = `nsis`），`scripts/build.py` 收尾时
+再追加产出 `update/` 下的**安装版增量小包**（见下文「应用内更新」）。
 
-`win-unpacked/` 是便携包的中间产物，它本身也是一份完整绿色版（整目录复制即可运行），
+`win-unpacked/` 是打包的中间产物，它本身也是一份完整绿色版（整目录复制即可运行），
 `make-update.py` 正是靠它取 `app.asar` 生成小包，所以**不能从 `files`/target 里去掉**。
 
-需要 NSIS 安装包时（现在默认不出）：把 `nsis` 加回 `win.target` 即可 ——
-`electron-builder.json` 里的 `nsis` 配置段一直保留着，只差 target 那一项。
+不再产出便携包（v1.0.24 起）。确需临时恢复：`win.target` 加一项 `"portable"` ——
+`electron-builder.json` 里的 `portable` 配置段一直保留着。
 
 二进制文件通过 `extraResources` 打进 `resources/bin/`。
 
 ### 装到本机（发版后自测）
 
 ```bash
-python scripts/build.py --out out-v1.0.22     # 打包（便携包 + 增量包）
-python scripts/install-local.py --out out-v1.0.22
+python scripts/build.py --out out-v1.0.24     # 打包（NSIS 安装包 + 增量小包）
+python scripts/install-local.py --out out-v1.0.24
 ```
 
-`install-local.py` 自己选路：产物里有 NSIS 安装包就走静默安装（`/S /D=` 那套坑都在脚本里），
-**只有 `win-unpacked/`（现在的默认）就走免安装绿色部署** —— 整目录搬到
+`install-local.py` 自己选路：产物里有 NSIS 安装包就走静默安装（`/S /D=` 那套坑都在脚本里，
+**现在走的就是这条**），只有在产物里找不到安装包时才退到免安装绿色部署 —— 整目录搬到
 `%LOCALAPPDATA%\Programs\ADBAssistant`。
 
 绿色部署的两个要点：

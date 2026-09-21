@@ -8,9 +8,11 @@
 
 产出（out-vX/update/）：
   ADB桌面助手-vX-patch.zip              安装版小包：manifest.json + app.asar (+ bin 差量)
-  ADB桌面助手-vX-portable-patch.zip     便携版整包：manifest.json + portable/app.exe
   runtime-vX.json                       本版运行库指纹，供「下一版」做差分基准
   *.sha256                              包自身摘要（为第二阶段「服务器下载」预留）
+
+  ⚠️ v1.0.24 起不再产出便携版整包（ADB桌面助手-vX-portable-patch.zip）：
+     打包只出 NSIS 安装包，更新也只发安装版小包。
 
 runtimeHash 的定义必须与 electron/services/update.ts 完全一致：
   对 resources/bin/** 逐文件取 "{相对路径}|{字节数}|{sha256}"，按相对路径排序后以 \n 连接，
@@ -245,18 +247,13 @@ def main():
     asar_zip = os.path.join(upd_dir, '%s-v%s-patch.zip' % (product, version))
     m_asar, z_asar_size, z_asar_sha = build_zip(asar_zip, 'asar', entries)
 
-    # ---- 便携版整包 ----
+    # ---- 便携版整包：已停用（v1.0.24 起只发 NSIS 安装版）----
+    # 历史说明：便携版是「替换 exe 本体」的整包更新，体积约 105 MB。
+    # 现在打包只出 NSIS 安装包，更新也只发安装版小包，故不再生成 portable 整包。
+    # 若将来要临时恢复：electron-builder.json 的 win.target 加回 "portable"，
+    # 再把这段恢复（build_zip(portable_zip, 'portable', [('portable/app.exe', portable_exe, False)])）。
     portable_zip = None
-    portable_exe = None
-    for f in sorted(os.listdir(out_dir)):
-        if f.endswith('.exe') and 'portable' in f.lower():
-            portable_exe = os.path.join(out_dir, f)
-            break
-    if portable_exe:
-        portable_zip = os.path.join(upd_dir, '%s-v%s-portable-patch.zip' % (product, version))
-        _m, p_size, p_sha = build_zip(portable_zip, 'portable', [('portable/app.exe', portable_exe, False)])
-    else:
-        p_size = p_sha = 0
+    p_size = p_sha = 0
 
     if not args.quiet:
         print('=' * 68)
@@ -275,23 +272,14 @@ def main():
         print('-' * 68)
         print('app.asar              : %8.1f KB (sha256 %s…)' % (asar_size / 1024, asar_sha[:12]))
         print('安装版小包            : %8.1f KB  %s' % (z_asar_size / 1024, os.path.basename(asar_zip)))
-        if portable_zip:
-            print('便携版整包            : %8.1f MB  %s' % (p_size / 1048576, os.path.basename(portable_zip)))
-        # 全量包体积：优先 NSIS 安装包；只出便携包时就用便携包来对比
+        # 全量包体积：NSIS 安装包（不再产出便携包）
         full = None
-        full_label = '全量安装包'
         for f in sorted(os.listdir(out_dir)):
             if f.endswith('.exe') and 'portable' not in f.lower():
                 full = os.path.getsize(os.path.join(out_dir, f))
-        if full is None:
-            for f in sorted(os.listdir(out_dir)):
-                if f.endswith('.exe') and 'portable' in f.lower():
-                    full = os.path.getsize(os.path.join(out_dir, f))
-                    full_label = '全量便携包'
-                    break
         if full:
             print('%s            : %8.1f MB  （小包体积是它的 1/%.0f）' % (
-                full_label, full / 1048576, full / max(z_asar_size, 1)))
+                '全量安装包', full / 1048576, full / max(z_asar_size, 1)))
         print('产物目录              : %s' % upd_dir)
         print('=' * 68)
 

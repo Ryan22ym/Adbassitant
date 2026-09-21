@@ -15,7 +15,7 @@ VER = os.environ.get('APP_VER', '1.0.3')
 STAGES = [
     (1, 'scripts/e2e-packaged.cjs', 'Stage 1 启动与骨架'),
     (2, 'scripts/e2e-packaged-features.cjs', 'Stage 2 核心功能（真机）'),
-    (3, 'scripts/e2e-packaged-portable.cjs', 'Stage 3 portable 便携版'),
+    # Stage 3（portable 便携版）已停用：v1.0.24 起不再发便携包
     (4, 'scripts/e2e-installed.cjs', 'Stage 4 NSIS 安装版'),
     (5, 'scripts/e2e-mirror-installed.cjs', 'Stage 5 安装版投屏'),
     (6, 'scripts/e2e-mirror-icon.cjs', 'Stage 6 投屏窗口图标'),

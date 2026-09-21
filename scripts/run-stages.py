@@ -19,7 +19,8 @@ OUT = os.environ.get('ADB_OUT_DIR') or ('out-v1.0.%s' % __import__('json').load(
 STAGES = [
     (1, 'scripts/e2e-packaged.cjs',          'Stage 1 启动与骨架'),
     (2, 'scripts/e2e-packaged-features.cjs', 'Stage 2 核心功能（真机）'),
-    (3, 'scripts/e2e-packaged-portable.cjs', 'Stage 3 portable 便携版'),
+    # Stage 3（scripts/e2e-packaged-portable.cjs）已停用：
+    # v1.0.24 起打包只出 NSIS 安装版，不再产出便携包，故该段不再纳入流水线。
     (4, 'scripts/e2e-installed.cjs',         'Stage 4 NSIS 安装版'),
     (5, 'scripts/e2e-mirror-installed.cjs',  'Stage 5 安装版投屏'),
     (6, 'scripts/e2e-mirror-icon.cjs',       'Stage 6 投屏窗口图标'),
