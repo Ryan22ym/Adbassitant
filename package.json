@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -39,7 +39,7 @@
     "check:update-online-ui": "node scripts/check-update-online-ui.cjs",
     "check:asar-stage": "python scripts/run-electron.py scripts/check-asar-stage.cjs --watch ui-shots/_asar-stage.log --until \"ASAR STAGE CHECK DONE\" --timeout 300",
     "check:helper-launch": "python scripts/check-helper-launch.py",
-    "make:update": "python scripts/make-update.py --out out-v1.0.27",
+    "make:update": "python scripts/make-update.py --out out-v1.0.28",
     "make:manifest": "python scripts/make-manifest.py",
     "check:manifest": "python scripts/make-manifest.py --check",
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
