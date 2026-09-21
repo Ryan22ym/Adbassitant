@@ -34,7 +34,7 @@
     "check:drag-install:installed": "node scripts/check-drag-install.cjs --installed",
     "check:device-order": "node scripts/check-device-order.cjs",
     "check:update": "python scripts/run-electron.py scripts/check-update.cjs --watch ui-shots/_update.log --until \"UPDATE CHECK DONE\" --timeout 900",
-    "check:update:installed": "node scripts/check-update.cjs --installed --expect-version 1.0.25",
+    "check:update:installed": "node scripts/check-update.cjs --installed --expect-version 1.0.28",
     "check:update-online": "node scripts/check-update-online.cjs",
     "check:update-online-ui": "node scripts/check-update-online-ui.cjs",
     "check:asar-stage": "python scripts/run-electron.py scripts/check-asar-stage.cjs --watch ui-shots/_asar-stage.log --until \"ASAR STAGE CHECK DONE\" --timeout 300",
