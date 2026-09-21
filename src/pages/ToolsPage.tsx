@@ -25,9 +25,12 @@ import type {
   AabEnv,
   AabSigningInfo,
   SigningMode,
+  LogcatLevel,
+  LogcatExportOptions,
+  LogcatExportResult,
 } from '@shared/types';
 
-type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file';
+type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file' | 'logcat';
 
 /** 三种安装方式的说明（界面提示 + 让用户明白数据会不会被清） */
 const MODE_HINT: Record<InstallMode, string> = {
@@ -71,6 +74,7 @@ export default function ToolsPage() {
               ['monkey', 'Monkey 测试'],
               ['apk', '安装安装包'],
               ['file', '文件传输'],
+              ['logcat', 'Logcat 导出'],
             ] as [Tab, string][]
           ).map(([k, label]) => (
             <button
@@ -90,6 +94,7 @@ export default function ToolsPage() {
       {tab === 'monkey' && <MonkeyPanel />}
       {tab === 'apk' && <ApkPanel />}
       {tab === 'file' && <FilePanel />}
+      {tab === 'logcat' && <LogcatExportPanel />}
     </>
   );
 }
@@ -1713,4 +1718,211 @@ function FilePanel() {
       )}
     </Card>
   );
+}
+
+/* ================================================================== */
+/* Logcat 导出                                                         */
+/* ================================================================== */
+
+const LOGX_LEVELS: { value: LogcatLevel; label: string; cn: string }[] = [
+  { value: 'V', label: 'V', cn: 'Verbose（全部）' },
+  { value: 'D', label: 'D', cn: 'Debug' },
+  { value: 'I', label: 'I', cn: 'Info' },
+  { value: 'W', label: 'W', cn: 'Warn' },
+  { value: 'E', label: 'E', cn: 'Error' },
+  { value: 'F', label: 'F', cn: 'Fatal' },
+];
+
+const LOGX_BUFFERS = ['main', 'system', 'crash', 'events'];
+
+/**
+ * 导出 Logcat 日志（一次性 dump）。
+ *
+ * 与「实时 Logcat」页的分工：
+ * - 那边是「先抓、边看边存」，拿到的是点了开始之后产生的日志；
+ * - 这里是「把设备缓冲区里已有的日志读出来导成文件」，不用先开抓取，
+ *   适合复现完问题之后回头把刚才那段日志导走。
+ */
+function LogcatExportPanel() {
+  const current = useCurrentDevice();
+  const toast = useApp((s) => s.toast);
+
+  const [minLevel, setMinLevel] = useState<LogcatLevel>('V');
+  const [tags, setTags] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [buffers, setBuffers] = useState<string[]>(['main', 'system', 'crash']);
+
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<LogcatExportResult | null>(null);
+
+  const toggleBuffer = (b: string) => {
+    setBuffers((prev) => {
+      if (prev.includes(b)) {
+        const next = prev.filter((x) => x !== b);
+        return next.length ? next : prev;
+      }
+      return [...prev, b];
+    });
+  };
+
+  const doExport = async () => {
+    if (!current) return toast('warn', '请先连接设备');
+    setBusy(true);
+    setResult(null);
+    try {
+      const options: LogcatExportOptions = {
+        serial: current.serial,
+        minLevel,
+        tags: tags.trim() || undefined,
+        keyword: keyword.trim() || undefined,
+        buffers,
+        deviceLabel: `${current.brand || ''} ${current.model || ''} (${current.serial})`.trim(),
+      };
+      const r = await call<LogcatExportResult | null>(() => window.adbApi.exportLogcat(options), {
+        silent: true,
+      });
+      // 用户在保存框点了取消
+      if (!r) return;
+      setResult(r);
+      toast(
+        'success',
+        `已导出 ${r.lines} 行`,
+        r.filtered > 0 ? `${r.path}（过滤掉 ${r.filtered} 行）` : r.path,
+      );
+    } catch (e) {
+      toast('error', '导出失败', (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card
+      title="导出 Logcat 日志"
+      subtitle="直接读取设备当前日志缓冲区并导出为文本文件，无需先开始抓取"
+      extra={
+        <Button variant="primary" onClick={doExport} loading={busy} disabled={!current}>
+          导出到文件…
+        </Button>
+      }
+    >
+      <div className="col" data-logcat-export="1">
+        <Field label="日志级别" hint={LOGX_LEVELS.find((l) => l.value === minLevel)?.cn}>
+          <div data-logx-level={minLevel}>
+            <Segmented<LogcatLevel>
+              value={minLevel}
+              onChange={setMinLevel}
+              options={LOGX_LEVELS.map((l) => ({ value: l.value, label: l.label }))}
+            />
+          </div>
+        </Field>
+
+        <div className="grid-3">
+          <Field label="缓冲区">
+            <div className="row row-wrap" style={{ gap: 8 }}>
+              {LOGX_BUFFERS.map((b) => (
+                <button
+                  key={b}
+                  className={`chip ${buffers.includes(b) ? 'on' : ''}`}
+                  onClick={() => toggleBuffer(b)}
+                  disabled={busy}
+                >
+                  {b}
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <Field label="TAG 过滤" hint="支持 * 通配，逗号分隔">
+            <Input
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="例如 ActivityManager,MyApp*"
+              disabled={busy}
+            />
+          </Field>
+
+          <Field label="关键字" hint="逗号分隔，任一命中即保留">
+            <Input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="例如 crash,ANR,Exception"
+              disabled={busy}
+            />
+          </Field>
+        </div>
+
+        <div className="row row-wrap" style={{ gap: 6 }}>
+          <span className="text-dim" style={{ marginRight: 2 }}>快捷：</span>
+          <button className="chip" disabled={busy} onClick={() => setMinLevel('E')}>
+            只看错误
+          </button>
+          <button
+            className="chip"
+            disabled={busy}
+            onClick={() => {
+              setKeyword('crash,FATAL,ANR,Exception');
+              setMinLevel('V');
+            }}
+          >
+            闪退/ANR
+          </button>
+          <button
+            className="chip"
+            disabled={busy}
+            onClick={() => {
+              setTags('ActivityManager');
+              setMinLevel('I');
+            }}
+          >
+            Activity 启动
+          </button>
+          <button
+            className="chip"
+            disabled={busy}
+            onClick={() => {
+              setMinLevel('V');
+              setTags('');
+              setKeyword('');
+              setBuffers(['main', 'system', 'crash']);
+            }}
+          >
+            重置
+          </button>
+        </div>
+
+        {result && (
+          <div className="output-block" data-logx-result="1" style={{ maxHeight: 160 }}>
+            <div>
+              已导出 <b>{result.lines}</b> 行（设备原始 {result.rawLines} 行，过滤掉 {result.filtered} 行）
+              ，共 {formatBytes(result.bytes)}
+            </div>
+            <div className="mono" style={{ marginTop: 4 }}>
+              {result.path}
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <Button size="sm" variant="default" onClick={() => window.adbApi.reveal(result.path)}>
+                在文件夹中显示
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => justOpen(result.path)}>
+                打开文件
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <Notice tone="accent">
+          导出的是<b>设备当前缓冲区里已有的日志</b>（<span className="mono">adb logcat -d</span>，读完即退），
+          不是从此刻开始抓取 —— 想边跑边抓请用左侧「实时 Logcat」页。
+          <br />
+          级别 / TAG / 关键字都在导出时统一筛，所见即所得；缓冲区容量有限，
+          设备可能已把较早的日志滚动覆盖掉，越早导出越完整。
+        </Notice>
+      </div>
+    </Card>
+  );
+}
+
+function justOpen(path: string) {
+  void window.adbApi.openPath(path);
 }

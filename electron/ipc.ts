@@ -7,6 +7,7 @@ import {
   type AppSettings,
   type CommandResult,
   type LogcatFilter,
+  type LogcatExportOptions,
   type WeakNetParams,
   type InstallMode,
   type AabEnv,
@@ -79,6 +80,7 @@ import {
   setLogcatLinesSink,
   setLogcatStatusSink,
 } from './services/logcat';
+import { exportLogcatToFile } from './services/logcat-export';
 import {
   startWeakNet,
   stopWeakNet,
@@ -841,6 +843,28 @@ export function registerIpc() {
   ipcMain.handle(
     IPC.LOGCAT_PROCESSES,
     wrap((_e, serial?: string) => listProcesses(serial)),
+  );
+
+  /* ---------------- Logcat 导出工具（常用工具页，v1.0.26） ---------------- */
+
+  ipcMain.handle(
+    IPC.LOGX_EXPORT,
+    wrap(async (_e, options: LogcatExportOptions = {}) => {
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, '0');
+      const defaultName = `logcat_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.txt`;
+
+      // 保存框在主进程弹：渲染进程拿不到本机绝对路径
+      const r = await dialog.showSaveDialog({
+        title: '导出 Logcat 日志',
+        defaultPath: join(resolveDir('pull'), defaultName),
+        filters: [{ name: '文本文件', extensions: ['txt'] }],
+      });
+      // 取消返回 null，渲染层当作「用户放弃」，不弹错误
+      if (r.canceled || !r.filePath) return null;
+
+      return exportLogcatToFile(r.filePath, options);
+    }),
   );
 
   /* ---------------- 弱网模拟（v1.0） ---------------- */

@@ -560,6 +560,37 @@ export interface LogcatStatus {
 }
 
 /* ------------------------------------------------------------------ */
+/* Logcat 导出工具（常用工具页，一次性 dump）                          */
+/* ------------------------------------------------------------------ */
+
+export interface LogcatExportOptions {
+  /** 目标设备；不传则用当前唯一在线设备 */
+  serial?: string;
+  /** 最低级别，低于该级别不导出 */
+  minLevel?: LogcatLevel;
+  /** TAG 过滤（支持 * 通配，逗号分隔） */
+  tags?: string;
+  /** 正文关键字（逗号分隔，任一命中即保留） */
+  keyword?: string;
+  /** 缓冲区 */
+  buffers?: string[];
+  /** 写进文件头部的设备描述，纯展示用 */
+  deviceLabel?: string;
+}
+
+export interface LogcatExportResult {
+  path: string;
+  /** 写盘字节数（UTF-8） */
+  bytes: number;
+  /** 实际写入的日志行数（不含头部信息） */
+  lines: number;
+  /** 从设备读到的原始行数（过滤前） */
+  rawLines: number;
+  /** 被过滤掉的行数 */
+  filtered: number;
+}
+
+/* ------------------------------------------------------------------ */
 /* 弱网模拟                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -818,6 +849,9 @@ export const IPC = {
   LOGCAT_CLEAR: 'logcat:clear',
   LOGCAT_SAVE: 'logcat:save',
   LOGCAT_PROCESSES: 'logcat:processes',
+
+  /* Logcat 导出工具（常用工具页，v1.0.26） */
+  LOGX_EXPORT: 'logcat-export:run',
 
   /* 弱网模拟（v1.0） */
   WEAKNET_START: 'weaknet:start',

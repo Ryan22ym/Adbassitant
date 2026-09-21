@@ -85,6 +85,8 @@ const IPC = {
   LOGCAT_CLEAR: 'logcat:clear',
   LOGCAT_SAVE: 'logcat:save',
   LOGCAT_PROCESSES: 'logcat:processes',
+  /* Logcat 导出工具（常用工具页） */
+  LOGX_EXPORT: 'logcat-export:run',
 
   /* 弱网模拟（v1.0） */
   WEAKNET_START: 'weaknet:start',
@@ -323,6 +325,9 @@ const api = {
   clearLogcat: () => invoke(IPC.LOGCAT_CLEAR),
   saveLogcat: (meta?: Record<string, string>) => invoke(IPC.LOGCAT_SAVE, meta),
   logcatProcesses: (serial?: string) => invoke(IPC.LOGCAT_PROCESSES, serial),
+
+  /* Logcat 导出工具（常用工具页）：一次性 dump 设备现有日志并导出 */
+  exportLogcat: (options?: any) => invoke(IPC.LOGX_EXPORT, options),
 
   /* 弱网模拟（v1.0） */
   weaknetStart: (serial: string | undefined, params: any) =>

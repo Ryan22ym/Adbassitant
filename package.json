@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -39,7 +39,7 @@
     "check:update-online-ui": "node scripts/check-update-online-ui.cjs",
     "check:asar-stage": "python scripts/run-electron.py scripts/check-asar-stage.cjs --watch ui-shots/_asar-stage.log --until \"ASAR STAGE CHECK DONE\" --timeout 300",
     "check:helper-launch": "python scripts/check-helper-launch.py",
-    "make:update": "python scripts/make-update.py --out out-v1.0.25b",
+    "make:update": "python scripts/make-update.py --out out-v1.0.26",
     "make:manifest": "python scripts/make-manifest.py",
     "check:manifest": "python scripts/make-manifest.py --check",
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
@@ -53,7 +53,8 @@
     "check:drag-install:installed:electron": "python scripts/run-electron.py scripts/check-drag-install.cjs --watch ui-shots/_draginstall-installed.log --until \"DRAG INSTALL CHECK DONE\" --timeout 900 -- --installed",
     "test:ws-shim": "python scripts/_verify-ws-shim.py",
     "check:install-modes": "python scripts/run-electron.py scripts/check-install-modes.cjs --watch ui-shots/_installmodes.log --until \"INSTALL MODES CHECK DONE\" --timeout 600",
-    "check:quick-actions": "python scripts/run-electron.py scripts/check-quick-actions.cjs --watch ui-shots/_quickactions.log --until \"QUICK ACTION CHECK DONE\" --timeout 600"
+    "check:quick-actions": "python scripts/run-electron.py scripts/check-quick-actions.cjs --watch ui-shots/_quickactions.log --until \"QUICK ACTION CHECK DONE\" --timeout 600",
+    "check:logcat-export": "python scripts/run-electron.py scripts/check-logcat-export.cjs --watch ui-shots/_logcat-export.log --until \"LOGCAT EXPORT CHECK DONE\" --timeout 600"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
