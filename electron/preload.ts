@@ -87,6 +87,9 @@ const IPC = {
   LOGCAT_PROCESSES: 'logcat:processes',
   /* Logcat 导出工具（常用工具页） */
   LOGX_EXPORT: 'logcat-export:run',
+  LOGX_DIR_INFO: 'logcat-export:dirInfo',
+  LOGX_DIR_PICK: 'logcat-export:pickDir',
+  LOGX_DIR_RESET: 'logcat-export:resetDir',
 
   /* 弱网模拟（v1.0） */
   WEAKNET_START: 'weaknet:start',
@@ -328,6 +331,13 @@ const api = {
 
   /* Logcat 导出工具（常用工具页）：一次性 dump 设备现有日志并导出 */
   exportLogcat: (options?: any) => invoke(IPC.LOGX_EXPORT, options),
+  /** 查默认导出目录（根 / 本次会落的目录 / 是否默认值 / 是否存在） */
+  logcatExportDirInfo: (serial?: string, deviceLabel?: string) =>
+    invoke(IPC.LOGX_DIR_INFO, serial, deviceLabel),
+  /** 选导出根目录（弹系统的选文件夹框）；取消返回 null */
+  pickLogcatExportDir: (current?: string) => invoke(IPC.LOGX_DIR_PICK, current),
+  /** 恢复默认根目录，返回新的根 */
+  resetLogcatExportDir: () => invoke(IPC.LOGX_DIR_RESET),
 
   /* 弱网模拟（v1.0） */
   weaknetStart: (serial: string | undefined, params: any) =>

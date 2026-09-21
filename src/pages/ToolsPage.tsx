@@ -28,6 +28,7 @@ import type {
   LogcatLevel,
   LogcatExportOptions,
   LogcatExportResult,
+  LogcatExportDirInfo,
 } from '@shared/types';
 
 type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file' | 'logcat';
@@ -1755,6 +1756,60 @@ function LogcatExportPanel() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<LogcatExportResult | null>(null);
 
+  /*
+   * 导出目录：默认是「根\<设备>\<日期>\」（主进程算，避免两边各写一套拼接逻辑）。
+   * dirInfo 拿的是**将要写入**的目录；用户没改过根目录时 showDefaultHint 显示「默认」标记。
+   */
+  const [dirInfo, setDirInfo] = useState<LogcatExportDirInfo | null>(null);
+  const [customRoot, setCustomRoot] = useState(false);
+
+  const label = current
+    ? `${current.brand || ''} ${current.model || ''} (${current.serial})`.trim()
+    : '';
+
+  const refreshDir = async (serial?: string, devLabel?: string) => {
+    try {
+      const info = await call<LogcatExportDirInfo>(
+        () => window.adbApi.logcatExportDirInfo(serial, devLabel),
+        { silent: true },
+      );
+      setDirInfo(info);
+      setCustomRoot(!info.isDefault);
+    } catch {
+      setDirInfo(null);
+    }
+  };
+
+  // 设备变了（换机型 / 插拔）→ 目标目录跟着变，得重算
+  useEffect(() => {
+    void refreshDir(current?.serial, label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.serial, current?.model, current?.brand]);
+
+  const pickDir = async () => {
+    try {
+      const picked = await call<string | null>(
+        () => window.adbApi.pickLogcatExportDir(dirInfo?.root),
+        { silent: true },
+      );
+      if (!picked) return;
+      await refreshDir(current?.serial, label);
+      toast('success', '导出目录已更新', picked);
+    } catch (e) {
+      toast('error', '选择目录失败', (e as Error).message);
+    }
+  };
+
+  const resetDir = async () => {
+    try {
+      await call<string>(() => window.adbApi.resetLogcatExportDir(), { silent: true });
+      await refreshDir(current?.serial, label);
+      toast('info', '已恢复默认目录', 'D:\\adblogs');
+    } catch (e) {
+      toast('error', '恢复默认失败', (e as Error).message);
+    }
+  };
+
   const toggleBuffer = (b: string) => {
     setBuffers((prev) => {
       if (prev.includes(b)) {
@@ -1776,12 +1831,15 @@ function LogcatExportPanel() {
         tags: tags.trim() || undefined,
         keyword: keyword.trim() || undefined,
         buffers,
-        deviceLabel: `${current.brand || ''} ${current.model || ''} (${current.serial})`.trim(),
+        deviceLabel: label,
+        // 目录模式：主进程会自动建目录并起文件名，不再弹保存框
+        dir: dirInfo?.root,
+        splitByDevice: true,
       };
       const r = await call<LogcatExportResult | null>(() => window.adbApi.exportLogcat(options), {
         silent: true,
       });
-      // 用户在保存框点了取消
+      // 用户在保存框点了取消（只有无 dir 的旧路径才会走到）
       if (!r) return;
       setResult(r);
       toast(
@@ -1789,6 +1847,10 @@ function LogcatExportPanel() {
         `已导出 ${r.lines} 行`,
         r.filtered > 0 ? `${r.path}（过滤掉 ${r.filtered} 行）` : r.path,
       );
+      // 导出完成后直接把目录打开 —— 小杨要的「立即跳转」
+      void window.adbApi.openPath(r.dir);
+      // 目录可能是这次刚建出来的，刷新一下「已存在」状态
+      void refreshDir(current.serial, label);
     } catch (e) {
       toast('error', '导出失败', (e as Error).message);
     } finally {
@@ -1796,10 +1858,16 @@ function LogcatExportPanel() {
     }
   };
 
+  const targetDir = dirInfo?.dir || '';
+  const shortName = (v: string) => {
+    const parts = v.split(/[\\/]/).filter(Boolean);
+    return parts[parts.length - 1] || v;
+  };
+
   return (
     <Card
       title="导出 Logcat 日志"
-      subtitle="直接读取设备当前日志缓冲区并导出为文本文件，无需先开始抓取"
+      subtitle="直接读取设备当前日志缓冲区并导出到文件，无需先开始抓取"
       extra={
         <Button variant="primary" onClick={doExport} loading={busy} disabled={!current}>
           导出到文件…
@@ -1851,6 +1919,47 @@ function LogcatExportPanel() {
             />
           </Field>
         </div>
+
+        {/* 导出目录：默认 根\设备\日期\，不存在自动创建 */}
+        <Field
+          label="导出目录"
+          hint="按「设备 → 日期」自动分目录；目录不存在会自动创建，导出后自动打开"
+        >
+          <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div
+              className="mono"
+              data-logx-dir="1"
+              data-logx-root={dirInfo?.root || ''}
+              data-logx-custom={customRoot ? '1' : '0'}
+              title={targetDir || '正在读取…'}
+              style={{
+                flex: '1 1 320px',
+                minWidth: 0,
+                padding: '6px 10px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-sunken, rgba(127,127,127,0.08))',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontSize: 12.5,
+                opacity: targetDir ? 1 : 0.6,
+              }}
+            >
+              {targetDir || '（连接设备后显示）'}
+            </div>
+            <Button size="sm" variant="default" onClick={pickDir} disabled={busy}>
+              选择…
+            </Button>
+            <Button size="sm" variant="ghost" onClick={resetDir} disabled={busy || !customRoot}>
+              恢复默认
+            </Button>
+            <span className="text-dim" style={{ fontSize: 12 }}>
+              根目录：<span className="mono">{dirInfo?.root || 'D:\\adblogs'}</span>
+              {!customRoot && '（默认）'}
+            </span>
+          </div>
+        </Field>
 
         <div className="row row-wrap" style={{ gap: 6 }}>
           <span className="text-dim" style={{ marginRight: 2 }}>快捷：</span>
@@ -1904,6 +2013,9 @@ function LogcatExportPanel() {
               <Button size="sm" variant="default" onClick={() => window.adbApi.reveal(result.path)}>
                 在文件夹中显示
               </Button>
+              <Button size="sm" variant="ghost" onClick={() => justOpen(result.dir)}>
+                打开目录
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => justOpen(result.path)}>
                 打开文件
               </Button>
@@ -1917,6 +2029,11 @@ function LogcatExportPanel() {
           <br />
           级别 / TAG / 关键字都在导出时统一筛，所见即所得；缓冲区容量有限，
           设备可能已把较早的日志滚动覆盖掉，越早导出越完整。
+          <br />
+          文件按 <span className="mono">
+            {dirInfo?.root || 'D:\\adblogs'}\{shortName('设备 型号 序列号')}\{'{日期}'}\
+          </span>{' '}
+          自动归档，导出结束后会自动打开该目录。
         </Notice>
       </div>
     </Card>

@@ -12,6 +12,8 @@
  *   D 关键字过滤       每一行（除头部）都含关键字之一
  *   E 组合条件         级别 + TAG 同时生效
  *   F 缓冲区选择       只选 main 与 main+system 的原始行数关系
+ *   G 目录模式         自动建目录 / 落进 <根>\<设备>\<日期>\ / 返回值带 dir
+ *   H 目录命名净化     机型里的非法字符（/ : * 等）被替换、不产生非法路径
  *
  * 设备：优先用模拟器（emulator-*），避免动到真机。
  */
@@ -226,6 +228,124 @@ async function main() {
     record(false, 'F 过滤结果不超过全量', e.message);
   }
 
+  /* ---------- G 目录模式：自动建目录 + <根>\<设备>\<日期>\ ---------- */
+  try {
+    const dirRoot = path.join(tmp, 'adblogs');
+    const label = 'Pixel 6 (emulator-5556)';
+    // 目录此时还不存在 —— 服务端要自己建出来
+    record(!fs.existsSync(dirRoot), 'G 导出前目录不存在（用来验证会自动创建）', dirRoot);
+
+    const r = await svc.exportLogcatToDir(dirRoot, {
+      serial,
+      minLevel: 'V',
+      buffers: ['main', 'system', 'crash'],
+      deviceLabel: label,
+      splitByDevice: true,
+    });
+
+    record(fs.existsSync(dirRoot), 'G 目录被自动创建', dirRoot);
+    record(!!r.dir && fs.existsSync(r.dir), 'G 返回值带 dir 且该目录存在', r.dir);
+    record(r.dir === path.dirname(r.path), 'G dir == path 的父目录', `dir=${r.dir}`);
+
+    // 期望结构：<root>\<机型 序列号>\<YYYY-MM-DD>\
+    const rel = path.relative(dirRoot, r.dir).split(path.sep).filter(Boolean);
+    record(rel.length === 2, 'G 目录层级为 <设备>\\<日期>', rel.join('\\'));
+
+    const [devSeg, dateSeg] = rel;
+    record(
+      !!devSeg && /Pixel 6 emulator-5556/.test(devSeg),
+      'G 设备层 = 机型 + 序列号（去掉括号）',
+      `设备层="${devSeg}"`,
+    );
+    const today = new Date();
+    const expectDate = expectDateFor(today);
+    record(dateSeg === expectDate, 'G 日期层 = 今天', `日期层="${dateSeg}" 期望="${expectDate}"`);
+
+    const fname = path.basename(r.path);
+    record(
+      /^logcat_\d{8}_\d{6}\.txt$/.test(fname),
+      'G 文件名 = logcat_<日期>_<时间>.txt',
+      fname,
+    );
+    record(fs.existsSync(r.path) && r.lines > 0, 'G 文件已落盘且有内容', `lines=${r.lines}`);
+  } catch (e) {
+    record(false, 'G 目录模式导出', e.message);
+  }
+
+  /* ---------- G2 同一根目录、同一设备再导一次：复用目录 + 不覆盖上一份 ---------- */
+  try {
+    const dirRoot = path.join(tmp, 'adblogs');
+    const devDir = path.join(dirRoot, 'Pixel 6 emulator-5556', expectDateFor(new Date()));
+    const before = fs.readdirSync(devDir).filter((f) => /^logcat_.*\.txt$/.test(f)).length;
+
+    const r = await svc.exportLogcatToDir(dirRoot, {
+      serial,
+      minLevel: 'E',
+      buffers: ['main'],
+      deviceLabel: 'Pixel 6 (emulator-5556)',
+      splitByDevice: true,
+    });
+
+    const files = fs.readdirSync(devDir).filter((f) => /^logcat_.*\.txt$/.test(f));
+    record(
+      files.length === before + 1,
+      'G2 重复导出到同一目录会新增文件（不覆盖）',
+      `${before} → ${files.length}`,
+    );
+    // 同秒两次导出：第二个文件应该带 _2 后缀
+    record(
+      r.path.endsWith('.txt') && fs.existsSync(r.path) && fs.statSync(r.path).size > 0,
+      'G2 新文件已落盘且非空',
+      `${path.basename(r.path)} ${fs.statSync(r.path).size}B`,
+    );
+  } catch (e) {
+    record(false, 'G2 重复导出到同一目录', e.message);
+  }
+
+  /* ---------- H 目录名净化：机型带非法字符 ---------- */
+  try {
+    const dirRoot = path.join(tmp, 'dirty');
+    const r = await svc.exportLogcatToDir(dirRoot, {
+      serial,
+      minLevel: 'V',
+      buffers: ['main'],
+      deviceLabel: 'HTC/One: M8*"pro" (ABC123)',
+      splitByDevice: true,
+    });
+    const devSeg = path.relative(dirRoot, r.dir).split(path.sep).filter(Boolean)[0] || '';
+    const illegal = /[\\/:*?"<>|]/.test(devSeg);
+    record(!illegal, 'H 设备层不含 Windows 非法字符', `设备层="${devSeg}"`);
+    record(fs.existsSync(r.path), 'H 非法字符的设备仍能正常落盘', r.path);
+  } catch (e) {
+    record(false, 'H 目录名净化', e.message);
+  }
+
+  /* ---------- H2 纯函数：resolveExportDir 的行为 ---------- */
+  try {
+    const flat = svc.resolveExportDir('D:\\adblogs', { splitByDevice: false, deviceLabel: 'X' });
+    record(flat === 'D:\\adblogs', 'H2 splitByDevice=false 时直接用根目录', flat);
+
+    const seg = svc.deviceSegment('Pixel 6 (emulator-5556)', 'emulator-5556');
+    record(seg === 'Pixel 6 emulator-5556', 'H2 设备层不再重复序列号', seg);
+
+    const fallback = svc.deviceSegment('   ', '');
+    record(!!fallback, 'H2 无设备信息时有兜底名', fallback);
+
+    record(svc.safeSegment('CON', 'fb') !== '', 'H2 净化后不会为空', svc.safeSegment('CON', 'fb'));
+
+    // uniqueFilePath：同秒连导两次要顺延文件名，而不是覆盖
+    const uDir = path.join(tmp, 'uniq');
+    fs.mkdirSync(uDir, { recursive: true });
+    const ts = Date.now();
+    const first = svc.uniqueFilePath(uDir, ts);
+    fs.writeFileSync(first, 'x');
+    const second = svc.uniqueFilePath(uDir, ts);
+    record(first !== second, 'H2 撞名时顺延文件名（不覆盖）', `${path.basename(first)} → ${path.basename(second)}`);
+    record(!fs.existsSync(second), 'H2 顺延出的文件名可用', path.basename(second));
+  } catch (e) {
+    record(false, 'H2 resolveExportDir 行为', e.message);
+  }
+
   /* ---------- 收尾 ---------- */
   try {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -237,6 +357,21 @@ async function main() {
   log(`\n${pass}/${rows.length} 通过`);
   log(rows.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}`).join('\n'));
   log('LOGCAT EXPORT CHECK DONE');
+}
+
+/** 找到 <根>\<设备>\<日期> 这一层（跳过中间层） */
+function resolveLeaf(root) {
+  const devs = fs.readdirSync(root).map((d) => path.join(root, d));
+  const day = devs.find((d) => fs.statSync(d).isDirectory());
+  if (!day) return root;
+  const days = fs.readdirSync(day).map((d) => path.join(day, d));
+  return days[0] || day;
+}
+
+/** YYYY-MM-DD（本地时区），与服务端 dateSegment 的约定一致 */
+function expectDateFor(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 main().catch((e) => {

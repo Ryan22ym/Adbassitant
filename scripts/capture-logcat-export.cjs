@@ -70,6 +70,46 @@ app.whenReady().then(async () => {
   `);
   log((levelAttr !== 'none' ? 'PASS' : 'FAIL') + '  级别选择器存在  ::  data-logx-level=' + levelAttr);
 
+  // 导出目录行：必须渲染出来，且默认根是 D:\adblogs
+  const dirInfo = await win.webContents.executeJavaScript(`
+    (() => {
+      const e = document.querySelector('[data-logx-dir]');
+      if (!e) return null;
+      return { text: (e.textContent || '').trim(), root: e.getAttribute('data-logx-root'), custom: e.getAttribute('data-logx-custom') };
+    })();
+  `);
+  log(
+    (dirInfo && dirInfo.text ? 'PASS' : 'FAIL') +
+      '  导出目录行存在  ::  ' +
+      (dirInfo ? JSON.stringify(dirInfo) : 'null'),
+  );
+  log(
+    (dirInfo && /adblogs/i.test(dirInfo.root || '') ? 'PASS' : 'FAIL') +
+      '  默认根目录 = D:\\\\adblogs  ::  root=' +
+      (dirInfo ? dirInfo.root : 'n/a'),
+  );
+  // 目录文案：要么是已算出的完整路径（根\设备\日期），要么是等待设备的占位
+  const looksResolved = !!dirInfo && dirInfo.text.includes(dirInfo.root) && dirInfo.text.length > dirInfo.root.length + 8;
+  const isPlaceholder = !!dirInfo && dirInfo.text.includes('连接设备');
+  log(
+    (looksResolved || isPlaceholder ? 'PASS' : 'FAIL') +
+      '  目录路径已计算/占位  ::  text=' +
+      (dirInfo ? dirInfo.text : 'n/a'),
+  );
+
+  // 有「选择…」「恢复默认」两个按钮
+  const btns = await win.webContents.executeJavaScript(`
+    (() => {
+      const row = document.querySelector('[data-logx-dir]');
+      if (!row) return [];
+      const host = row.closest('label') || row.parentElement;
+      return Array.from(host ? host.querySelectorAll('button') : []).map((b) => (b.textContent || '').trim());
+    })();
+  `);
+  log(
+    (btns.includes('选择…') ? 'PASS' : 'FAIL') + '  有「选择…」按钮  ::  ' + JSON.stringify(btns),
+  );
+
   const img = await win.webContents.capturePage();
   fs.writeFileSync(path.join(OUT, 'tools-logcat-export.png'), img.toPNG());
   log((img.toPNG().length > 10000 ? 'PASS' : 'FAIL') + '  截图落盘  ::  tools-logcat-export.png ' + img.toPNG().length + ' bytes');

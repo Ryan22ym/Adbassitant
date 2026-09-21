@@ -80,7 +80,8 @@ import {
   setLogcatLinesSink,
   setLogcatStatusSink,
 } from './services/logcat';
-import { exportLogcatToFile } from './services/logcat-export';
+import { exportLogcatToFile, exportLogcatToDir, resolveExportDir, logcatFileName } from './services/logcat-export';
+import type { LogcatExportDirInfo } from '../shared/types';
 import {
   startWeakNet,
   stopWeakNet,
@@ -101,7 +102,7 @@ import {
   foregroundApp,
 } from './services/quick-actions';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog } from './services/logger';
-import { getSettings, saveSettings, resolveDir } from './services/settings';
+import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
 import {
   applyUpdate,
   cancelOnlineDownload,
@@ -845,25 +846,74 @@ export function registerIpc() {
     wrap((_e, serial?: string) => listProcesses(serial)),
   );
 
-  /* ---------------- Logcat 导出工具（常用工具页，v1.0.26） ---------------- */
+  /* ---------------- Logcat 导出工具（常用工具页，v1.0.26 / 目录模式 v1.0.27） ---------------- */
 
   ipcMain.handle(
     IPC.LOGX_EXPORT,
     wrap(async (_e, options: LogcatExportOptions = {}) => {
-      const d = new Date();
-      const p = (n: number) => String(n).padStart(2, '0');
-      const defaultName = `logcat_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.txt`;
+      /*
+       * 两种落盘方式：
+       *   · 给了 options.dir → **目录模式**：自动建目录、自动起文件名，不弹框。
+       *     这是界面默认走的路（导出后要「立即跳转到该目录」，弹框会多一次打断）。
+       *   · 没给 dir → 退回老行为：弹保存框让用户挑文件，取消返回 null。
+       */
+      const dir = (options.dir || '').trim();
+      if (dir) {
+        return exportLogcatToDir(dir, options);
+      }
 
       // 保存框在主进程弹：渲染进程拿不到本机绝对路径
       const r = await dialog.showSaveDialog({
         title: '导出 Logcat 日志',
-        defaultPath: join(resolveDir('pull'), defaultName),
+        defaultPath: join(resolveDir('pull'), logcatFileName(Date.now())),
         filters: [{ name: '文本文件', extensions: ['txt'] }],
       });
       // 取消返回 null，渲染层当作「用户放弃」，不弹错误
       if (r.canceled || !r.filePath) return null;
 
       return exportLogcatToFile(r.filePath, options);
+    }),
+  );
+
+  /** 界面上问「默认往哪写」：返回根目录 + 本次会落的目录 + 是否默认值 */
+  ipcMain.handle(
+    IPC.LOGX_DIR_INFO,
+    wrap(async (_e, serial?: string, deviceLabel?: string) => {
+      const root = resolveDir('logcatExport');
+      const dir = resolveExportDir(root, { splitByDevice: true, deviceLabel, serial });
+      const info: LogcatExportDirInfo = {
+        root,
+        dir,
+        isDefault: root.replace(/[\\/]+$/, '').toLowerCase() === DEFAULT_LOGX_ROOT.replace(/[\\/]+$/, '').toLowerCase(),
+        exists: existsSync(dir),
+      };
+      return info;
+    }),
+  );
+
+  /** 选导出根目录（弹系统的选文件夹框），选定后持久化；取消返回当前设置 */
+  ipcMain.handle(
+    IPC.LOGX_DIR_PICK,
+    wrap(async (_e, current?: string) => {
+      const r = await dialog.showOpenDialog({
+        title: '选择 Logcat 导出根目录',
+        defaultPath: (current || '').trim() || resolveDir('logcatExport'),
+        properties: ['openDirectory', 'createDirectory'],
+        buttonLabel: '选这个目录',
+      });
+      if (r.canceled || !r.filePaths.length) return null;
+      saveSettings({ logcatExportDir: r.filePaths[0] });
+      log('info', 'Logcat导出', `导出根目录改为 ${r.filePaths[0]}`);
+      return r.filePaths[0];
+    }),
+  );
+
+  /** 恢复默认根目录（D:\adblogs） */
+  ipcMain.handle(
+    IPC.LOGX_DIR_RESET,
+    wrap(async () => {
+      saveSettings({ logcatExportDir: DEFAULT_LOGX_ROOT });
+      return DEFAULT_LOGX_ROOT;
     }),
   );
 

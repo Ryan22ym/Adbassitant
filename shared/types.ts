@@ -576,10 +576,20 @@ export interface LogcatExportOptions {
   buffers?: string[];
   /** 写进文件头部的设备描述，纯展示用 */
   deviceLabel?: string;
+  /**
+   * 导出目录。传了就**直接写进这个目录**（不存在会自动创建），
+   * 文件名为 `logcat_<时间戳>.txt`，不再弹保存框；
+   * 不传则退回「弹保存框让用户挑文件」的老行为。
+   */
+  dir?: string;
+  /** 传 true 时，`dir` 视为**根目录**，实际落盘目录 = 根 \<设备机型 序列号>\<YYYY-MM-DD>\。默认 false（dir 就是最终目录） */
+  splitByDevice?: boolean;
 }
 
 export interface LogcatExportResult {
   path: string;
+  /** 实际写入的目录（= path 的父目录），供界面「导出后跳转」用 */
+  dir: string;
   /** 写盘字节数（UTF-8） */
   bytes: number;
   /** 实际写入的日志行数（不含头部信息） */
@@ -588,6 +598,18 @@ export interface LogcatExportResult {
   rawLines: number;
   /** 被过滤掉的行数 */
   filtered: number;
+}
+
+/** 导出前问主进程「默认往哪写」时返回的信息 */
+export interface LogcatExportDirInfo {
+  /** 用户选定的根目录（未设置则为 D:\adblogs） */
+  root: string;
+  /** 本次实际会写入的目录：root\<机型 序列号>\<日期>\ */
+  dir: string;
+  /** root 是否是默认值（未自定义过） */
+  isDefault: boolean;
+  /** 该目录是否已存在 */
+  exists: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -733,6 +755,11 @@ export interface AppSettings {
   recordDir: string;
   /** 拉取文件默认目录 */
   pullDir: string;
+  /**
+   * Logcat 导出根目录（v1.0.27）。默认 `D:\adblogs`，
+   * 实际落盘 = `<logcatExportDir>\<设备机型 序列号>\<YYYY-MM-DD>\`。
+   */
+  logcatExportDir: string;
   /** 默认目标设备序列号 */
   defaultSerial?: string;
   /*
@@ -852,6 +879,9 @@ export const IPC = {
 
   /* Logcat 导出工具（常用工具页，v1.0.26） */
   LOGX_EXPORT: 'logcat-export:run',
+  LOGX_DIR_INFO: 'logcat-export:dirInfo',
+  LOGX_DIR_PICK: 'logcat-export:pickDir',
+  LOGX_DIR_RESET: 'logcat-export:resetDir',
 
   /* 弱网模拟（v1.0） */
   WEAKNET_START: 'weaknet:start',

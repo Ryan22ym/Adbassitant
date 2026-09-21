@@ -1,4 +1,5 @@
-import { writeFileSync, statSync } from 'fs';
+import { writeFileSync, statSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 import { runAdb, ensureDevice, log } from './adb';
 import type { LogcatLevel, LogcatExportOptions } from '../../shared/types';
 
@@ -29,6 +30,8 @@ const MAX_LINES = 200000;
 
 export interface LogcatExportResult {
   path: string;
+  /** 实际写入的目录（`path` 的父目录），供界面「导出后跳转」用 */
+  dir: string;
   /** 写盘字节数（UTF-8） */
   bytes: number;
   /** 实际写入的日志行数（不含头部信息） */
@@ -37,6 +40,60 @@ export interface LogcatExportResult {
   rawLines: number;
   /** 被过滤掉的行数 */
   filtered: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* 导出目录：<根>\<设备>\<日期>\                                        */
+/* ------------------------------------------------------------------ */
+
+/** Windows 文件名非法字符（设备型号里常带 `/`、`:` 之类） */
+const ILLEGAL = /[\\/:*?"<>|\u0000-\u001f]/g;
+
+/** 清成合法且不空、不过长的单层目录名 */
+export function safeSegment(raw: string, fallback: string): string {
+  let s = (raw || '').replace(ILLEGAL, '_').replace(/\s+/g, ' ').trim();
+  // Windows 不允许目录名以点或空格结尾
+  s = s.replace(/[. ]+$/, '').trim();
+  if (!s) s = fallback;
+  // 单层目录名上限保守取 80，避免整条路径超 MAX_PATH
+  if (s.length > 80) s = s.slice(0, 80).trim().replace(/[. ]+$/, '');
+  return s || fallback;
+}
+
+/** `<机型 序列号>`，例如 `Pixel 6 emulator-5556` */
+export function deviceSegment(deviceLabel?: string, serial?: string): string {
+  const label = (deviceLabel || '').trim();
+  const sn = (serial || '').trim();
+  // deviceLabel 里带了 (serial)，先把它剥掉，避免重复
+  const withoutSerial = label.replace(/\([^()]*\)\s*$/, '').trim();
+  const parts = [withoutSerial, sn].filter(Boolean);
+  const name = parts.join(' ').trim();
+  return safeSegment(name, sn || 'unknown-device');
+}
+
+/** `YYYY-MM-DD`（本地时区） */
+export function dateSegment(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 算出这次实际要写进哪个目录（**不建目录**，纯计算 + 拼路径）。
+ * `splitByDevice` 为 true 时在 root 下再分一层设备、一层日期。
+ */
+export function resolveExportDir(
+  root: string,
+  opts: { splitByDevice?: boolean; deviceLabel?: string; serial?: string; now?: number } = {},
+): string {
+  const base = (root || '').trim();
+  if (!base) throw new Error('导出目录为空');
+  if (!opts.splitByDevice) return base;
+  return join(
+    base,
+    deviceSegment(opts.deviceLabel, opts.serial),
+    dateSegment(opts.now ?? Date.now()),
+  );
 }
 
 /**
@@ -49,7 +106,6 @@ export async function exportLogcatToFile(
   options: LogcatExportOptions = {},
 ): Promise<LogcatExportResult> {
   const serial = await ensureDevice(options.serial);
-
   const buffers = (options.buffers && options.buffers.length ? options.buffers : ['main', 'system', 'crash'])
     .map((b) => String(b).trim())
     .filter(Boolean);
@@ -145,11 +201,63 @@ export async function exportLogcatToFile(
 
   return {
     path: filePath,
+    dir: dirname(filePath),
     bytes,
     lines: kept.length,
     rawLines: rawLines.length,
     filtered: rawLines.length - kept.length,
   };
+}
+
+/**
+ * 目录模式导出：自动建目录（含缺失的父级）→ 生成带时间戳的文件名 → 走上面的导出。
+ *
+ * 这是界面默认走的路径 —— 用户不用每次挑目录，日志按 `<设备>\<日期>\` 自动归位。
+ */
+export async function exportLogcatToDir(
+  rootOrDir: string,
+  options: LogcatExportOptions = {},
+): Promise<LogcatExportResult> {
+  const root = (rootOrDir || '').trim();
+  if (!root) throw new Error('导出目录为空');
+
+  const dir = resolveExportDir(root, {
+    splitByDevice: options.splitByDevice,
+    deviceLabel: options.deviceLabel,
+    serial: options.serial,
+  });
+
+  // 目录不存在就建（recursive 顺带把缺失的父级一起建出来）
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+    log('info', 'Logcat导出', `已创建导出目录 ${dir}`);
+  }
+
+  // 撞名就顺延，别静默覆盖上一份
+  return exportLogcatToFile(uniqueFilePath(dir, Date.now()), options);
+}
+
+/** `logcat_20260921_170412.txt` */
+export function logcatFileName(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `logcat_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.txt`;
+}
+
+/**
+ * 文件名时间戳只到「秒」，连点两次导出会撞名 —— 而 writeFileSync 是**静默覆盖**，
+ * 用户会以为导了两份、实际只剩一份。所以落盘前探一下，撞了就加 `_2`、`_3`…
+ * （不做毫秒后缀：文件名保持人可读，且同秒多次导出是少数情况。）
+ */
+export function uniqueFilePath(dir: string, ts: number): string {
+  const base = logcatFileName(ts).replace(/\.txt$/i, '');
+  let candidate = join(dir, `${base}.txt`);
+  let n = 1;
+  while (existsSync(candidate)) {
+    n += 1;
+    candidate = join(dir, `${base}_${n}.txt`);
+  }
+  return candidate;
 }
 
 /* ------------------------------------------------------------------ */
