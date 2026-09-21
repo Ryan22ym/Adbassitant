@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Card, Button, Badge, Empty, Notice, Input, Field, Segmented, Spinner } from '@/components/ui';
 import { DevicePicker, deviceLabel } from '@/components/layout';
+import { QuickActionBar, QuickActionsDialog } from '@/components/QuickActions';
 import { useApp, useOnlineCount } from '@/store/app';
 import { call, tryCall } from '@/lib/ipc';
 import { formatBytes } from '@/lib/format';
 import { mirrorOptionsFor, isMirroringDevice } from '@/lib/mirror';
+import type { QuickAction } from '@shared/types';
 
 interface DeviceDetail {
   brand?: string;
@@ -36,6 +38,21 @@ export default function DevicePage() {
   const [tcpMode, setTcpMode] = useState<'connect' | 'usb'>('connect');
   const [tcpAddress, setTcpAddress] = useState('');
   const [tcpBusy, setTcpBusy] = useState(false);
+
+  /* 快捷动作（本机配置，全设备共用） */
+  const [qActions, setQActions] = useState<QuickAction[]>([]);
+  const [qCfgOpen, setQCfgOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const list = await tryCall<QuickAction[]>(() => window.adbApi.quickActions());
+      if (alive && list) setQActions(list);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     setScanning(true);
@@ -234,6 +251,15 @@ export default function DevicePage() {
                       {stateLabel(d.state)}
                     </Badge>
                   </span>
+                  {/* 快捷动作：清数据 / 回桌面再进 / 杀进程重进…（本机可配置，见 ⚡ 菜单） */}
+                  {ready && (
+                    <QuickActionBar
+                      serial={d.serial}
+                      ready={ready}
+                      actions={qActions}
+                      onConfigure={() => setQCfgOpen(true)}
+                    />
+                  )}
                   {/* 快速投屏：无需切到投屏页；正在投屏的这台变成「停止投屏」 */}
                   <span className="device-actions">
                     {thisMirroring ? (
@@ -391,6 +417,14 @@ export default function DevicePage() {
           )}
         </div>
       </Card>
+
+      {/* 快捷动作配置（设备行左侧那块按钮的来源） */}
+      <QuickActionsDialog
+        open={qCfgOpen}
+        actions={qActions}
+        onClose={() => setQCfgOpen(false)}
+        onSaved={(list) => setQActions(list)}
+      />
     </>
   );
 }

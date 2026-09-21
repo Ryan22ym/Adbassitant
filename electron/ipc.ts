@@ -11,6 +11,7 @@ import {
   type InstallMode,
   type AabEnv,
   type AabSigningConfig,
+  type QuickAction,
 } from '../shared/types';
 import {
   listDevices,
@@ -90,6 +91,13 @@ import {
   setWeakNetStatusSink,
 } from './services/weaknet';
 import { listFavorites, toggleFavorite, removeFavorite } from './services/favorites';
+import {
+  listQuickActions,
+  saveQuickActions,
+  resetQuickActions,
+  runQuickAction,
+  foregroundApp,
+} from './services/quick-actions';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog } from './services/logger';
 import { getSettings, saveSettings, resolveDir } from './services/settings';
 import {
@@ -774,6 +782,27 @@ export function registerIpc() {
   );
 
   ipcMain.handle(IPC.APP_FAVORITE_REMOVE, wrap((_e, pkg: string) => removeFavorite(pkg)));
+
+  /* ---------------- 设备快捷动作（v1.0.24） ---------------- */
+
+  ipcMain.handle(IPC.QUICK_ACTION_LIST, wrap(() => listQuickActions()));
+
+  ipcMain.handle(
+    IPC.QUICK_ACTION_SAVE,
+    wrap((_e, list: QuickAction[]) => saveQuickActions(list)),
+  );
+
+  ipcMain.handle(IPC.QUICK_ACTION_RESET, wrap(() => resetQuickActions()));
+
+  ipcMain.handle(
+    IPC.QUICK_ACTION_RUN,
+    wrap((_e, serial: string | undefined, action: QuickAction) => runQuickAction(serial, action)),
+  );
+
+  ipcMain.handle(
+    IPC.QUICK_ACTION_FOREGROUND,
+    wrap((_e, serial?: string) => foregroundApp(serial)),
+  );
 
   /* ---------------- 实时 Logcat（v1.0） ---------------- */
 

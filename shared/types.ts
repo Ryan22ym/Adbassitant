@@ -205,6 +205,127 @@ export interface FavoriteApp {
 }
 
 /* ------------------------------------------------------------------ */
+/* 设备快捷动作（v1.0.24）                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 设备行上的「快捷动作」。
+ *
+ * 调试时反复做的就那么几件事：清数据、退到桌面再进、杀掉进程冷启动。
+ * 把它们做成设备行上的一键按钮，省掉「切到应用管理 → 找应用 → 点按钮」的来回。
+ *
+ * 动作分两类：
+ *  - 需要目标应用（clearData / homeReturn / restart / …）—— 作用对象由 target 决定
+ *  - 与包名无关（screenshot / home / back / wake / sleep）—— 直接对设备下手
+ */
+export type QuickActionKind =
+  /** 清除应用数据（pm clear） */
+  | 'clearData'
+  /** 回桌面再重新进入（不杀进程，走热启动） */
+  | 'homeReturn'
+  /** 结束进程后重新启动（冷启动） */
+  | 'restart'
+  /** 清数据后重新启动 */
+  | 'restartFresh'
+  /** 强制停止（不重启） */
+  | 'forceStop'
+  /** 启动 / 前台唤起 */
+  | 'launch'
+  /** 截图存到电脑 */
+  | 'screenshot'
+  /** 回桌面 */
+  | 'home'
+  /** 返回键 */
+  | 'back'
+  /** 点亮屏幕 */
+  | 'wake'
+  /** 息屏 */
+  | 'sleep'
+  /** 自定义 shell 命令（支持 {pkg} / {serial} 占位） */
+  | 'shell';
+
+/** 动作是否需要知道「对哪个应用下手」 */
+export const QUICK_ACTION_NEEDS_TARGET: Record<QuickActionKind, boolean> = {
+  clearData: true,
+  homeReturn: true,
+  restart: true,
+  restartFresh: true,
+  forceStop: true,
+  launch: true,
+  screenshot: false,
+  home: false,
+  back: false,
+  wake: false,
+  sleep: false,
+  shell: true,
+};
+
+/** 动作类型的中文名（配置界面用） */
+export const QUICK_ACTION_KIND_LABEL: Record<QuickActionKind, string> = {
+  clearData: '清除数据',
+  homeReturn: '回桌面再进（不杀进程）',
+  restart: '退出后重进（杀进程）',
+  restartFresh: '清数据后重进',
+  forceStop: '强制停止',
+  launch: '启动应用',
+  screenshot: '截图到电脑',
+  home: '回桌面',
+  back: '返回键',
+  wake: '点亮屏幕',
+  sleep: '息屏',
+  shell: '自定义命令',
+};
+
+/** target 取这个值时表示「当前前台应用」 */
+export const QUICK_TARGET_FOREGROUND = 'foreground';
+
+export interface QuickAction {
+  id: string;
+  /** 显示名（行内 chip 位置有限，建议 2~4 个字） */
+  label: string;
+  kind: QuickActionKind;
+  /**
+   * 作用对象：QUICK_TARGET_FOREGROUND（当前前台应用，默认）或固定包名。
+   * 与包名无关的动作忽略该字段。
+   */
+  target?: string;
+  /** kind === 'shell' 时的命令模板 */
+  command?: string;
+  /** 在设备行上直接显示成按钮（否则收进 ⚡ 菜单），最多 3 个 */
+  inline?: boolean;
+  /** 执行前二次确认（清数据这类不可逆动作） */
+  confirm?: boolean;
+  tone?: 'primary' | 'default' | 'danger';
+  enabled: boolean;
+}
+
+/** 当前前台应用探测结果 */
+export interface QuickForegroundInfo {
+  serial: string;
+  packageName?: string;
+  activity?: string;
+  /** 前台是系统桌面 —— 此时「当前前台应用」并不是用户想操作的那个应用 */
+  isLauncher: boolean;
+  /** 最近一次真正的应用（非桌面），当前台是桌面时可作为回退目标 */
+  lastApp?: string;
+}
+
+/** 一次动作执行的结果 */
+export interface QuickRunResult {
+  id: string;
+  label: string;
+  /** 实际作用的包名 */
+  packageName?: string;
+  /** 执行步骤（按顺序） */
+  steps: string[];
+}
+
+/** 设备行上直接显示的按钮数量上限（空间有限） */
+export const QUICK_ACTION_INLINE_MAX = 3;
+/** 配置里允许的动作总数上限 */
+export const QUICK_ACTION_MAX = 16;
+
+/* ------------------------------------------------------------------ */
 /* APK 安装                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -682,6 +803,13 @@ export const IPC = {
   APP_FAVORITE_LIST: 'app:favoriteList',
   APP_FAVORITE_TOGGLE: 'app:favoriteToggle',
   APP_FAVORITE_REMOVE: 'app:favoriteRemove',
+
+  /* 设备快捷动作（v1.0.24） */
+  QUICK_ACTION_LIST: 'quickAction:list',
+  QUICK_ACTION_SAVE: 'quickAction:save',
+  QUICK_ACTION_RESET: 'quickAction:reset',
+  QUICK_ACTION_RUN: 'quickAction:run',
+  QUICK_ACTION_FOREGROUND: 'quickAction:foreground',
 
   /* 实时 Logcat（v1.0） */
   LOGCAT_START: 'logcat:start',

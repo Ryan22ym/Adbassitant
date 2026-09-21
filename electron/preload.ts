@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+// 仅类型导入：编译后会被擦除，不会把 shared/ 的相对路径带进 preload 运行时。
+import type { QuickAction } from '../shared/types';
 
 /**
  * IPC 通道常量
@@ -68,6 +70,13 @@ const IPC = {
   APP_FAVORITE_LIST: 'app:favoriteList',
   APP_FAVORITE_TOGGLE: 'app:favoriteToggle',
   APP_FAVORITE_REMOVE: 'app:favoriteRemove',
+
+  /* 设备快捷动作（v1.0.24） */
+  QUICK_ACTION_LIST: 'quickAction:list',
+  QUICK_ACTION_SAVE: 'quickAction:save',
+  QUICK_ACTION_RESET: 'quickAction:reset',
+  QUICK_ACTION_RUN: 'quickAction:run',
+  QUICK_ACTION_FOREGROUND: 'quickAction:foreground',
 
   /* 实时 Logcat（v1.0） */
   LOGCAT_START: 'logcat:start',
@@ -297,6 +306,14 @@ const api = {
   favoriteApps: () => invoke(IPC.APP_FAVORITE_LIST),
   toggleFavorite: (pkg: string, label?: string) => invoke(IPC.APP_FAVORITE_TOGGLE, pkg, label),
   removeFavorite: (pkg: string) => invoke(IPC.APP_FAVORITE_REMOVE, pkg),
+
+  /* 设备快捷动作（v1.0.24）：设备行上的一键操作 */
+  quickActions: () => invoke(IPC.QUICK_ACTION_LIST),
+  saveQuickActions: (list: QuickAction[]) => invoke(IPC.QUICK_ACTION_SAVE, list),
+  resetQuickActions: () => invoke(IPC.QUICK_ACTION_RESET),
+  runQuickAction: (serial: string | undefined, action: QuickAction) =>
+    invoke(IPC.QUICK_ACTION_RUN, serial, action),
+  foregroundApp: (serial?: string) => invoke(IPC.QUICK_ACTION_FOREGROUND, serial),
 
   /* 实时 Logcat（v1.0） */
   startLogcat: (serial: string | undefined, filter?: any) =>

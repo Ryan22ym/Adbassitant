@@ -159,7 +159,8 @@ async function runChecks(page) {
         btnText: rows.map((r) => (r.querySelector('.device-actions .btn')?.textContent || '').trim()),
         disabled: rows.map((r) => r.getAttribute('aria-disabled') === 'true'),
         serials: rows.map((r) => r.querySelector('.device-serial')?.textContent?.trim() || ''),
-        nestedButtons: rows.map((r) => r.querySelectorAll('button').length),
+        // 行内 button 数量：投屏 1 个 + 快捷动作 chip / ⚡（v1.0.24 起行内还有动作按钮）
+        buttonCounts: rows.map((r) => r.querySelectorAll('button').length),
       };
     })()
   `);
@@ -169,7 +170,11 @@ async function runChecks(page) {
   record(struct.tags.every((t) => t === 'DIV'), '行本体是 div（不是 button，避免嵌套按钮）', struct.tags.join(','));
   record(struct.roles.every((r) => r === 'button'), '行保留 role=button 语义', struct.roles.join(','));
   record(struct.hasBtn.every(Boolean), '每行都有快速投屏按钮', `按钮文案 [${struct.btnText.join('|')}]`);
-  record(struct.nestedButtons.every((n) => n === 1), '每行只含 1 个 button（即快投按钮本身）', struct.nestedButtons.join(','));
+  record(
+    struct.buttonCounts.every((n) => n >= 1),
+    '每行至少 1 个 button（快投 + 快捷动作；行本体是 div，不存在 button 嵌套）',
+    struct.buttonCounts.join(','),
+  );
 
   const idx = struct.disabled.findIndex((x) => !x);
   const target = idx >= 0 ? struct.serials[idx] : null;
