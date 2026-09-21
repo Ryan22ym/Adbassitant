@@ -14,10 +14,13 @@
 | P2 | `checkOnlineUpdate()` + 静默自检 + `store.updateAvailable` 红点 | ✅ 完成 | 同上 + UI 脚本 |
 | P3 | 下载 + 进度推送 + 接 `prepareUpdate` + 取消 | ✅ 完成 | `npm run check:update-online-ui` — 27/27 |
 | P4 | `UpdatePanel` 重做 + 「更新源」设置卡片 | ✅ 完成 | 同上（含截图 `ui-shots/update-online-settings.png`） |
-| P5 | 真机 e2e（下载 → 替换 → 重启） | ⏳ 待打真包后跑 | 见 `e2e-update-apply.cjs` |
-| P6 | `make-update.py --manifest-out` + `publish-update.py` | ⏳ 未做 | 见 rollout 文档 §8 |
+| P5 | 真机 e2e（下载 → 替换 → 重启） | ✅ 完成 | 装机版真升级全 PASS（1.0.21→1.0.23、1.0.23→1.0.24） |
+| P6 | `scripts/make-manifest.py`（清单生成 + `--check`）+ `publish-update.py` | ✅ 清单部分完成 / ⏳ 上传部分未做 | `check-update.cjs` C 段新增「清单侧」断言；见 rollout 文档 §8 |
 
-未做 P5/P6 的原因：这两项都要**真安装包**参与（P5 必须在打包版上跑），而本轮的边界是"客户端代码预留接口"。P6 的替代做法已在 rollout 文档里写清（手写 `latest.json` + PowerShell 算 hash）。
+> 说明：P5/P6 当时卡在「要真安装包 + 要真有托管服务器」，v1.0.23 起两件都齐了 ——
+> 真机在线升级 e2e 已在装机版上跑通，清单生成也落成了 `scripts/make-manifest.py`
+> （没按原计划塞成 `make-update.py --manifest-out`，理由见 §3.1）。
+> 只剩「上传」还是手工的（本机走 CloudBase 静态托管）。
 
 ---
 
@@ -117,7 +120,7 @@ https://<域名>/adb-assistant/
 | `electron/ipc.ts` / `electron/preload.ts` | 小改 | 新增 `update:check` / `update:download` / `update:cancelDownload`；推送 `push:updateDownload`（preload 内联常量 + 白名单两处都要同步） |
 | `src/pages/SettingsPage.tsx` | 重做 `UpdatePanel` | 见 §4 |
 | `src/store/app.ts` | 小改 | `updateAvailable`（侧栏红点用） |
-| `scripts/make-update.py` | 小改 | 加 `--manifest-out`：生成/更新 `latest.json`（发布用），失败不影响原有产物 |
+| `scripts/make-manifest.py` | 新增 | 从 `out-vX/update/` 生成 `latest.json`：算 `size`/`sha256`、从 `VERSION_NOTES` 抠 `notes`、写完自检；`--check` 只复核不写盘。**没按原计划做成 `make-update.py --manifest-out`** —— 出包与出清单拆开，各自能单独重跑（改说明、复核 hash 都只动后一个） |
 | `scripts/publish-update.py` | 新增（可选） | 把 `out-vX/update/*` + `latest.json` 推到服务器（scp / COS / OSS，按 `--target` 选） |
 | `scripts/check-update-online.cjs` | 新增 | 验收脚本，见 §6 |
 | `docs/online-update-design.md` | 本文档 | 方案与上线步骤 |
@@ -262,7 +265,7 @@ export interface UpdateCheckResult {
 | **P3** | 下载：`fetch()` + 进度推送 + 接 `prepareUpdate` + 取消/重试 | 本地服务下真包 |
 | **P4** | UI 重做 `UpdatePanel` + 设置项出现在设置页 | 安装版界面验收脚本 |
 | **P5** | `check-update-online.cjs` 验收脚本（§6）+ 真机 e2e | 全绿 |
-| **P6** | `make-update.py --manifest-out` + `publish-update.py` + README/文档 | 本地 dry-run |
+| **P6** | `make-manifest.py`（清单生成 + `--check` 复核）+ `publish-update.py` + README/文档 | 本地 dry-run |
 
 版本号：**v1.0.22**（发版三步照旧，`VERSION_NOTES` 别忘了加 `'1.0.22'` 一条）。
 
@@ -291,7 +294,7 @@ export interface UpdateCheckResult {
 
 1. **定托管**：对象存储 + CDN，或一台 Nginx 静态目录，只要 HTTPS 可达。
 2. **建目录**：`/adb-assistant/`，放 `latest.json` + 各版本 zip + `.sha256`（历史版本建议保留，便于回退）。
-3. **生成清单**：`python scripts/make-update.py --out out-v1.0.22` 出包，再写 `latest.json`（P6 前是手工的）。
+3. **生成清单**：`python scripts/make-update.py --out out-v1.0.22` 出包 → `python scripts/make-manifest.py --out out-v1.0.22` 出 `latest.json`（`build.py` 收尾会自动跑这两条；复核用 `--check`）。
 4. **上传**：手动或 `scripts/publish-update.py`（P6 待做）。
 5. **改默认地址**：`settings.ts` 里 `updateBaseUrl` 默认值改为真实地址 → 发一版全量包（这次改动需要用户装一次全量）。
 6. **可达性自检**：HTTPS 通、跟随 302、`Content-Length` 正确（进度条靠它）。

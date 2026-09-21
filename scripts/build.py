@@ -145,6 +145,20 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f'[update] 小包生成异常：{e}')
 
+        # 再顺手生成发布清单 latest.json（同样失败不阻塞打包）。
+        # 依赖 SettingsPage.tsx 的 VERSION_NOTES —— 忘了补条目会在这里被点名，
+        # 总比上传之后才发现「客户端显示不出更新说明」好。
+        try:
+            print()
+            mf = subprocess.run(
+                [sys.executable, os.path.join(ROOT, 'scripts', 'make-manifest.py'), '--out', out_dir],
+                cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            print(mf.stdout.decode('utf-8', errors='replace'))
+            if mf.returncode != 0:
+                print(f'[manifest] 清单生成失败（退出码 {mf.returncode}），暂时不影响本次打包')
+        except Exception as e:  # noqa: BLE001
+            print(f'[manifest] 清单生成异常：{e}')
+
         sys.exit(0)
     finally:
         httpd.shutdown()

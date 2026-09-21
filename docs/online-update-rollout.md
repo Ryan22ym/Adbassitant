@@ -159,10 +159,35 @@ runtime-v1.0.24.json                     下一版差分基准（自己留着，
 
 ### 步骤 4 — 生成 `latest.json`
 
-> ⚠️ **目前这一步是手工的**（`make-update.py --manifest-out` 还没做，见 §8）。
-> 用下面的模板手写，或者跑本节末尾的小脚本。
+```powershell
+python scripts/make-manifest.py --out out-v1.0.24
+```
 
-把 `latest.json` 建在 `out-v1.0.24\update\` 下：
+一条命令做四件事：算 `size`/`sha256`、从 `SettingsPage.tsx` 的 `VERSION_NOTES` 抠出更新说明、
+写完清单、回读自检。**别手抄 hash** —— 抄错的后果是所有客户端都卡在第一道校验、
+而且要到发出去才发现。
+
+输出长这样：
+
+```
+已写 out-v1.0.24\update\latest.json（版本 1.0.24）
+  asar      size=244467     sha256=79bd1c739959e882…  url=ADB桌面助手-v1.0.24-patch.zip
+  notes 长度 = 354 字
+```
+
+它会替你拦住三种错：
+
+| 会拦住 | 为什么重要 |
+|---|---|
+| **版本三方不一致**（清单版本 ≠ 产物目录版本 ≠ `package.json`） | 拿旧产物的包、写新版本的清单，`sha256` 照样对得上、客户端也照装 —— 只是装上去还是旧代码。这种错最难发现 |
+| `VERSION_NOTES` 里没有这个版本 | 直接报错，顺带提醒你补更新说明（`install-local.py` 也硬校验这一项） |
+| 产物里还躺着 `portable` 整包 | 警告 `make-update.py` 可能被改回去了 |
+
+常用开关：`--critical`（标记关键更新）、`--notes "…"`（临时覆盖说明）、
+`--check`（**只校验**现有清单与产物是否还对得上，不写盘 —— 上线自检第一步）、
+`--force`（复算历史产物）。`build.py` 打包收尾已经会顺手跑一次，手工跑通常是为了改说明或 `--check`。
+
+清单最终长这样（`packages` 只有 `asar` 一项）：
 
 ```json
 {
@@ -179,15 +204,15 @@ runtime-v1.0.24.json                     下一版差分基准（自己留着，
     "packages": {
       "asar": {
         "url": "ADB桌面助手-v1.0.24-patch.zip",
-        "size": 0,
-        "sha256": ""
+        "size": 244467,
+        "sha256": "79bd1c739959e882…"
       }
     }
   }
 }
 ```
 
-> v1.0.24 起 `packages` **只写 `asar` 一项**。老清单里那个 `portable` 项可以删掉；
+> v1.0.24 起 `packages` **只有 `asar` 一项**。老清单里那个 `portable` 项可以删掉；
 > 已装便携版的用户点更新时会看到「该版本没有你这种形态的包，请下载完整安装包」——
 > 预期行为（我们不再为便携版出新整包）。
 
@@ -200,16 +225,10 @@ runtime-v1.0.24.json                     下一版差分基准（自己留着，
 | `appId` | `com.xiaoyang.adbassistant` |
 | `channel` | `stable` |
 
-`size` / `sha256` 用下面这段 PowerShell 填（`size` = 字节数）：
+`size` / `sha256` 由脚本算好写进去。要复核（比如怀疑上传之后包被 CDN 改过），跑：
 
 ```powershell
-$dir = "out-v1.0.24\update"
-foreach ($f in @("ADB桌面助手-v1.0.24-patch.zip")) {
-  $p = Join-Path $dir $f
-  $size = (Get-Item $p).Length
-  $sha  = (Get-FileHash -Algorithm SHA256 $p).Hash.ToLower()
-  "{0}`n  size   = {1}`n  sha256 = {2}" -f $f, $size, $sha
-}
+python scripts/make-manifest.py --out out-v1.0.24 --check
 ```
 
 > `sha256` 大小写不敏感，客户端会统一转小写比较；但**必须与 zip 内容一致**。
@@ -217,7 +236,7 @@ foreach ($f in @("ADB桌面助手-v1.0.24-patch.zip")) {
 
 ### 步骤 5 — 上传 + 设缓存头
 
-把 `out-v1.0.23\update\` 里的东西（**`runtime-vX.json` 不用传**）上传到 `/adb-assistant/`：
+把 `out-v1.0.24\update\` 里的东西（**`runtime-vX.json` 不用传**）上传到 `/adb-assistant/`：
 
 - 覆盖 `latest.json`（这是唯一会变的文件）
 - 新增本版的 2 个文件（`-patch.zip` 与它的 `.sha256`）
@@ -330,10 +349,12 @@ asar 是未压缩容器、正文可搜，但假阳性极常见：搜 `SIGKILL` �
 python scripts/build.py --out out-v1.0.24
 python scripts/install-local.py --out out-v1.0.24
 
-# 2) 出更新包
+# 2) 出更新包 + 发布清单（build.py 收尾已自动跑这两条；这里显式跑一遍是为了改说明 / 重算）
 python scripts/make-update.py --out out-v1.0.24
+python scripts/make-manifest.py --out out-v1.0.24
 
-# 3) 写 latest.json（version 改成 1.0.24，size/sha256 按 §3 步骤 4 填）
+# 3) 本地复核：清单与产物还对得上吗（几秒，值得）
+python scripts/make-manifest.py --out out-v1.0.24 --check
 
 # 4) 上传（覆盖 latest.json + 新增 2 个文件：patch.zip / patch.zip.sha256）
 
@@ -343,9 +364,12 @@ python scripts/make-update.py --out out-v1.0.24
 **每次都要确认的三件事**：
 
 - `latest.json` 的 `version` **严格大于**客户端当前版本 —— 小于等于都算「已是最新」，**客户端不会降级**。
+- 清单版本必须同时等于**产物目录版本**和 `package.json` 版本（`make-manifest.py` 会拦；
+  实在要复算历史产物才加 `--force`）。
 - `packages.asar` **必须有**（v1.0.24 起只有这一项）。装的是安装版才会升上去；
   只剩便携版的老用户会看到「该版本没有你这种形态的包」——不再管（见 §2 提示）。
-- `notes` 里别放引号嵌套或换行符的转义错误 —— JSON 里换行必须写 `\n`。
+- `notes` 由脚本从 `VERSION_NOTES` 抠，不要再手改 JSON —— 真要临时改，用 `--notes "…"`，
+  脚本会负责转义（换行写 `\n` 这类事交给它）。
 - **上传顺序：先传所有包，`latest.json` 最后传。** 反过来的话，客户端可能先拿到新清单、
   再去下还没换上去的旧包，`sha256` 校验必然失败（哪怕只差几秒的窗口）。
 
@@ -402,7 +426,7 @@ python scripts/make-update.py --out out-v1.0.24
 | `版本号不合法` | `latest.version` 写成了 `v1.0.24`（带 v） | **不能带 v**，只能是 `1.0.24` |
 | `没有提供便携版整包` | 本机是**已装的历史便携版**，但清单只有 `packages.asar` | v1.0.24 起不再发便携整包，**预期行为**；让用户装一次 NSIS 安装包即可转正 |
 | `下载更新包失败：HTTP 404` | `url` 写错，或文件没传上去 | 注意相对路径是相对 `latest.json` 所在目录 |
-| `校验值不符` | `sha256` 与 zip 实际内容不一致 | 按 §3 步骤 4 重算；确认传的是没被改过的文件 |
+| `校验值不符` | `sha256` 与 zip 实际内容不一致 | 跑 `python scripts/make-manifest.py --out <产物目录> --check` 定位；确认传的是没被改过的文件 |
 | `下载中断：30 秒没有收到新数据` | 网络抖动 / 服务端卡住 | 点重试；服务端加 `Range` 支持会更好 |
 | 检查更新一直显示「已是最新」，但明明发了新版 | CDN 缓存了旧 `latest.json` | 确认缓存头是 `no-cache`；手动刷新 CDN |
 | 进度条不动 / 显示不确定 | 缺 `Content-Length` | 让静态服务返回正确的 `Content-Length`（不要开 chunked） |
@@ -413,14 +437,23 @@ python scripts/make-update.py --out out-v1.0.24
 
 ## 8. 还没自动化的部分（坦白说）
 
-设计文档 §3.1 里列了两个脚本，**这一版还没写**，所以 §3 步骤 4 目前是手工的：
+清单那半截已经自动化了：`scripts/make-manifest.py`（v1.0.24 起）负责从 `out-vX/update/`
+生成 `latest.json`，`build.py` 打包收尾会顺手跑一次。设计文档里原本写的是
+`make-update.py --manifest-out`，落地时拆成了独立脚本 —— 一个管「出包」、一个管「出清单」，
+各自能单独重跑（改说明、复核 hash 都只动后一个），比塞一个大脚本里清楚。
+
+剩下的：
 
 | 脚本 | 作用 | 现在的替代做法 |
 |---|---|---|
-| `scripts/make-update.py --manifest-out` | 从 `out-vX/update/` 直接生成 `latest.json`（顺便算 size/sha256） | §3 步骤 4 手写 + PowerShell 算 hash |
-| `scripts/publish-update.py --target` | 把产物推到 COS/OSS/scp 目标 | 手动上传（或你自己的同步工具） |
+| `scripts/make-manifest.py` | ✅ 已做（v1.0.24） | —— |
+| `scripts/publish-update.py --target` | 把产物推到 COS/OSS/scp 目标 | 手动上传（或你自己的同步工具）；本机是 CloudBase 静态托管，走 MCP 上传 |
 
-要不要现在就补上，你说了算 —— 补上之后「发版」就是一条命令，手工最容易错的两个点（`version` 漏改、sha256 抄错）都会消失。
+要不要把 `publish-update.py` 也补上，你说了算 —— 现有上传是手动（或走 CloudBase MCP），
+脚本化的收益主要在「上传顺序」和「缓存头」这两件事上，一次做对就不容易再错。
+
+`scripts/make-manifest.py` 还会被 `check-update.cjs` 的 C 段复查一遍（清单身份、version、
+`size`/`sha256` 与包是否逐字节一致），所以「改了包忘了重算清单」在本地校验阶段就会红。
 
 ---
 
@@ -433,7 +466,8 @@ python scripts/make-update.py --out out-v1.0.24
 | `electron/services/update-source.ts` | `UpdateSource` 抽象：`http` / `local-file` 两种实现 |
 | `electron/services/update.ts` | `checkOnlineUpdate()` / `prepareUpdateFromUrl()`；下载层与校验层在这里衔接 |
 | `electron/services/settings.ts` | `updateBaseUrl` / `updateChannel` / `autoCheckUpdate` / `lastCheckAt` |
-| `src/pages/SettingsPage.tsx` | 设置页「软件更新」面板 + 「更新源」卡片 |
+| `src/pages/SettingsPage.tsx` | 设置页「软件更新」面板 + 「更新源」卡片；`VERSION_NOTES` 是清单 `notes` 的来源 |
+| `scripts/make-manifest.py` | 从 `out-vX/update/` 生成 `latest.json`（算 size/sha256、抠 notes、自检；`--check` 复核） |
 | `scripts/check-update-online.cjs` | 纯逻辑 + 下载器验收（47 项，离线可跑） |
 | `scripts/check-update-online-ui.cjs` | 界面与下载链路验收（29 项，需要 Electron） |
 | `docs/online-update-design.md` | 协议与设计的完整记录 |

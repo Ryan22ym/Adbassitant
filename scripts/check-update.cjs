@@ -32,6 +32,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const http = require('http');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
@@ -659,6 +660,52 @@ function partC() {
     record(!fv.ok, 'PE：非 PE 文件冒充主程序被拒', String(fv.reason || '').slice(0, 50));
   } else {
     record(false, 'PE：找到主程序 exe', 'win-unpacked 与产物根目录都没有可用 exe');
+  }
+
+  // latest.json（传静态托管的那份清单）—— 「发版时最容易抄错 size/sha256」的一步。
+  // 生成归 npm run make:manifest（scripts/make-manifest.py）；这里只钉死「清单与产物还对得上」，
+  // 抄错的话客户端第一道校验就会拒，而且要到发出去才发现。
+  const manifestPath = path.join(upd, 'latest.json');
+  if (fs.existsSync(manifestPath)) {
+    let doc = null;
+    try {
+      doc = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch {
+      /* 下面按 null 报 */
+    }
+    record(!!doc, '清单侧：latest.json 是合法 JSON', doc ? '' : '解析失败');
+    if (doc) {
+      record(
+        doc.schema === 1 && doc.productName === 'ADB桌面助手'
+          && doc.appId === 'com.xiaoyang.adbassistant' && doc.channel === 'stable',
+        '清单侧：身份四件套正确（schema / productName / appId / channel）',
+        JSON.stringify({ schema: doc.schema, productName: doc.productName, channel: doc.channel }),
+      );
+      const lv = String((doc.latest || {}).version || '');
+      record(lv === PKG.version, '清单侧：version 与 package.json 一致', `${lv} / ${PKG.version}`);
+
+      const ref = ((doc.latest || {}).packages || {}).asar;
+      record(!!(ref && ref.url), '清单侧：带 asar 包（v1.0.24 起唯一形态）', ref ? String(ref.url) : '缺失');
+      if (ref && ref.url) {
+        const fp = path.join(upd, path.basename(String(ref.url)));
+        if (!fs.existsSync(fp)) {
+          record(false, '清单侧：url 指向的包在产物里存在', String(ref.url));
+        } else {
+          const st = fs.statSync(fp);
+          const real = crypto.createHash('sha256').update(fs.readFileSync(fp)).digest('hex');
+          record(ref.size === st.size, '清单侧：size 与包的实际字节数一致', `${ref.size} / ${st.size}`);
+          record(
+            String(ref.sha256 || '').toLowerCase() === real,
+            '清单侧：sha256 与包的实际摘要一致',
+            `${String(ref.sha256).slice(0, 16)}… / ${real.slice(0, 16)}…`,
+          );
+        }
+      }
+      const notes = String((doc.latest || {}).notes || '');
+      record(notes.trim().length > 0, '清单侧：notes 非空（更新卡片直接显示）', `${notes.length} 字`);
+    }
+  } else {
+    info(`未生成 latest.json（${manifestPath}）：跑 npm run make:manifest 生成，清单侧断言已跳过`);
   }
 }
 

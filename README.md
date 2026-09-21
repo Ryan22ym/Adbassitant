@@ -192,7 +192,7 @@ put 之后 0 条。**结果就是「ping 通、DNS 通，但所有 App 都上不
 | --- | --- | --- |
 | 全量安装包 | 84.1 MB | 下载 → 双击 → 下一步 → 安装 → 手动启动 |
 | 安装版增量 | ~156 KB zip | 应用内选包 → 「立即更新并重启」→ 自动重启成新版 |
-| 便携版 | 整包换 exe（约 84 MB） | 同上，替换对象是那个单文件 exe |
+| 便携版 | 整包换 exe（约 84 MB） | 同上，替换对象是那个单文件 exe（v1.0.24 起**不再发新整包**，只剩历史版本） |
 
 **为什么必须用一个外部的 PowerShell 助手**
 
@@ -230,11 +230,24 @@ SHA-256 与字节数 · 包形态与本机一致（安装版 ↔ 便携版不能
 **产物**（`python scripts/build.py --out out-vX` 会自动追加这一步）
 
 ```
-out-vX/update/ADB桌面助手-vX-patch.zip            安装版小包（manifest.json + app.asar [+ bin 差量]）
-out-vX/update/ADB桌面助手-vX-portable-patch.zip   便携版整包
-out-vX/update/runtime-vX.json                     本版运行库指纹，供下一版做差分基准
-out-vX/update/*.sha256                            包自身摘要（为第二阶段「服务器下载」预留）
+out-vX/update/ADB桌面助手-vX-patch.zip   安装版小包（manifest.json + app.asar [+ bin 差量]）
+out-vX/update/latest.json                发布清单（在线更新源的唯一入口，make-manifest.py 生成）
+out-vX/update/runtime-vX.json            本版运行库指纹，供下一版做差分基准
+out-vX/update/*.sha256                   包自身摘要（供人工核对，客户端不读）
 ```
+
+> v1.0.24 起**不再产出便携版整包**（`*-portable-patch.zip`），打包只出 NSIS 安装包。
+
+**发布清单 `latest.json`** —— 在线更新走纯静态托管（`latest.json` + 各版本 zip，无后端）：
+
+```bash
+python scripts/make-manifest.py --out out-v1.0.24          # 生成（build.py 收尾已自动跑一次）
+python scripts/make-manifest.py --out out-v1.0.24 --check  # 只复核现有清单与产物是否还对得上
+```
+
+算 `size`/`sha256`、从 `SettingsPage.tsx` 的 `VERSION_NOTES` 抠出更新说明、写完回读自检；
+版本三方（清单 / 产物目录 / `package.json`）不一致会直接报错 —— 这一步以前是手抄 hash，
+发版流程见 `docs/online-update-rollout.md`。
 
 `runtime-vX.json` 就是「下一个小包的差分基准」：`bin` 里没变的文件不会进包。
 所以同一版第一次生成的包会偏大（没有基准，只能全带），从第二版起才是纯增量。
