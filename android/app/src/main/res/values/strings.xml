@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">弱网测试</string>
+
+    <!-- 控制通道（待命）—— 文案刻意与"运行中"区分开 -->
+    <string name="notify_ctrl_channel">控制通道</string>
+    <string name="notify_ctrl_title">弱网测试 · 待命</string>
+    <string name="notify_ctrl_text">等待电脑端指令，未改变网络</string>
+
+    <!-- VPN 运行中 -->
+    <string name="notify_channel">弱网模拟</string>
+    <string name="notify_title">弱网模拟运行中</string>
+    <string name="notify_text">设备流量正在被本机整形，点此可停止</string>
+    <string name="notify_stop">停止并恢复网络</string>
+</resources>

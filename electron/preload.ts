@@ -100,6 +100,10 @@ const IPC = {
   WEAKNET_PRESET_DELETE: 'weaknet:presetDelete',
   WEAKNET_PROBE: 'weaknet:probe',
   WEAKNET_CLEANUP: 'weaknet:cleanup',
+  WEAKNET_VPN_AUTHORIZE: 'weaknet:vpnAuthorize',
+  WEAKNET_VPN_APP_INFO: 'weaknet:vpnAppInfo',
+  WEAKNET_VPN_INSTALL: 'weaknet:vpnInstall',
+  WEAKNET_VPN_PARAMS: 'weaknet:vpnParams',
 
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
@@ -350,6 +354,13 @@ const api = {
   weaknetDeletePreset: (id: string) => invoke(IPC.WEAKNET_PRESET_DELETE, id),
   weaknetProbe: (serial?: string) => invoke(IPC.WEAKNET_PROBE, serial),
   weaknetCleanup: (serial?: string) => invoke(IPC.WEAKNET_CLEANUP, serial),
+
+  /* 弱网 v2：VPN 模式（配套 App → VpnService → IP 层整形） */
+  weaknetVpnAuthorize: (serial?: string) => invoke(IPC.WEAKNET_VPN_AUTHORIZE, serial),
+  weaknetVpnAppInfo: (serial?: string) => invoke(IPC.WEAKNET_VPN_APP_INFO, serial),
+  weaknetVpnInstall: (serial?: string, apkPath?: string) =>
+    invoke(IPC.WEAKNET_VPN_INSTALL, serial, apkPath),
+  weaknetVpnParams: (params: any) => invoke(IPC.WEAKNET_VPN_PARAMS, params),
 
   /* 日志 */
   getAllLogs: () => invoke(IPC.LOG_LIST_ALL),

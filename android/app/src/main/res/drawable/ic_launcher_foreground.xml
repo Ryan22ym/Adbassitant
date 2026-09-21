@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  图标前景：一条"被削弱的信号"图形 —— 满格竖条 + 一条斜杠。
+  用纯矢量，不需要为各密度出位图。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 四根信号条，最右一根刻意画矮（表示信号弱） -->
+    <path
+        android:fillColor="#5DCAA5"
+        android:pathData="M30,66h8v18h-8z" />
+    <path
+        android:fillColor="#5DCAA5"
+        android:pathData="M42,56h8v28h-8z" />
+    <path
+        android:fillColor="#5DCAA5"
+        android:pathData="M54,46h8v38h-8z" />
+    <path
+        android:fillColor="#7F77DD"
+        android:pathData="M66,60h8v24h-8z" />
+
+    <!-- 斜杠：表示"被干预/被劣化" -->
+    <path
+        android:fillColor="#F0997B"
+        android:pathData="M28,74.5l3.5,3.5L80,29.5L76.5,26z" />
+</vector>

@@ -1091,6 +1091,82 @@
   min-width: 180px;
 }
 
+/* ---------------- 弱网：VPN 配套 App 卡片（装机 / 授权） ---------------- */
+
+/*
+ * 这块界面承载的是本方案「唯一必须用户手动配合」的动作：系统 VPN 授权。
+ * 所以视觉上要明显区别于普通信息卡 —— 用 accent 侧边条把它标出来，
+ * 让用户一眼看到"这里有个动作等着我"。
+ */
+.wn-vpn-card {
+  margin-bottom: var(--gap, 14px);
+  border-left: 3px solid var(--accent);
+}
+
+.wn-vpn-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.wn-vpn-info {
+  flex: 1;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wn-vpn-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wn-vpn-head strong {
+  font-size: 14px;
+}
+
+.wn-vpn-desc {
+  font-size: 12.5px;
+  line-height: 1.75;
+  margin: 0;
+}
+
+.wn-vpn-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.wn-vpn-steps {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  line-height: 2;
+  color: var(--text-dim);
+}
+
+.wn-vpn-steps li {
+  list-style: decimal;
+}
+
+/* 运行中的说明条：强调「怎么恢复网络」，弱化其余信息 */
+.wn-vpn-live {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 /* ---------------- 弱网：手动代理向导（ROM 禁止 adb 写设置时） ---------------- */
 
 .wn-manual {

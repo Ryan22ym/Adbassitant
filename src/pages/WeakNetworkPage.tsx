@@ -73,10 +73,26 @@ interface ProbeResult {
   /** 设备当前设置的全局 HTTP 代理；非空且未在运行时说明有残留 */
   httpProxy: string | null;
   sdk?: number;
+  /* ---------- VPN（v2 首选方案） ---------- */
+  /** 设备上是否已安装随包配套 App */
+  hasVpnApp: boolean;
+  /** 已装 App 的 versionCode */
+  vpnAppVersion?: number | null;
+  /** VPN 是否已授权；null = 未知（App 没装或通道没通） */
+  vpnAuthorized: boolean | null;
   note: string;
 }
 
+/** VPN 配套 App 的安装/授权信息（「去授权 / 安装」按钮用） */
+interface VpnAppInfo {
+  installed: boolean;
+  versionCode: number | null;
+  authorized: boolean | null;
+  vpnActive: boolean;
+}
+
 const MODE_TITLE: Record<string, string> = {
+  vpn: '弱网模拟生效中（VPN 全量整形）',
   proxy: '弱网模拟生效中（本地代理）',
   tc: '弱网模拟生效中（tc/netem）',
   svc: '断网模式生效中',
@@ -138,6 +154,81 @@ export default function WeakNetworkPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.serial]);
 
+  /* ---------- 设备上的 VPN 配套 App 状态 ---------- */
+  const [vpnInfo, setVpnInfo] = useState<VpnAppInfo | null>(null);
+  const [vpnBusy, setVpnBusy] = useState(false);
+
+  useEffect(() => {
+    if (!current?.serial) {
+      setVpnInfo(null);
+      return;
+    }
+    void refreshVpnInfo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.serial]);
+
+  const refreshVpnInfo = async () => {
+    if (!current) return;
+    const r = await call<VpnAppInfo>(() => window.adbApi.weaknetVpnAppInfo(current.serial), {
+      silent: true,
+    });
+    if (r) setVpnInfo(r);
+  };
+
+  /**
+   * 一键授权：在设备上弹出系统 VPN 授权框。
+   *
+   * 这一步**必须用户手动点**，没有自动化余地 —— Android 要求 VpnService.prepare()
+   * 由 Activity 唤起系统对话框。所以界面上只负责把框弹出来 + 告诉用户去哪点。
+   */
+  const authorizeVpn = async () => {
+    setVpnBusy(true);
+    try {
+      const ok = await call<boolean>(() => window.adbApi.weaknetVpnAuthorize(current?.serial), {
+        silent: true,
+      });
+      if (ok) {
+        toast('info', '已弹出授权框', '请在手机屏幕上点「确定」——授权后即可直接用 VPN 模式');
+        // 授权是异步的，轮询几次把结果收回来（用户点完确定界面就变绿）
+        let tries = 0;
+        const id = window.setInterval(async () => {
+          tries += 1;
+          await refreshVpnInfo();
+          void probeDevice();
+          if (tries >= 15) window.clearInterval(id);
+        }, 2000);
+      } else {
+        toast(
+          'warn',
+          '没能弹出授权框',
+          '设备上的配套 App 可能未启动，请先在手机上打开一次「弱网模拟」App 再试',
+        );
+      }
+    } finally {
+      setVpnBusy(false);
+    }
+  };
+
+  /** 手动安装 / 更新设备上的配套 App（不传路径就用随包 APK） */
+  const installVpnApp = async () => {
+    setVpnBusy(true);
+    try {
+      const r = await call<{ ok: boolean; message: string }>(
+        () => window.adbApi.weaknetVpnInstall(current?.serial),
+        { silent: true },
+      );
+      if (r?.ok) {
+        toast('success', '配套 App 已安装', '首次使用需要在手机上点一次「确定」授权 VPN');
+        void refreshVpnInfo();
+        void probeDevice();
+      } else {
+        toast('error', '安装失败', r?.message || '未知原因');
+      }
+    } finally {
+      setVpnBusy(false);
+    }
+  };
+
   const probeDevice = async () => {
     if (!current) return;
     setProbing(true);
@@ -187,7 +278,9 @@ export default function WeakNetworkPage() {
         { silent: true },
       );
       setStatus(st);
-      if (st?.mode === 'proxy') {
+      if (st?.mode === 'vpn') {
+        toast('success', '弱网已生效', 'VPN 全量整形：设备所有 App 的流量都在 IP 层被接管');
+      } else if (st?.mode === 'proxy') {
         if (st.proxy?.manual && !st.proxy?.active) {
           toast(
             'warn',
@@ -201,11 +294,16 @@ export default function WeakNetworkPage() {
         toast('success', '弱网已生效', 'tc/netem 内核级模拟');
       } else if (st?.mode === 'svc') {
         toast('success', '已切换为断网模式', st?.note);
+      } else if (st?.note && st.note.includes('授权')) {
+        // VPN 特有的中间态：等用户在手机上点「确定」。
+        // 这不是失败，我们的后台轮询会在授权后自动继续，所以语气要区别于报错。
+        toast('warn', '需要在手机上点一次「确定」', st.note);
       } else {
         toast('warn', '未生效', st?.note);
       }
-      // 启动后设备上的 http_proxy 变了，重新探测一次让残留检测保持准确
+      // 启动后设备上的 http_proxy / VPN 状态都变了，重新探测一次保持一致
       void probeDevice();
+      void refreshVpnInfo();
     } catch (e) {
       toast('error', '启动失败', (e as Error).message);
     } finally {
@@ -318,17 +416,25 @@ export default function WeakNetworkPage() {
   const engine = (params.engine || 'auto') as WeakNetEngine;
   const canTc = !!(probe?.rooted && probe?.hasTc);
 
-  /** 实际会走哪条路 —— 和主进程的选择逻辑保持一致，避免 UI 和实际不符 */
+  /**
+   * 实际会走哪条路 —— 和主进程的选择逻辑保持一致，避免 UI 和实际不符。
+   *
+   * 注意这里的优先级与 weaknet.ts 里**必须逐条对应**：VPN → tc → 代理 → svc。
+   * 两边不一致时用户会看到「说的和做的不一样」，比不显示更糟。
+   */
   const effectiveMode: WeakNetEngine = useMemo(() => {
     if (params.blockNetwork) return 'svc';
+    if (engine === 'vpn') return 'vpn';
     if (engine === 'proxy') return 'proxy';
     if (engine === 'svc') return 'svc';
     if (engine === 'tc') return canTc ? 'tc' : 'proxy';
-    return canTc ? 'tc' : 'proxy';
+    return 'vpn'; // auto：VPN 是首选
   }, [engine, canTc, params.blockNetwork]);
 
   const engineLabel = useMemo(() => {
     switch (effectiveMode) {
+      case 'vpn':
+        return 'VPN 全量整形（免 Root）';
       case 'proxy':
         return '本地代理（免 Root）';
       case 'tc':
@@ -395,6 +501,63 @@ export default function WeakNetworkPage() {
         </Notice>
       )}
 
+      {/* ================= VPN 配套 App：装机 + 授权 ================= */}
+      {/*
+        这一块只在「可能用 VPN」且还没就绪时出现，避免界面变吵。
+        为什么要把授权单独拎出来做卡片：Android 的 VPN 授权**无法绕过**，
+        必须用户在手机的系统对话框里点「确定」。提前把这件事说清楚，
+        用户第一次点开始时就不会被弹框吓到，也不会以为程序卡住了。
+      */}
+      {current && probe && !status.running && effectiveMode === 'vpn' && (
+        <Card className="wn-vpn-card">
+          <div className="wn-vpn-inner">
+            <div className="wn-vpn-info">
+              <div className="wn-vpn-head">
+                <strong>弱网引擎：设备侧 VPN</strong>
+                <Badge tone={probe.vpnAuthorized ? 'accent' : 'warn'}>
+                  {!probe.hasVpnApp
+                    ? '未安装'
+                    : probe.vpnAuthorized
+                      ? '已授权'
+                      : '待授权'}
+                </Badge>
+              </div>
+              <p className="text-dim wn-vpn-desc">
+                {!probe.hasVpnApp
+                  ? '在设备上安装一个配套 App（随工具一起发布，无需你自己编译），由它在 IP 层接管全部流量。' +
+                    '相比旧的代理方案：覆盖所有 App（不只是走系统代理的）、不需要 Root、也不写系统设置、不留代理残留。'
+                  : probe.vpnAuthorized
+                    ? '已安装并授权，可以直接开始。全部 IPv4 流量会在设备侧被逐包整形，包括那些完全不走代理的 App。'
+                    : '配套 App 已装好，还差一次系统授权 —— VPN 会看到全部流量，所以 Android 要求你亲自在手机上点「确定」，' +
+                      '这步没法自动代劳。点下面的按钮会把它弹出来。'}
+              </p>
+            </div>
+            <div className="wn-vpn-actions">
+              {!probe.hasVpnApp ? (
+                <Button variant="primary" onClick={installVpnApp} loading={vpnBusy}>
+                  安装配套 App
+                </Button>
+              ) : !probe.vpnAuthorized ? (
+                <Button variant="primary" onClick={authorizeVpn} loading={vpnBusy}>
+                  去设备上授权
+                </Button>
+              ) : (
+                <Button variant="default" onClick={refreshVpnInfo} loading={vpnBusy}>
+                  重新检测
+                </Button>
+              )}
+            </div>
+          </div>
+          {probe.hasVpnApp && probe.vpnAuthorized === false && (
+            <ol className="wn-vpn-steps">
+              <li>点上方「去设备上授权」—— 手机上会弹出系统对话框</li>
+              <li>在手机上点「确定」（对话框会说明这是本工具创建的 VPN 连接）</li>
+              <li>回到这里直接点「启动弱网模拟」即可，无需重复授权</li>
+            </ol>
+          )}
+        </Card>
+      )}
+
       {/* ================= 主操作区：启动入口 ================= */}
       <Card className={`wn-launch ${status.running ? 'running' : ''}`}>
         <div className="wn-launch-inner">
@@ -418,15 +581,18 @@ export default function WeakNetworkPage() {
             </div>
             <p className="text-dim wn-launch-desc">
               {status.running
-                ? status.mode === 'proxy' && status.proxy
-                  ? awaitingManual
-                    ? `代理服务与 USB 通道都已就绪，只差设备上的代理设置 —— 请填 ${manualAddr}`
-                    : `设备 HTTP/HTTPS 流量 → ${status.proxy.host}:${status.proxy.port} → 电脑代理 ·
-                       ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
-                  : status.mode === 'tc'
-                    ? `tc/netem · 网卡 ${status.iface} ·
-                       ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
-                    : `svc 开关模式 · ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
+                ? status.mode === 'vpn'
+                  ? `设备侧 VPN 已在 IP 层接管全部流量 · 端口 ${status.vpn?.port ?? 18090} ·
+                     ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
+                  : status.mode === 'proxy' && status.proxy
+                    ? awaitingManual
+                      ? `代理服务与 USB 通道都已就绪，只差设备上的代理设置 —— 请填 ${manualAddr}`
+                      : `设备 HTTP/HTTPS 流量 → ${status.proxy.host}:${status.proxy.port} → 电脑代理 ·
+                         ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
+                    : status.mode === 'tc'
+                      ? `tc/netem · 网卡 ${status.iface} ·
+                         ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
+                      : `svc 开关模式 · ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
                 : hasShaping
                   ? `当前参数：${summaryText}`
                   : '点「启动弱网模拟」会先套用默认弱网档（下行 1Mbps · 延迟 300ms），也可在下方自定义'}
@@ -498,27 +664,32 @@ export default function WeakNetworkPage() {
               }}
               options={[
                 { value: 'auto', label: '自动' },
-                { value: 'proxy', label: needManualProxy ? '本地代理（需手动设）' : '本地代理' },
+                { value: 'vpn', label: 'VPN' },
+                { value: 'proxy', label: '本地代理' },
                 { value: 'tc', label: 'tc/netem' },
                 { value: 'svc', label: '整体断网' },
               ]}
             />
             <span className="text-dim wn-engine-hint">
-              {effectiveMode === 'proxy'
-                ? needManualProxy
-                  ? '免 Root：通道自动建立，但需要你在设备 WLAN 里手动填一次代理地址'
-                  : '免 Root：设备流量经 USB 通道打到电脑代理，覆盖 HTTP/HTTPS'
-                : effectiveMode === 'tc'
-                  ? canTc
+              {effectiveMode === 'vpn'
+                ? probe?.hasVpnApp
+                  ? probe.vpnAuthorized
+                    ? '免 Root：设备侧 App 建 tun，IP 层全量整形，覆盖所有 App（含不走代理的）'
+                    : '免 Root：配套 App 已装，只差一次系统授权（上面那张卡片可以触发）'
+                  : '免 Root：开始时自动安装配套 App，首次需要在手机上点一次「确定」授权'
+                : effectiveMode === 'proxy'
+                  ? needManualProxy
+                    ? '免 Root：通道自动建立，但需要你在设备 WLAN 里手动填一次代理地址'
+                    : '免 Root：设备流量经 USB 通道打到电脑代理，只覆盖走系统代理的 App'
+                  : effectiveMode === 'tc'
                     ? '当前设备已 Root 且支持 tc，保真度最高'
-                    : '当前设备未 Root / 无 tc，将自动改用本地代理'
-                  : '关闭设备全部网络，用于验证断网降级逻辑'}
+                    : '关闭设备全部网络，用于验证断网降级逻辑'}
             </span>
           </div>
         )}
 
-        {/* ---------- 代理模式实时统计 ---------- */}
-        {status.running && status.mode === 'proxy' && status.stats && status.proxy?.active && (
+        {/* ---------- 运行中：实时统计（代理 / VPN 两种模式共用同一组指标） ---------- */}
+        {status.running && status.stats && (status.mode === 'vpn' || (status.mode === 'proxy' && status.proxy?.active)) && (
           <div className="wn-stats">
             <StatBox label="活跃连接" value={String(status.stats.active)} />
             <StatBox label="累计连接" value={String(status.stats.connections)} />
@@ -536,6 +707,19 @@ export default function WeakNetworkPage() {
               label="错报命中"
               value={String(status.stats.upCorrupt + status.stats.downCorrupt)}
             />
+          </div>
+        )}
+
+        {/* ---------- 运行中：VPN 模式的说明条（含"怎么立刻恢复网络"） ---------- */}
+        {status.running && status.mode === 'vpn' && (
+          <div className="wn-vpn-live">
+            <span className="text-dim">
+              设备侧 App 正在 IP 层整形 · 端口 {status.vpn?.port ?? 18090}
+              {status.vpn?.reachable === false && ' · ⚠ 控制通道失联，设备将在 15 秒后自动恢复网络'}
+            </span>
+            <span className="text-dim">
+              恢复网络有双保险：点「立即恢复网络」，或直接在设备通知栏里关掉这个 VPN
+            </span>
           </div>
         )}
       </Card>

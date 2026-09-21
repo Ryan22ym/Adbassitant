@@ -1,20 +1,26 @@
 import { randomUUID } from 'crypto';
-import { runAdb, ensureDevice, log } from './adb';
+import { runAdb, ensureDevice, log, binDir } from './adb';
+import { getShapingStats, setShapingParams, startShapingProxy, stopShapingProxy } from './proxy-shaping';
 import {
-  getShapingProxyPort,
-  getShapingStats,
-  isShapingProxyRunning,
-  setShapingParams,
-  startShapingProxy,
-  stopShapingProxy,
-} from './proxy-shaping';
+  VPN_PKG,
+  VPN_CONTROL_PORT,
+  findVpnApk,
+  getVpnAppInfo,
+  queryVpnState,
+  recoverStaleVpn,
+  setVpnTickSink,
+  startVpn,
+  stopVpn,
+} from './weaknet-vpn';
 import type {
   WeakNetDirectionParams,
   WeakNetMode,
   WeakNetParams,
   WeakNetPreset,
   WeakNetProxyInfo,
+  WeakNetStats,
   WeakNetStatus,
+  WeakNetVpnInfo,
 } from '../../shared/types';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
@@ -23,7 +29,17 @@ import { app } from 'electron';
 /**
  * 弱网模拟（对标 clumsy）
  *
- * 三条技术路线，按设备能力与用户选择自动切换：
+ * 四条技术路线，按设备能力与用户选择自动切换：
+ *
+ *   ⓪ VPN + 配套 App（**v2 首选**，免 Root，IP 层全量整形）
+ *      在设备上装一个配套 App，由它用 Android `VpnService` 建 tun 接管
+ *      0.0.0.0/0 的全部流量，在 **IP 层**逐包做延迟/丢包/错报/乱序/限速。
+ *      电脑侧通过 `adb forward` 用 HTTP 指挥它（见 services/weaknet-vpn.ts）。
+ *
+ *      为什么它取代代理成为首选：代理只管得到「愿意读系统 HTTP 代理」的 App，
+ *      大量 App 直接绕过 → 用户会看到「设了弱网但没变化」。VPN 是全量接管，
+ *      没有应用能绕开；而且 IP 层能真丢包、真乱序（TCP 负责重传重排），
+ *      不像字节流层只能做「队头阻塞」近似。
  *
  *   ① tc + netem（保真度最高，**需要 Root**）
  *      `tc qdisc add dev <iface> root netem delay 100ms 20ms loss 3% corrupt 1%`
@@ -33,7 +49,7 @@ import { app } from 'electron';
  *        tc qdisc add dev ifb0 root netem ...
  *      这是 clumsy 在 Windows 上的同构做法，参数语义一一对应。
  *
- *   ② 本地代理（**免 Root**，v1.0.1 新增，未 Root 设备的主力方案）
+ *   ② 本地代理（**免 Root**，v1.0.1 引入，现作为 VPN 不可用时的回退）
  *      adb reverse tcp:P tcp:P  +  settings put global http_proxy 127.0.0.1:P
  *      设备的 HTTP/HTTPS 流量经 USB 通道打到电脑上的代理，由代理注入延迟、
  *      带宽、丢包等参数。这两个环节都不需要 Root。
@@ -75,8 +91,12 @@ interface Session {
   timer: NodeJS.Timeout | null;
   /** 代理模式：设备侧代理地址与生效状态，回滚时用于确认清干净 */
   proxy?: WeakNetProxyInfo;
+  /** VPN 模式：设备侧 App 与授权状态（UI 展示用） */
+  vpn?: WeakNetVpnInfo;
   /** 代理模式：统计推送定时器（UI 需要看到实时连接数与流量） */
   statsTimer?: NodeJS.Timeout | null;
+  /** VPN 模式：心跳定时器（兼作统计推送） */
+  vpnTimer?: NodeJS.Timeout | null;
   note?: string;
 }
 
@@ -111,6 +131,8 @@ interface SessionMarker {
   blockedNetwork?: boolean;
   iface?: string;
   startedAt: number;
+  /** VPN 模式：控制端口，用于下次启动撤掉残留的 forward 映射 */
+  vpnPort?: number;
 }
 
 function markerFile(): string {
@@ -127,6 +149,7 @@ function writeMarker(ctx: Session) {
     startedAt: ctx.startedAt,
     blockedNetwork: ctx.mode === 'svc' || !!ctx.params.blockNetwork,
     proxyPort: ctx.proxy?.port,
+    vpnPort: ctx.vpn?.port,
   };
   try {
     writeFileSync(markerFile(), JSON.stringify(m, null, 2), 'utf8');
@@ -167,6 +190,14 @@ export async function recoverStaleSession(): Promise<string | null> {
   const done: string[] = [];
 
   try {
+    // 0) VPN 残留：撤掉上次留下的 forward 映射，并确认设备侧隧道已关。
+    //    与代理残留相比这个危害小得多 —— 设备侧有 15s 心跳超时会自停，
+    //    最坏情况是 VPN 多开了十几秒，网络会自动恢复；这里只是收个尾。
+    if (m.vpnPort || m.mode === 'vpn') {
+      const msg = await recoverStaleVpn(s);
+      if (msg) done.push(msg);
+    }
+
     // 1) 代理残留：先撤代理设置，再断 reverse
     if (m.proxyPort) {
       // 走统一的成套清理（put :0 触发内存态刷新 + 清真身四键）。
@@ -202,8 +233,26 @@ export function hasActiveWeakNetSession(): boolean {
   return !!session;
 }
 
+/**
+ * 参数热更新后同步会话里的副本。
+ *
+ * 为什么需要：`getWeakNetStatus()` 返回的是 `session.params`，而热更新走的是
+ * VPN 引擎的控制通道 —— 只改了设备侧，电脑侧这份副本还是旧值。
+ * 不同步的话界面上的滑块会"弹回"原值，看起来像没生效。
+ */
+export function touchSessionParams(params: WeakNetParams) {
+  if (!session) return;
+  session.params = params;
+  // 剩余时长跟着新参数重算，否则改了时长界面不动
+  if (params.durationSec > 0) {
+    session.startedAt = Date.now();
+  }
+  emitStatus();
+}
+
 /** 给用户看的模式名称 */
 const MODE_LABEL: Record<WeakNetMode, string> = {
+  vpn: 'VPN 全量整形（免 Root）',
   tc: 'tc/netem 内核级',
   proxy: '本地代理（免 Root）',
   svc: '开关网络',
@@ -219,6 +268,44 @@ export function setWeakNetStatusSink(sink: StatusSink) {
 
 function emitStatus() {
   statusSink?.(getWeakNetStatus());
+}
+
+// VPN 引擎内部也会触发状态变更（心跳发现设备侧停了、参数热更新等），
+// 让它直接走同一个出口，保证界面看到的永远是同一份状态。
+setVpnTickSink(emitStatus);
+
+/**
+ * 主动触发一次设备上的 VPN 授权弹框（界面上的「去授权」按钮用）。
+ *
+ * 单独暴露出来是因为有个尴尬场景：用户第一次点「开始」→ 弹框被他不小心
+ * 划掉了 → 界面停在"等待授权"。这时候得能再弹一次，而不是让他重走一遍开始。
+ */
+export async function requestVpnAuthorize(serial: string | undefined): Promise<boolean> {
+  const s = await ensureDevice(serial);
+  const { requestVpnAuthorization } = await import('./weaknet-vpn');
+
+  // 通道可能还没建（用户没点开始就来点授权）—— 先建一个临时的
+  const already = await queryVpnState(VPN_CONTROL_PORT);
+  if (!already) {
+    await runAdb(['-s', s, 'forward', `tcp:${VPN_CONTROL_PORT}`, `tcp:${VPN_CONTROL_PORT}`], {
+      silent: true,
+      timeout: 8000,
+    });
+    // 拉起 App 主进程（它才会开控制端口）
+    await runAdb(
+      ['-s', s, 'shell', 'monkey', '-p', VPN_PKG, '-c',
+        'android.intent.category.LAUNCHER', '1'],
+      { silent: true, timeout: 10_000 },
+    );
+    // 给 App 一点时间起端口；起不来也照样试着发授权指令
+    for (let i = 0; i < 12; i++) {
+      const st = await queryVpnState(VPN_CONTROL_PORT);
+      if (st) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  return requestVpnAuthorization(s);
 }
 
 /**
@@ -270,6 +357,42 @@ async function tickProxy() {
   }
 }
 
+/**
+ * VPN 心跳：从设备侧拉真实状态与统计，刷新会话备注后推给界面。
+ *
+ * 与 tickProxy 分开是因为两件事的语义不同 —— VPN 的状态是**设备侧说了算**
+ * （它以 15s 心跳超时自立门户，见 weaknet-vpn.ts），我们只是搬运工；
+ * 代理是电脑侧说了算。混在一起会写出"两边都以为自己是对的"的代码。
+ */
+let vpnTicking = false;
+async function tickVpnSession() {
+  const ctx = session;
+  if (!ctx || ctx.mode !== 'vpn' || !ctx.vpn) return;
+  if (vpnTicking) return;
+  vpnTicking = true;
+  try {
+    const st = await queryVpnState(ctx.vpn.port);
+    if (session !== ctx) return;
+    if (!st) {
+      ctx.vpn.reachable = false;
+      ctx.note = '与设备侧控制通道失联 —— 若持续如此，设备会在 15s 后自动恢复网络';
+    } else {
+      ctx.vpn.reachable = true;
+      ctx.vpn.authorized = st.authorized;
+      ctx.note = st.note || ctx.note;
+      if (st.stats) vpnStats = st.stats;
+    }
+  } catch {
+    /* 单次失败不影响会话 */
+  } finally {
+    vpnTicking = false;
+    emitStatus();
+  }
+}
+
+/** 设备侧回报的最新统计（VPN 模式用） */
+let vpnStats: WeakNetStats | undefined;
+
 export function getWeakNetStatus(): WeakNetStatus {
   if (!session) return { running: false, remainSec: 0, mode: 'none' };
   const elapsed = Math.floor((Date.now() - session.startedAt) / 1000);
@@ -287,7 +410,8 @@ export function getWeakNetStatus(): WeakNetStatus {
     rooted: session.rooted,
     iface: session.iface,
     proxy: session.proxy,
-    stats: session.mode === 'proxy' ? getShapingStats() : undefined,
+    vpn: session.vpn,
+    stats: session.mode === 'proxy' ? getShapingStats() : vpnStats,
     note: session.note,
   };
 }
@@ -318,6 +442,18 @@ export interface ProbeResult {
   /** 设备当前设置的全局 HTTP 代理，null 表示未设置 */
   httpProxy: string | null;
   sdk?: number;
+  /* ---------- VPN 相关（v2 首选方案） ---------- */
+  /** 设备上是否已安装随包配套 App */
+  hasVpnApp: boolean;
+  /** 已装 App 的 versionCode */
+  vpnAppVersion?: number | null;
+  /**
+   * VPN 是否已获系统授权。
+   *
+   * 只在 App 已装且能握上手时才能读到真实值；未装 / 通道不通时为 null
+   * （表示"未知"，与 false"明确未授权"要区分开，前者不该催用户去点确定）。
+   */
+  vpnAuthorized: boolean | null;
   note: string;
 }
 
@@ -339,6 +475,13 @@ export async function probeDevice(serial: string | undefined): Promise<ProbeResu
   ]);
 
   const canWriteSettings = await probeWriteSettings(s);
+
+  // VPN 首选方案：并行探一下配套 App 与授权态。
+  // 不阻塞主线 —— 装没装 App 都不影响 tc / 代理两条老路线的可用性。
+  const [vpnApp, vpnAuth] = await Promise.all([
+    getVpnAppInfo(s).catch(() => ({ installed: false, versionCode: null })),
+    probeVpnAuthorized(s).catch(() => null),
+  ]);
 
   const rooted = /uid=0/.test(rootRes.stdout);
   // which 在部分 ROM 上不可用；再退一步看 `tc` 本身能否执行
@@ -371,18 +514,19 @@ export async function probeDevice(serial: string | undefined): Promise<ProbeResu
   const proxyState = parseGlobalProxyState(proxyRes.stdout);
   const httpProxy = proxyState.effective;
 
-  // 注意：现在未 Root 也有可用方案了 —— 本地代理不需要任何设备侧权限
+  // 探测结论：**VPN 是首选**，其余按能力排。
+  // 这里只在「同一次探测里」给最合理的默认建议，真正的引擎选择在 startWeakNet。
   let note: string;
-  if (rooted && hasTc) {
-    note = hasIfb
-      ? '已 Root 且内核支持 tc/netem：上下行均可精细控制（保真度最高）'
-      : '已 Root，但内核无 ifb 模块：下行（入向）参数可能不生效，建议改用本地代理模式';
-  } else if (canWriteSettings) {
-    note = '未 Root：将使用「本地代理」模式，无需 Root 即可生效，覆盖 HTTP/HTTPS 流量';
+  if (vpnApp.installed && vpnAuth === true) {
+    note = '配套 App 已安装且已授权：将使用 VPN 模式（IP 层全量整形，免 Root，覆盖所有 App）';
+  } else if (vpnApp.installed) {
+    note = '配套 App 已安装但尚未授权 VPN：首次开始时会弹出系统授权框，在手机上点「确定」即可';
   } else {
-    note =
-      '未 Root，且该 ROM 禁止 adb 写系统设置（ColorOS 等定制 ROM 常见）——' +
-      '代理服务可正常启动，但需要你到 WLAN 设置里手动填一次代理地址（界面会给出）';
+    note = '设备上未安装配套 App：开始时会自动安装（随包 APK），安装后在手机上点一次「确定」授权';
+  }
+  if (!vpnApp.installed && !canWriteSettings && !rooted) {
+    // 老方案在这种设备上只能走「手动向导」，所以额外说明一句 VPN 的收益
+    note += '。该机 ROM 禁止 adb 写代理设置，旧方案需手动填代理 —— 用 VPN 模式可免去这一步';
   }
 
   return {
@@ -396,9 +540,47 @@ export async function probeDevice(serial: string | undefined): Promise<ProbeResu
     canWriteSettings,
     httpProxy,
     sdk: Number.isFinite(sdk) ? sdk : undefined,
+    hasVpnApp: vpnApp.installed,
+    vpnAppVersion: vpnApp.versionCode,
+    vpnAuthorized: vpnAuth,
     note,
   };
 }
+
+/**
+ * 探一次设备侧的 VPN 授权态。
+ *
+ * 只在 App 已装的前提下才有意义 —— 未装时直接返回 null（== 未知）。
+ * 这里刻意**不自动拉起 App**：probe 会被 UI 频繁调用（切页面、切设备），
+ * 每次都拉起一次 App 会闪屏，用户会以为程序在乱动东西。
+ * 真正的拉起放在 startWeakNet 里，那才是用户明确要开始的时候。
+ */
+async function probeVpnAuthorized(serial: string): Promise<boolean | null> {
+  const info = await getVpnAppInfo(serial);
+  if (!info.installed) return null;
+
+  // 先看通道是否已经在（说明之前建过）
+  const st = await queryVpnState(VPN_CONTROL_PORT);
+  if (st) return st.authorized;
+
+  // 通道不在：起一个临时的 forward 探一下，探完立刻撤掉，不留痕迹
+  try {
+    await runAdb(
+      ['-s', serial, 'forward', `tcp:${VPN_CONTROL_PORT}`, `tcp:${VPN_CONTROL_PORT}`],
+      { silent: true, timeout: 8000 },
+    );
+    // 控制端口是 App 主进程拉的，可能没起 —— 试着 ping 一次，不通就算未知
+    const r = await queryVpnState(VPN_CONTROL_PORT);
+    await runAdb(
+      ['-s', serial, 'forward', '--remove', `tcp:${VPN_CONTROL_PORT}`],
+      { silent: true, timeout: 8000 },
+    );
+    return r ? r.authorized : null;
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * 实测能否用 adb 写系统 global 设置。
@@ -487,6 +669,57 @@ function pickIface(ifaces: string[]): string {
 }
 
 /* ------------------------------------------------------------------ */
+/* VPN：等待授权后自动续跑                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 等用户在设备上点完 VPN 授权，然后自动继续启动。
+ *
+ * 为什么要有这一步：Android 的 VPN 授权**必须**由用户在系统对话框里手动点
+ * 「确定」（`VpnService.prepare()` 只能 Activity 调，见 weaknet-vpn.ts 的说明）。
+ * 如果不做这个轮询，用户点完确定后得自己再回来点一次"开始"——多一步且容易懵。
+ *
+ * 超时上限 3 分钟：足够慢手用户操作，又不会把会话永远挂在那里。
+ */
+async function waitAuthorizeThenStart(ctx: Session, params: WeakNetParams): Promise<void> {
+  // 会话已被替换（用户点了别的）→ 自己退出
+  if (session !== ctx) {
+    if (ctx.vpnTimer) { clearInterval(ctx.vpnTimer); ctx.vpnTimer = null; }
+    return;
+  }
+  if (Date.now() - ctx.startedAt > 180_000) {
+    if (ctx.vpnTimer) { clearInterval(ctx.vpnTimer); ctx.vpnTimer = null; }
+    ctx.note = '等待授权超时（3 分钟），已取消。请重新点击开始。';
+    emitStatus();
+    return;
+  }
+
+  const st = await queryVpnState(VPN_CONTROL_PORT);
+  if (session !== ctx) return;
+  if (!st) return; // 通道暂时不通，下个 tick 再试
+
+  if (!st.authorized) {
+    ctx.note = '等待设备上点「确定」授权 VPN……（在手机上弹出的对话框里点确定）';
+    emitStatus();
+    return;
+  }
+
+  // 授权到位：停轮询，重新走一遍完整启动
+  if (ctx.vpnTimer) { clearInterval(ctx.vpnTimer); ctx.vpnTimer = null; }
+  ctx.note = '已获得授权，正在启动 VPN……';
+  emitStatus();
+  log('success', '弱网', '检测到已授权，正在启动 VPN');
+
+  // 用当前会话替换掉自己再启动，避免 startWeakNet 里的 stop 把状态搅乱
+  session = null;
+  try {
+    await startWeakNet(ctx.serial, params);
+  } catch (e) {
+    log('error', '弱网', `授权后启动失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 启动 / 停止                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -526,14 +759,88 @@ export async function startWeakNet(
   }
 
   /* ---------- 选择技术路线 ---------- */
+  // 顺序即优先级：VPN（首选）→ tc（有 Root）→ 代理（免 Root 回退）→ svc（保底）
+  //
+  // 为什么 VPN 排在 tc 前面：本机实测主流设备都未 Root，tc 走不通；
+  // 而 VPN 不需要 Root 就能做到 IP 层全量整形，覆盖面与保真度都优于代理。
+  // 即使用户 Root 了，VPN 的「不依赖 ROM、不写系统设置、不留代理残留」
+  // 也更安全，所以仍作默认首选。想用 tc 的用户可以显式选 engine='tc'。
   const engine = params.engine || 'auto';
   const canTc = probe.rooted && probe.hasTc;
+
+  const useVpn =
+    !params.blockNetwork && (engine === 'vpn' || engine === 'auto');
+
   let useProxy: boolean;
   if (params.blockNetwork) useProxy = false; // 断网交给 svc
+  else if (engine === 'vpn') useProxy = false; // 明确要 VPN：失败就直接报错，不偷偷换路线
   else if (engine === 'proxy') useProxy = true;
   else if (engine === 'svc') useProxy = false;
   else if (engine === 'tc') useProxy = !canTc; // 强制 tc 但设备不支持时退回代理
-  else useProxy = !canTc; // auto：能 tc 就 tc，否则用代理
+  else useProxy = !canTc; // auto（VPN 不可用时启用）：能 tc 就 tc，否则用代理
+
+  /* ---------- ⓪ VPN：配套 App 建隧道，IP 层全量整形（首选） ---------- */
+  if (useVpn) {
+    const r = await startVpn({
+      serial: s,
+      params,
+      apkPath: findVpnApk() ?? undefined,
+      autoInstall: true,
+    });
+
+    if (r.ok) {
+      const st = await queryVpnState(VPN_CONTROL_PORT);
+      ctx.vpn = {
+        pkg: VPN_PKG,
+        appInstalled: true,
+        authorized: st?.authorized ?? true,
+        channelOpen: true,
+        port: VPN_CONTROL_PORT,
+        reachable: !!st,
+      };
+      ctx.mode = 'vpn';
+      ctx.note = st?.note || 'VPN 已生效：设备全部 IPv4 流量经设备侧 App 在 IP 层整形';
+
+      // 心跳定时器：兼作 stats 推送与失联检测
+      ctx.vpnTimer = setInterval(() => {
+        void tickVpnSession();
+      }, 1000);
+      ctx.vpnTimer.unref?.();
+
+      session = ctx;
+      writeMarker(ctx);
+      log('success', '弱网', `已生效（${MODE_LABEL.vpn}）`);
+      emitStatus();
+      return getWeakNetStatus();
+    }
+
+    // 需要授权：**这不是失败**，是一个需要用户配合的中间态。
+    // 把会话登记下来，让界面能持续显示"等待手机上点确定"，
+    // 而不是弹个错误框就完事（用户点完确定还得再点一次开始，体验太差）。
+    if (r.needAuthorize) {
+      ctx.mode = 'none';
+      ctx.note = r.message;
+      session = ctx;
+      clearMarker();
+      emitStatus();
+      log('warn', '弱网', r.message);
+
+      // 后台轮询授权结果：用户点完「确定」后自动接着启动，无需他再点开始。
+      // 这是本方案唯一需要"等用户"的地方，等得优雅一点。
+      ctx.vpnTimer = setInterval(() => {
+        void waitAuthorizeThenStart(ctx, params);
+      }, 1200);
+      ctx.vpnTimer.unref?.();
+      return getWeakNetStatus();
+    }
+
+    // 真失败：engine 明确指定 vpn 时直接抛；auto 则继续往下走老路线
+    if (engine === 'vpn') {
+      session = null;
+      throw new Error(r.message);
+    }
+    log('warn', '弱网', `VPN 模式不可用（${r.message}），改用其他方式`);
+  }
 
   /* ---------- ① 整体断网：直接开关网络 ---------- */
   if (params.blockNetwork) {
@@ -644,7 +951,8 @@ export async function startWeakNet(
   // 落标记：万一程序被强杀，下次启动能自动把设备恢复干净
   writeMarker(ctx);
 
-  // 限时自动停止
+  // 限时自动停止（tc / 代理 / svc 三条路线共用这一段；
+  // VPN 分支在上面已经单独建过定时器并提前 return 了，不会重复）
   if (params.durationSec > 0) {
     ctx.timer = setTimeout(() => {
       log('info', '弱网', `已达设定时长 ${params.durationSec}s，自动恢复网络`);
@@ -669,6 +977,31 @@ export async function stopWeakNet(): Promise<WeakNetStatus> {
   if (ctx.statsTimer) {
     clearInterval(ctx.statsTimer);
     ctx.statsTimer = null;
+  }
+  if (ctx.vpnTimer) {
+    clearInterval(ctx.vpnTimer);
+    ctx.vpnTimer = null;
+  }
+
+  // VPN 模式：关设备侧隧道（这一步就是"恢复网络"），再撤控制通道。
+  //
+  // 注意顺序：**先发 /stop 再撤 forward**。反过来先撤通道的话，
+  // /stop 就发不出去了 —— 设备侧只能靠 15s 心跳超时兜底，用户会白等十几秒。
+  // 这是本方案与代理方案在清理顺序上唯一的不同点，其余（先撤设置再断通道）
+  // 是代理特有的，因为代理的"设置"本身就是残留源。
+  if (ctx.mode === 'vpn') {
+    const told = await stopVpn();
+    if (told) {
+      log('info', '弱网', '已关闭 VPN，设备网络恢复正常');
+    } else {
+      log(
+        'warn',
+        '弱网',
+        '未能确认设备侧已关闭 VPN（可能已断开 USB）。' +
+          '设备侧会在 15s 内自动恢复网络；若仍未恢复，请打开设备上的「弱网模拟」App 手动点停止。',
+      );
+    }
+    vpnStats = undefined;
   }
 
   // 代理模式：先撤设备侧的代理与 reverse，再关掉本地代理服务

@@ -617,16 +617,18 @@ export interface LogcatExportDirInfo {
 /* ------------------------------------------------------------------ */
 
 /** 实际生效方式 */
-export type WeakNetMode = 'tc' | 'svc' | 'proxy' | 'none';
+export type WeakNetMode = 'vpn' | 'tc' | 'svc' | 'proxy' | 'none';
 
 /**
  * 实现引擎：
- *   auto  —— 有 Root 且内核支持 tc 时走 tc/netem，否则自动改用本地代理（默认）
+ *   auto  —— 首选 VPN（配套 App 建 tun，IP 层整形，免 Root、覆盖全量流量），
+ *            装不上或不可用时自动退回本地代理（默认）
+ *   vpn   —— 强制走配套 App 的 VPN（**推荐**；未装 App 时会尝试自动安装）
  *   proxy —— 强制走本地代理（免 Root，通过 adb reverse + 全局 HTTP 代理）
  *   tc    —— 强制走内核 netem（需 Root）
  *   svc   —— 开关网络（仅能做「整体断网」）
  */
-export type WeakNetEngine = 'auto' | 'proxy' | 'tc' | 'svc';
+export type WeakNetEngine = 'auto' | 'vpn' | 'proxy' | 'tc' | 'svc';
 
 /** 单个方向的参数（上行 = 设备出口，下行 = 入向） */
 export interface WeakNetDirectionParams {
@@ -692,6 +694,40 @@ export interface WeakNetStats {
   downCorrupt: number;
 }
 
+/**
+ * VPN 模式的设备侧信息。
+ *
+ * VPN 与代理是两种完全不同的实现，但界面上要展示的东西高度重合
+ * （授权了没 / 通道通不通 / 怎么手动救急），所以做成一个独立的卡片数据，
+ * 而不是硬塞进 WeakNetProxyInfo —— 那个结构里有 reverse、manualAddress
+ * 这类对 VPN 毫无意义的字段，混用会让人误读。
+ */
+export interface WeakNetVpnInfo {
+  /** 设备上配套 App 的包名 */
+  pkg: string;
+  /** 设备上是否已安装配套 App */
+  appInstalled: boolean;
+  /** 设备上已装 App 的 versionCode，未装为 null */
+  appVersionCode?: number | null;
+  /**
+   * VPN 是否已获得系统授权。
+   *
+   * ⚠️ 这个授权**无法绕过**：Android 要求 VpnService.prepare() 必须由
+   * Activity 唤起系统对话框，用户手动点「确定」。所以第一次用必然要
+   * 在手机上操作一次；之后系统会记住，不再弹框。
+   */
+  authorized: boolean;
+  /**
+   * 控制通道（adb forward tcp:P tcp:P）是否已建立。
+   * false 时说明还没开始连接，或 USB 断了。
+   */
+  channelOpen: boolean;
+  /** 控制端口 */
+  port: number;
+  /** 是否在线（最近一次心跳成功） */
+  reachable?: boolean;
+}
+
 /** 代理模式下设备需要配置的地址 */
 export interface WeakNetProxyInfo {
   /** 设备侧代理主机，固定 127.0.0.1（经 adb reverse 打回电脑） */
@@ -726,6 +762,7 @@ export interface WeakNetStatus {
   params?: WeakNetParams;
   /**
    * 实际生效方式：
+   *   vpn   = 配套 App 的 VpnService，IP 层全量整形（推荐，免 Root）
    *   tc    = 内核 netem（需 Root，保真度最高）
    *   proxy = 本地代理（免 Root，覆盖 HTTP/HTTPS，参数做等效近似）
    *   svc   = 开关网络（仅整体断网）
@@ -737,7 +774,9 @@ export interface WeakNetStatus {
   iface?: string;
   /** 代理模式：设备侧连接信息 */
   proxy?: WeakNetProxyInfo;
-  /** 代理模式：实时统计 */
+  /** VPN 模式：设备侧 App 与授权状态 */
+  vpn?: WeakNetVpnInfo;
+  /** 代理模式 / VPN 模式：实时统计 */
   stats?: WeakNetStats;
   /** 上一次的提示信息 */
   note?: string;
@@ -892,6 +931,11 @@ export const IPC = {
   WEAKNET_PRESET_DELETE: 'weaknet:presetDelete',
   WEAKNET_PROBE: 'weaknet:probe',
   WEAKNET_CLEANUP: 'weaknet:cleanup',
+  /* 弱网 v2：VPN 模式 —— 设备上装配套 App，由它建 VPN 做 IP 层整形 */
+  WEAKNET_VPN_AUTHORIZE: 'weaknet:vpnAuthorize',
+  WEAKNET_VPN_APP_INFO: 'weaknet:vpnAppInfo',
+  WEAKNET_VPN_INSTALL: 'weaknet:vpnInstall',
+  WEAKNET_VPN_PARAMS: 'weaknet:vpnParams',
 
   /* 日志 */
   LOG_EXPORT: 'log:export',

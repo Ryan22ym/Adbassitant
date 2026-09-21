@@ -16,6 +16,7 @@
     "dist": "npm run build && electron-builder",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepare:bin": "node scripts/prepare-bin.mjs",
+    "build:weaknet-apk": "node scripts/build-weaknet-apk.mjs",
     "check:modules": "python scripts/check-modules.py",
     "test:smoke": "electron scripts/smoke.cjs",
     "test:e2e": "electron scripts/e2e.cjs",

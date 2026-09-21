@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      App 由电脑侧 `am start` 拉起去弹授权框，所以**不能让主题把界面画出来** ——
+      否则用户会看到一闪而过的白/黑窗口，很廉价。
+      用透明主题 + 无标题栏，系统授权框直接盖在上面。
+    -->
+    <style name="Theme.WeakNetVpn.Transparent" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+</resources>

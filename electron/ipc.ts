@@ -92,7 +92,16 @@ import {
   probeDevice,
   cleanupStaleProxy,
   setWeakNetStatusSink,
+  requestVpnAuthorize,
+  touchSessionParams,
 } from './services/weaknet';
+import {
+  findVpnApk,
+  getVpnAppInfo,
+  installVpnApp,
+  queryVpnState,
+  updateVpnParams,
+} from './services/weaknet-vpn';
 import { listFavorites, toggleFavorite, removeFavorite } from './services/favorites';
 import {
   listQuickActions,
@@ -949,6 +958,57 @@ export function registerIpc() {
   ipcMain.handle(
     IPC.WEAKNET_CLEANUP,
     wrap((_e, serial?: string) => cleanupStaleProxy(serial)),
+  );
+
+  /* ---------------- 弱网 v2：VPN 模式 ---------------- */
+
+  // 主动弹一次设备的 VPN 授权框（用户在手机上点「确定」）
+  ipcMain.handle(
+    IPC.WEAKNET_VPN_AUTHORIZE,
+    wrap((_e, serial?: string) => requestVpnAuthorize(serial)),
+  );
+
+  // 查设备上配套 App 的安装情况与授权态
+  ipcMain.handle(
+    IPC.WEAKNET_VPN_APP_INFO,
+    wrap(async (_e, serial?: string) => {
+      const s = await ensureDevice(serial);
+      const info = await getVpnAppInfo(s);
+      const st = await queryVpnState();
+      return {
+        installed: info.installed,
+        versionCode: info.versionCode,
+        authorized: st?.authorized ?? null,
+        vpnActive: st?.vpnActive ?? false,
+      };
+    }),
+  );
+
+  // 安装 / 更新配套 App（不传 apkPath 就用随包 APK）
+  ipcMain.handle(
+    IPC.WEAKNET_VPN_INSTALL,
+    wrap(async (_e, serial?: string, apkPath?: string) => {
+      const s = await ensureDevice(serial);
+      const apk = apkPath || findVpnApk();
+      if (!apk) {
+        return {
+          ok: false,
+          message: '找不到随包 APK（应为 bin/weaknet/weaknet-vpn.apk）',
+        };
+      }
+      return installVpnApp(s, apk);
+    }),
+  );
+
+  // 参数热更新（不重建隧道，避免闪断）
+  ipcMain.handle(
+    IPC.WEAKNET_VPN_PARAMS,
+    wrap(async (_e, params: WeakNetParams) => {
+      const ok = await updateVpnParams(params);
+      // 同时把参数记到会话里，好让 status 返回的是最新值
+      if (ok) touchSessionParams(params);
+      return { ok };
+    }),
   );
 
   /* ---------------- 设置 ---------------- */
