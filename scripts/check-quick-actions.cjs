@@ -319,6 +319,16 @@ async function runChecks(page) {
         chipText: rows.map((r) => [...r.querySelectorAll('.qa-chip')].map((c) => c.textContent.trim())),
         more: rows.map((r) => !!r.querySelector('[data-qa-more]')),
         nested: rows.map((r) => r.querySelectorAll('.device-row button button').length),
+        // 图标必须是内联 SVG（与侧边导航同一套线性风格），不能退回彩色 emoji
+        chipSvg: rows.map((r) =>
+          [...r.querySelectorAll('.qa-chip')].map((c) => c.querySelectorAll('svg').length),
+        ),
+        chipEmoji: rows.flatMap((r) =>
+          [...r.querySelectorAll('.qa-chip')].map((c) =>
+            /[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}]/u.test(c.textContent || ''),
+          ),
+        ),
+        moreSvg: rows.map((r) => r.querySelectorAll('[data-qa-more] svg').length),
       };
     })()
   `);
@@ -333,8 +343,20 @@ async function runChecks(page) {
       'B2 行内直显 2 个动作按钮（默认配置）',
       ui.chipText.map((t) => `[${t.join('|')}]`).join(' '),
     );
-    record(ui.more.every(Boolean), 'B3 每行都有 ⚡ 菜单按钮', ui.more.join(','));
+    record(ui.more.every(Boolean), 'B3 每行都有「更多」菜单按钮', ui.more.join(','));
     record(ui.nested.every((n) => n === 0), 'B4 行内没有 button 嵌套', ui.nested.join(','));
+
+    // 图标：全内联 SVG（24 格 / 描边 1.8 / currentColor），不用彩色 emoji
+    record(
+      ui.chipSvg.every((a) => a.length > 0 && a.every((n) => n === 1)),
+      'B4a 每个行内按钮都带 1 个 SVG 图标',
+      JSON.stringify(ui.chipSvg),
+    );
+    record(
+      ui.moreSvg.every((n) => n === 1) && !ui.chipEmoji.some(Boolean),
+      'B4b 「更多」是描边闪电、按钮文字不含 emoji',
+      `moreSvg=${ui.moreSvg.join(',')} emojiHits=${ui.chipEmoji.filter(Boolean).length}`,
+    );
 
     // 打开 ⚡ 菜单
     await page.evalJS(`
@@ -357,11 +379,14 @@ async function runChecks(page) {
           hasFg: !!m.querySelector('[data-qa-fg]'),
           fgText: (m.querySelector('[data-qa-fg]')?.textContent || '').trim(),
           hasConfigure: !!m.querySelector('[data-qa-configure]'),
+          itemSvg: [...m.querySelectorAll('.qa-menu-item')].map(
+            (x) => x.querySelectorAll('.qa-mi-icon svg').length,
+          ),
         };
       })()
     `);
     log('菜单:', JSON.stringify(menu));
-    record(menu.open === true, 'B5 点击 ⚡ 弹出动作菜单', JSON.stringify(menu.open));
+    record(menu.open === true, 'B5 点击「更多」弹出动作菜单', JSON.stringify(menu.open));
     record(
       menu.open && menu.items && menu.items.length === 3,
       'B6 菜单里列出全部 3 条启用动作',
@@ -369,6 +394,11 @@ async function runChecks(page) {
     );
     record(menu.open && menu.hasFg, 'B7 菜单显示当前前台应用', menu.fgText || '');
     record(menu.open && menu.hasConfigure, 'B8 菜单里有「配置」入口', '');
+    record(
+      menu.open && menu.itemSvg.every((n) => n === 1),
+      'B8a 菜单每一项都带 SVG 图标',
+      JSON.stringify(menu.itemSvg),
+    );
 
     // capturePage 在离屏窗口上会拿到稍早的帧，等久一点再拍，否则拍到菜单还没出现的样子
     await sleep(2200);
@@ -389,6 +419,12 @@ async function runChecks(page) {
           rows: d.querySelectorAll('.qa-cfg-row').length,
           addBtns: d.querySelectorAll('.qa-add-btn').length,
           title: (d.querySelector('.qa-dialog-title')?.textContent || '').trim(),
+          cfgIconSvg: [...d.querySelectorAll('.qa-cfg-row .qa-cfg-icon')].map(
+            (e) => e.querySelectorAll('svg').length,
+          ),
+          addIconSvg: [...d.querySelectorAll('.qa-add-btn')].map(
+            (e) => e.querySelectorAll('svg').length,
+          ),
         };
       })()
     `);
@@ -396,6 +432,11 @@ async function runChecks(page) {
     record(dlg.open === true, 'B9 点「配置」打开配置弹层', JSON.stringify(dlg.open));
     record(dlg.open && dlg.rows === 3, 'B10 弹层里列出 3 条动作', String(dlg.rows));
     record(dlg.open && dlg.addBtns >= 10, 'B11 提供内置动作清单可添加', String(dlg.addBtns));
+    record(
+      dlg.open && dlg.cfgIconSvg.every((n) => n === 1) && dlg.addIconSvg.every((n) => n === 1),
+      'B11a 配置行与动作清单的图标都是 SVG',
+      `cfg=${JSON.stringify(dlg.cfgIconSvg)} add=${dlg.addIconSvg.length}个`,
+    );
 
     // 添加一个动作并保存
     const added = await page.evalJS(`

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Select, Switch, Spinner } from '@/components/ui';
 import { useApp } from '@/store/app';
 import { call, tryCall } from '@/lib/ipc';
+import { ActionIcon, Icon } from './icons';
 import type { FavoriteApp } from '@shared/types';
 import {
   QUICK_ACTION_INLINE_MAX,
@@ -21,24 +22,9 @@ import './quick-actions.css';
  * ============================================================
  * 行上的空间只够放两三个按钮，所以：
  *   - 标记了「行内直显」的动作直接渲染成小按钮（最多 3 个）
- *   - 其余收进 ⚡ 菜单；菜单里还能看到当前前台应用、进配置
+ *   - 其余收进「更多」菜单；菜单里还能看到当前前台应用、进配置
  * 配置（增删改 / 排序 / 自定义命令）在弹层里做，改完落盘到本机。
  */
-
-const KIND_ICON: Record<QuickActionKind, string> = {
-  clearData: '🧹',
-  homeReturn: '🏠↻',
-  restart: '↻',
-  restartFresh: '🧹↻',
-  forceStop: '⛔',
-  launch: '▶',
-  screenshot: '📷',
-  home: '🏠',
-  back: '↩',
-  wake: '🔆',
-  sleep: '🌙',
-  shell: '⌨',
-};
 
 const KIND_ORDER = Object.keys(QUICK_ACTION_KIND_LABEL) as QuickActionKind[];
 
@@ -156,7 +142,7 @@ export function QuickActionBar({
             void run(a);
           }}
         >
-          {busy === a.id ? <Spinner size={11} /> : <span className="qa-chip-icon">{KIND_ICON[a.kind]}</span>}
+          {busy === a.id ? <Spinner size={11} /> : <span className="qa-chip-icon">{ActionIcon[a.kind]}</span>}
           <span>{a.label}</span>
         </button>
       ))}
@@ -173,7 +159,7 @@ export function QuickActionBar({
           menuOpen ? closeMenu() : openMenu();
         }}
       >
-        ⚡
+        {Icon.bolt}
       </button>
 
       {menuOpen && pos && (
@@ -228,7 +214,7 @@ export function QuickActionBar({
                   data-qa-item={a.kind}
                   onClick={() => void run(a)}
                 >
-                  <span className="qa-mi-icon">{KIND_ICON[a.kind]}</span>
+                  <span className="qa-mi-icon">{ActionIcon[a.kind]}</span>
                   <span className="qa-mi-label">{a.label}</span>
                   <span className="qa-mi-target mono">{targetHint(a)}</span>
                   {busy === a.id && <Spinner size={11} />}
@@ -244,7 +230,8 @@ export function QuickActionBar({
                   onConfigure();
                 }}
               >
-                ⚙ 配置快捷动作…
+                <span className="qa-foot-icon">{Icon.gear}</span>
+                配置快捷动作…
               </button>
             </div>
           </div>
@@ -386,11 +373,11 @@ export function QuickActionsDialog({
           <div>
             <h3 className="qa-dialog-title">快捷动作配置</h3>
             <p className="qa-dialog-sub">
-              设备行上最多直显 {QUICK_ACTION_INLINE_MAX} 个按钮，其余收进 ⚡ 菜单；顺序即显示顺序
+              设备行上最多直显 {QUICK_ACTION_INLINE_MAX} 个按钮，其余收进「更多」菜单；顺序即显示顺序
             </p>
           </div>
           <button className="qa-dialog-close" onClick={onClose} title="关闭">
-            ×
+            {Icon.close}
           </button>
         </header>
 
@@ -408,8 +395,11 @@ export function QuickActionsDialog({
                       checked={a.enabled}
                       onChange={(v) => patch(i, { enabled: v })}
                     />
-                    <span className="qa-cfg-icon" title={QUICK_ACTION_KIND_LABEL[a.kind]}>
-                      {KIND_ICON[a.kind]}
+                    <span
+                      className={`qa-cfg-icon qa-cfg-icon-${a.tone || 'default'}`}
+                      title={QUICK_ACTION_KIND_LABEL[a.kind]}
+                    >
+                      {ActionIcon[a.kind]}
                     </span>
                     <Input
                       className="qa-cfg-label"
@@ -480,7 +470,7 @@ export function QuickActionsDialog({
 
                     <span className="qa-cfg-ops">
                       <Button size="sm" variant="ghost" disabled={i === 0} onClick={() => move(i, -1)} title="上移">
-                        ↑
+                        {Icon.up}
                       </Button>
                       <Button
                         size="sm"
@@ -489,7 +479,7 @@ export function QuickActionsDialog({
                         onClick={() => move(i, 1)}
                         title="下移"
                       >
-                        ↓
+                        {Icon.down}
                       </Button>
                       <Button
                         size="sm"
@@ -519,7 +509,7 @@ export function QuickActionsDialog({
                   disabled={draft.length >= QUICK_ACTION_MAX}
                   onClick={() => add(k)}
                 >
-                  <span>{KIND_ICON[k]}</span>
+                  <span className="qa-add-icon">{ActionIcon[k]}</span>
                   {QUICK_ACTION_KIND_LABEL[k]}
                 </button>
               ))}

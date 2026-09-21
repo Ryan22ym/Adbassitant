@@ -251,7 +251,7 @@ export default function DevicePage() {
                       {stateLabel(d.state)}
                     </Badge>
                   </span>
-                  {/* 快捷动作：清数据 / 回桌面再进 / 杀进程重进…（本机可配置，见 ⚡ 菜单） */}
+                  {/* 快捷动作：清数据 / 回桌面再进 / 杀进程重进…（本机可配置，见「更多」菜单） */}
                   {ready && (
                     <QuickActionBar
                       serial={d.serial}
