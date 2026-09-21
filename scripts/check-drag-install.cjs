@@ -115,6 +115,9 @@ window.__dnd = {
   /**
    * 切换「安装方式」。拖放安装读的是 store 里的 installMode，
    * 所以点一下分段控件就够了（前提：页面在「安装安装包」标签页上）。
+   *
+   * v1.0.28：选设备弹窗里也有一个安装方式分段控件，选择器必须排除它，
+   * 否则弹窗打开时点到的会是弹窗里那个，页面那个纹丝不动。
    */
   setMode(label) {
     const box = document.querySelector('[data-install-mode]');
@@ -141,6 +144,33 @@ window.__dnd = {
    * 「装到哪台设备」弹窗的状态。多台设备在线时它必须出现 ——
    * 不允许应用自己挑一台就开装。
    */
+  /**
+   * 「装到哪台设备」那一屏里的安装方式（v1.0.28 起可改）。
+   *
+   * 与页面上的 modeInfo 是两个不同的控件，选择器必须分开 ——
+   * 用 [data-install-mode] 会把这一屏自己的分段控件也当成页面那个。
+   */
+  pickMode() {
+    const box = document.querySelector('[data-pick-mode]');
+    if (!box) return null;
+    return {
+      options: Array.from(box.querySelectorAll('.segmented-item')).map((b) => b.textContent.trim()),
+      active: (box.querySelector('.segmented-item.active')?.textContent || '').trim(),
+      value: box.getAttribute('data-pick-mode'),
+      hint: (document.querySelector('.install-mode-hint')?.textContent || '').trim(),
+    };
+  },
+  /** 在选设备弹窗里切安装方式 */
+  setPickMode(label) {
+    const box = document.querySelector('[data-pick-mode]');
+    if (!box) return 'no-box';
+    const btn = Array.from(box.querySelectorAll('.segmented-item')).find(
+      (b) => b.textContent.trim() === label,
+    );
+    if (!btn) return 'no-btn';
+    btn.click();
+    return 'ok';
+  },
   pickInfo() {
     const mask = document.querySelector('[data-pick-device]');
     if (!mask) return null;
@@ -149,6 +179,10 @@ window.__dnd = {
       file: (mask.querySelector('.install-file')?.textContent || '').trim(),
       chips: Array.from(mask.querySelectorAll('.install-chip')).map((c) => c.textContent.trim()),
       note: (mask.querySelector('.install-note')?.textContent || '').trim(),
+      mode: (mask.querySelector('[data-pick-mode]')?.getAttribute('data-pick-mode') || ''),
+      modeActive: (mask.querySelector('[data-pick-mode] .segmented-item.active')?.textContent || '').trim(),
+      modeOptions: Array.from(mask.querySelectorAll('[data-pick-mode] .segmented-item')).map((b) => b.textContent.trim()),
+      modeHint: (mask.querySelector('.install-mode-hint')?.textContent || '').trim(),
       buttons: Array.from(mask.querySelectorAll('.install-actions .btn')).map((b) => b.textContent.trim()),
       devices: Array.from(mask.querySelectorAll('[data-install-device]')).map((b) => ({
         serial: b.getAttribute('data-install-device'),
@@ -680,6 +714,55 @@ async function runChecks(page) {
     !afterCancel.pick && !afterCancel.mask,
     '点「取消」后不安装（弹窗关闭且没有进度弹窗）',
     safe(JSON.stringify(afterCancel)),
+  );
+
+  /* ---------- 13b. 选设备那一屏可以直接改安装方式（v1.0.28） ---------- */
+  // 重新拖一次，同时观察：页面那个分段控件不能被这一屏的改动带跑
+  const firedAgain = await dropAndWait(page, 40, null);
+  const pickB = firedAgain && firedAgain.pendingPick ? firedAgain.pick : null;
+  record(!!pickB, '（安装方式用例）重新拖放仍会先问目标设备', safe(pickB && pickB.title));
+
+  record(
+    !!(pickB && ['覆盖安装', '清洁安装', '全新安装'].every((t) => (pickB.modeOptions || []).includes(t))),
+    '选设备弹窗里提供三种安装方式（覆盖 / 清洁 / 全新）',
+    safe(JSON.stringify(pickB && pickB.modeOptions)),
+  );
+  record(
+    !!pickB && pickB.modeActive === '覆盖安装',
+    '选设备弹窗默认是覆盖安装（不破坏数据）',
+    String(pickB && pickB.modeActive),
+  );
+
+  const pageModeBefore = await page.evalJS(`window.__dnd.modeInfo()`);
+  await page.evalJS(`window.__dnd.setPickMode('清洁安装')`);
+  await sleep(300);
+  const pickClean = await page.evalJS(`window.__dnd.pickInfo()`);
+  record(
+    !!pickClean && pickClean.modeActive === '清洁安装',
+    '能在选设备弹窗里切到「清洁安装」',
+    safe(JSON.stringify(pickClean && { active: pickClean.modeActive, value: pickClean.mode })),
+  );
+  record(
+    !!pickClean && /数据|清除|卸载/.test(pickClean.modeHint || ''),
+    '切到清洁安装后立刻写明「数据会被清除」（不能只换个标签）',
+    safe(pickClean && pickClean.modeHint),
+  );
+
+  const pageModeAfter = await page.evalJS(`window.__dnd.modeInfo()`);
+  record(
+    !!pageModeAfter && pageModeAfter.active === (pageModeBefore && pageModeBefore.active),
+    '弹窗里改安装方式不写回页面（全局默认仍是覆盖安装）',
+    safe(JSON.stringify({ before: pageModeBefore && pageModeBefore.active, after: pageModeAfter && pageModeAfter.active })),
+  );
+
+  // 切回覆盖安装，接着走「选定设备才开装」那条主路径
+  await page.evalJS(`window.__dnd.setPickMode('覆盖安装')`);
+  await sleep(250);
+  const pickBack = await page.evalJS(`window.__dnd.pickInfo()`);
+  record(
+    !!pickBack && pickBack.modeActive === '覆盖安装',
+    '弹窗里能切回「覆盖安装」',
+    safe(JSON.stringify(pickBack && pickBack.modeActive)),
   );
 
   /* ---------- 14. 选定设备后才开装，并把选择同步为当前设备 ---------- */

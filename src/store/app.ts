@@ -84,6 +84,8 @@ export interface PendingInstall {
   grantAll: boolean;
   /** AAB 本次要用的签名覆盖（界面上临时改的），不传则用后端设置里那份 */
   signing?: InstallSigningOverride;
+  /** 这次待定安装是不是「整窗拖放」来的（只影响那一屏的文案） */
+  fromDrop?: boolean;
 }
 
 /**
@@ -162,6 +164,15 @@ interface AppState {
    */
   pendingInstall: PendingInstall | null;
   setPendingInstall: (p: PendingInstall | null) => void;
+  /**
+   * 原地改这次待定安装的字段（目前只用于「选设备弹窗里改安装方式」）。
+   *
+   * v1.0.28：安装方式从「拖入那一刻就冻结」改成「选设备这一屏还能改」。
+   * 拖放时按的是全局 installMode，但用户点这一屏往往才想起要清洁装 ——
+   * 改的是 pending 里的副本，**不写回 store.installMode**：
+   * 全局默认必须一直是覆盖安装，否则下次拖进来会莫名其妙清数据。
+   */
+  updatePendingInstall: (patch: Partial<PendingInstall>) => void;
 
   /*
    * 在线更新（v1.0.22）：
@@ -273,6 +284,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   pendingInstall: null,
   setPendingInstall: (pendingInstall) => set({ pendingInstall }),
+  updatePendingInstall: (patch) =>
+    set((s) => (s.pendingInstall ? { pendingInstall: { ...s.pendingInstall, ...patch } } : {})),
 
   updateAvailable: false,
   setUpdateAvailable: (updateAvailable) => set({ updateAvailable }),

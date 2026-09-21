@@ -55,6 +55,14 @@ export interface InstallOptions {
    * 只对 AAB 有效 —— APK 的签名是包里自带的，改不了。
    */
   signing?: InstallSigningOverride;
+  /**
+   * 这次安装是不是「整窗拖放」来的。
+   *
+   * 只用来决定多设备在线时那一屏的说明文案：拖放安装不带这层解释，
+   * 用户看到「清洁安装」四个字不会有疑问；但拖放会清数据，所以那一屏
+   * 必须把「数据会被清掉」写在安装键旁边，而不是藏在小字里。
+   */
+  fromDrop?: boolean;
 }
 
 /** 成功弹窗自动关闭的延时（毫秒）—— 失败弹窗不自动关，需要用户看到原因 */
@@ -191,6 +199,8 @@ export async function installApkFiles(
   const grantAll = options.grantAll ?? false;
   // 签名：调用方没给就用 store 里那份（用户在上次安装页选的、已持久化的）
   const signing = options.signing ?? st.installSigning;
+  // 拖放来源（只影响「装到哪台」那一屏的文案）
+  const fromDrop = options.fromDrop ?? false;
 
   const online = selectableDevices();
   if (online.length === 0) {
@@ -210,12 +220,15 @@ export async function installApkFiles(
 
   // 3. 多台在线 → 问用户，不猜
   st.setInstall(null);
-  st.setPendingInstall({ files, mode, grantAll, signing });
+  st.setPendingInstall({ files, mode, grantAll, signing, fromDrop });
 }
 
 /**
  * 用户在「装到哪台设备」弹窗里点了某台设备。
  * 顺手把它设成全局当前设备 —— 用户的选择就是当前设备，不该只对本批安装生效。
+ *
+ * 🔴 这里刻意**不写回 store.installMode**：那一屏改的只是这一次安装的方式。
+ * 全局默认必须永远是覆盖安装，否则下次拖进来会莫名其妙清数据。
  */
 export async function startInstallOn(serial: string): Promise<void> {
   const st = useApp.getState();
@@ -231,7 +244,8 @@ export async function startInstallOn(serial: string): Promise<void> {
   }
 
   st.setCurrentSerial(serial);
-  await runInstall(pending.files, pending.mode, pending.grantAll, device);
+  // 注意：用 pending.mode —— 用户可能就在这一屏刚把安装方式改过
+  await runInstall(pending.files, pending.mode, pending.grantAll, device, pending.signing);
 }
 
 /** 真正执行安装（目标设备已确定）。APK / AAB / APKS 在这里分流。 */

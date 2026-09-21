@@ -205,6 +205,28 @@
   color: var(--text-tertiary);
 }
 
+/* 「装到哪台设备」那一屏的安装方式：可改，且必须把后果写在按钮旁边 */
+.install-mode {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 分段控件在弹窗里居中，别被 .install-card 的默认对齐拽偏 */
+.install-mode .segmented {
+  justify-content: center;
+}
+
+.install-mode-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
 /* 弹窗里的「装到哪台 / 用什么方式」——多设备在线时这行信息是刚需 */
 .install-meta {
   margin-top: 10px;

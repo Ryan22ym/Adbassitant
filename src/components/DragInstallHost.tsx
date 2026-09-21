@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Spinner } from '@/components/ui';
+import { Button, Segmented, Spinner } from '@/components/ui';
 import { useApp, type InstallTask, type PendingInstall } from '@/store/app';
 import {
   cancelPendingInstall,
@@ -13,8 +13,22 @@ import {
 } from '@/lib/install';
 import { formatBytes } from '@/lib/format';
 import { deviceLabel } from '@/components/layout';
-import { INSTALL_MODE_LABEL } from '@shared/types';
+import { type InstallMode } from '@shared/types';
 import './install.css';
+
+/**
+ * 「装到哪台设备」那一屏的安装方式说明。
+ *
+ * 这一屏的说明必须把「数据会不会没」写清楚，而不是只贴个标签：
+ * 拖放安装很容易让人以为只是「装一下」，实际清洁安装会先卸载。
+ * 故意独立于 ToolsPage 的 MODE_HINT —— 那边解释的是「点开始安装会怎样」，
+ * 这边要解释的是「点下面某台设备就会怎样」，措辞不能共用。
+ */
+const PICK_MODE_HINT: Record<InstallMode, string> = {
+  overwrite: '点某台设备即开始安装 · 保留应用数据，直接覆盖升级',
+  clean: '点某台设备即开始安装 · ⚠️ 会先卸载旧版本，应用数据一起清除',
+  fresh: '点某台设备即开始安装 · 设备上已有该应用时直接报错，不动旧数据',
+};
 
 /**
  * 整窗拖放安装 + 安装进度弹窗 + 「装到哪台设备」选择弹窗。
@@ -144,7 +158,7 @@ async function handleWindowDrop(files: File[]) {
   if (skipped > 0) st.toast('info', `已忽略 ${skipped} 个非安装包文件`);
 
   // 与「安装 APK」页保持同一个安装方式，避免用户选了清洁安装、拖进去却是覆盖安装
-  await installApkFiles(apks, { mode: st.installMode });
+  await installApkFiles(apks, { mode: st.installMode, fromDrop: true });
 }
 
 /* ------------------------------------------------------------------ */
@@ -169,6 +183,7 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
     pending.files.length > 1 ? `${firstName} 等 ${pending.files.length} 个文件` : firstName;
   const hasAab = pending.files.some((f) => (f.kind ?? kindOf(f.path)) === 'aab');
   const hasApks = pending.files.some((f) => (f.kind ?? kindOf(f.path)) === 'apks');
+  const updatePendingInstall = useApp((s) => s.updatePendingInstall);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -188,8 +203,25 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
           {label}
         </p>
 
+        {/* 安装方式在这里是可改的 —— 拖放走的是页面上选的默认值，
+            用户点到这一屏才想起「这次要清洁装」时，不必退出去改一遍。
+            只作用于这一次安装，不写回全局默认。 */}
+        <div className="install-mode">
+          <div data-pick-mode={pending.mode}>
+            <Segmented<InstallMode>
+              value={pending.mode}
+              onChange={(m) => updatePendingInstall({ mode: m })}
+              options={[
+                { value: 'overwrite', label: '覆盖安装' },
+                { value: 'clean', label: '清洁安装' },
+                { value: 'fresh', label: '全新安装' },
+              ]}
+            />
+          </div>
+          <p className="install-mode-hint">{PICK_MODE_HINT[pending.mode]}</p>
+        </div>
+
         <div className="install-meta">
-          <span className="install-chip">{INSTALL_MODE_LABEL[pending.mode]}</span>
           <span className="install-chip ghost">{devices.length} 台设备在线</span>
         </div>
 
