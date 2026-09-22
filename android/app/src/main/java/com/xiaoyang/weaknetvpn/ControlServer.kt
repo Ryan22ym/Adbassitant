@@ -37,9 +37,28 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 
 class ControlServer(
-    private val service: WeakNetVpnService,
+    /**
+     * 常驻宿主 Service。
+     *
+     * 只当 Context 用（startActivity / startService / VpnService.prepare 都要它）：
+     * 控制端口必须**一直在**，而 VPN 只在弱网运行期间存在 —— 两者生命周期完全不同，
+     * 所以不能直接拿 VPN Service 当宿主（它大部分时间是 null）。
+     */
+    private val host: ControlHostService,
     private val port: Int = DEFAULT_PORT,
 ) {
+
+    /**
+     * 当前 VPN 会话；未运行时为 null。
+     *
+     * 取自 [WeakNetVpnService.instance]（隧道建立后赋值、onDestroy 置空），
+     * 所以这里按可空处理：VPN 没跑时 /status 要老实报「未运行」，而不是崩。
+     *
+     * 授权态另走 [ControlServerHost.authorized] —— 它与 VPN 是否在跑无关
+     * （用户授权一次，系统一直记得），所以不能只看 vpn。
+     */
+    private val vpn: WeakNetVpnService?
+        get() = WeakNetVpnService.instance
 
     companion object {
         private const val TAG = "WeakNetCtrl"
@@ -151,18 +170,18 @@ class ControlServer(
                 put("ok", true)
                 put("app", "weaknet-vpn")
                 put("protocol", PROTOCOL_VERSION)
-                put("vpnActive", service.isRunning())
-                put("authorized", service.authorized)
+                put("vpnActive", vpn?.isRunning() == true)
+                put("authorized", ControlServerHost.authorized || vpn?.authorized == true)
             })
 
             "/authorize" -> {
                 // 拉起授权 Activity（设备上弹系统 VPN 授权框）。
                 // 立即返回 —— 授权结果是异步的，电脑侧轮询 /status 拿。
-                val i = Intent(service, AuthorizeActivity::class.java).apply {
+                val i = Intent(host, AuthorizeActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
-                service.startActivity(i)
+                host.startActivity(i)
                 json(200, JSONObject().apply {
                     put("ok", true)
                     put("message", "已请求在设备上弹出授权框，请在手机上点「确定」")
@@ -171,7 +190,7 @@ class ControlServer(
 
             "/start" -> {
                 // 前置检查：没授权就明确告知，而不是让 establish() 静默失败
-                val needAuth = VpnService.prepare(service) != null
+                val needAuth = VpnService.prepare(host) != null
                 if (needAuth) {
                     json(200, JSONObject().apply {
                         put("ok", false)
@@ -179,19 +198,22 @@ class ControlServer(
                         put("error", "设备尚未授权 VPN。请在手机上点一次「确定」。")
                     })
                 } else {
-                    service.authorized = true
+                    ControlServerHost.authorized = true
+                    vpn?.authorized = true
                     val params = SessionParams.fromJson(
                         if (body.isNotBlank()) JSONObject(body) else null,
                     )
-                    service.updateParams(params)
-                    val i = Intent(service, WeakNetVpnService::class.java).apply {
+                    // 首次启动时 vpn 还是 null（instance 在隧道建好后才有值），
+                    // 参数靠下面的 EXTRA_PARAMS 带过去，onStartCommand 会解析。
+                    vpn?.updateParams(params)
+                    val i = Intent(host, WeakNetVpnService::class.java).apply {
                         action = WeakNetVpnService.ACTION_START
                         putExtra(WeakNetVpnService.EXTRA_PARAMS, params.toJson().toString())
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        service.startForegroundService(i)
+                        host.startForegroundService(i)
                     } else {
-                        service.startService(i)
+                        host.startService(i)
                     }
                     json(200, JSONObject().apply {
                         put("ok", true)
@@ -204,7 +226,8 @@ class ControlServer(
                 val params = SessionParams.fromJson(
                     if (body.isNotBlank()) JSONObject(body) else null,
                 )
-                service.updateParams(params)
+                // VPN 没在跑时无处可热更新 —— 但也不报错：电脑侧只会在运行中调这个端点
+                vpn?.updateParams(params)
                 json(200, JSONObject().apply {
                     put("ok", true)
                     put("message", "参数已热更新")
@@ -213,11 +236,11 @@ class ControlServer(
 
             "/stop" -> {
                 // 关键：这一步必须幂等。电脑侧可能重复发（退出清理 + 崩溃恢复都发）
-                val i = Intent(service, WeakNetVpnService::class.java).apply {
+                val i = Intent(host, WeakNetVpnService::class.java).apply {
                     action = WeakNetVpnService.ACTION_STOP
                 }
                 try {
-                    service.startService(i)
+                    host.startService(i)
                 } catch (_: Exception) {}
                 json(200, JSONObject().apply {
                     put("ok", true)
@@ -226,7 +249,15 @@ class ControlServer(
             }
 
             "/status" -> {
-                val snap = service.snapshot()
+                val s = vpn
+                val snap = s?.snapshot() ?: SessionSnapshot(
+                    vpnActive = false,
+                    authorized = ControlServerHost.authorized,
+                    params = SessionParams(),
+                    startedAt = 0,
+                    remainSec = -1,
+                    note = "未运行",
+                )
                 json(200, JSONObject().apply {
                     put("ok", true)
                     put("vpnActive", snap.vpnActive)
@@ -235,7 +266,7 @@ class ControlServer(
                     put("remainSec", snap.remainSec)
                     put("note", snap.note)
                     put("params", snap.params.toJson())
-                    put("stats", service.statsJson())
+                    put("stats", s?.statsJson() ?: TrafficStats().toJson())
                 })
             }
 

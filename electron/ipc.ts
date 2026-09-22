@@ -993,7 +993,7 @@ export function registerIpc() {
       if (!apk) {
         return {
           ok: false,
-          message: '找不到随包 APK（应为 bin/weaknet/weaknet-vpn.apk）',
+          message: '找不到随包 APK（应为 bin/weaknet-vpn.apk）',
         };
       }
       return installVpnApp(s, apk);

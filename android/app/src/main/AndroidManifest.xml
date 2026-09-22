@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 读底层网络的真实 DNS 地址：隧道里必须用「真实存在」的 DNS，
+         不能拿 tun 的虚拟地址当 DNS，否则所有应用的域名解析都会失败 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Android 14 (API 34) 起前台服务必须声明具体类型，否则启动即崩 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />

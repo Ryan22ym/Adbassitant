@@ -17,7 +17,9 @@ import type {
   UpdateChannel,
   UpdateLatestDoc,
   UpdateLatestEntry,
+  UpdatePackageForm,
   UpdatePackageRef,
+  UpdatePackageRefs,
 } from '../../shared/types';
 import {
   UPDATE_SCHEMA,
@@ -154,7 +156,13 @@ export function validateManifest(m: UpdateManifest, local: LocalSnapshot): Valid
     };
   }
 
-  // 便携版整包自带运行时，不受电子版本 / 运行库约束；安装版增量必须两者都对得上
+  // 便携版整包自带运行时，不受电子版本 / 运行库约束；安装版增量必须两者都对得上。
+  //
+  // ⚠️ 例外：**完整资源包**（m.full === true）不校验运行库基准 —— 它把 `bin/` 整份带过来，
+  //    本来就不依赖目标机原有的运行库，这正是「跨版本在线更新」的实现方式
+  //    （v1.0.31：让 1.0.2 这种落后很多版本的机器也能一路升到最新）。
+  //    Electron 版本仍然要校验：完整资源包里也没有 electron.exe / 那些 dll，
+  //    运行时换代只能靠完整安装包。
   if (m.kind === 'asar') {
     if (m.electronVersion !== local.electronVersion) {
       return {
@@ -162,14 +170,16 @@ export function validateManifest(m: UpdateManifest, local: LocalSnapshot): Valid
         reason: `更新包基于 Electron ${m.electronVersion} 构建，当前程序是 Electron ${local.electronVersion} —— 运行时发生了变化，请改用完整安装包。`,
       };
     }
-    if (!m.baseRuntimeHash) {
-      return { ok: false, reason: '更新包没有记录运行库基准，无法确认与当前安装匹配，请改用完整安装包。' };
-    }
-    if (m.baseRuntimeHash !== local.runtimeHash) {
-      return {
-        ok: false,
-        reason: '更新包与当前安装的运行库不一致（adb / scrcpy 等文件有变化），请改用完整安装包。',
-      };
+    if (!m.full) {
+      if (!m.baseRuntimeHash) {
+        return { ok: false, reason: '更新包没有记录运行库基准，无法确认与当前安装匹配，请改用完整安装包。' };
+      }
+      if (m.baseRuntimeHash !== local.runtimeHash) {
+        return {
+          ok: false,
+          reason: '更新包与当前安装的运行库不一致（adb / scrcpy 等文件有变化），请改用完整安装包。',
+        };
+      }
     }
   }
 
@@ -188,11 +198,14 @@ export function validateManifest(m: UpdateManifest, local: LocalSnapshot): Valid
   }
 
   const runtimeFiles = m.files.filter((f) => f.path.startsWith('bin/')).map((f) => f.path.slice(4));
+  const preview = `${runtimeFiles.slice(0, 3).join('、')}${runtimeFiles.length > 3 ? ' 等' : ''}`;
   return {
     ok: true,
-    warning: runtimeFiles.length
-      ? `本次更新同时会替换 ${runtimeFiles.length} 个运行库文件（${runtimeFiles.slice(0, 3).join('、')}${runtimeFiles.length > 3 ? ' 等' : ''}）。`
-      : undefined,
+    warning: m.full
+      ? `本次是完整资源包更新（跨版本），会一并覆盖 ${runtimeFiles.length} 个运行库文件（${preview}）。`
+      : runtimeFiles.length
+        ? `本次更新同时会替换 ${runtimeFiles.length} 个运行库文件（${preview}）。`
+        : undefined,
   };
 }
 
@@ -470,6 +483,79 @@ export function parseLatestJson(
     pkgRaw && typeof pkgRaw === 'object' && String(pkgRaw.url || '').trim() ? pkgRaw : null;
 
   return { ok: true, entry, newer, pkg };
+}
+
+export interface PackagePick {
+  /** 选中的包；null = 这个版本没有能用在本机的包（看 note 里的原因） */
+  pkg: UpdatePackageRef | null;
+  /** 选中包的形态；null = 没选上 */
+  form: UpdatePackageForm | null;
+  /** 选了非首选包（或一个都没选上）时，面向用户的一句话 */
+  note?: string;
+}
+
+/**
+ * 从 latest.json 里挑出**最合适本机**的那一份包（v1.0.31 起）。
+ *
+ * 为什么要单独成函数：老流程写死 `packages[kind]`，而 `baseRuntimeHash` 是**严格相等**校验 ——
+ * 一个版本只能服务一种运行库基线。于是「落后几个版本没更新」的用户必然被拒
+ * （1.0.2 用户面对 1.0.35 的补丁就是这种情况），只能自己去下全量安装包。
+ *
+ * 现在的挑包顺序：
+ *   ① 变体 / 默认包里 baseRuntimeHash **精确匹配**本机 → 用它（体积最小）
+ *   ② 没有任何一份声明基准 → 用默认那份，把判定交给包内 manifest（保持 v1.0.22~v1.0.30 老行为）
+ *   ③ 有 `packages.full`（完整资源包）→ 用它。它带全部 bin，**不看运行库基准**，
+ *      跨多少个版本都能一次升到位 —— 这就是「跨版本在线更新」
+ *   ④ 有包但都对不上、又没有 full → 返回 null + note，让界面直接告诉用户去下全量包，
+ *      而不是让人白下几十 MB 再被拒
+ *
+ * 纯函数、不碰网络，验收脚本可以直接 require 进来逐条跑。
+ */
+export function pickPackage(
+  entry: UpdateLatestEntry,
+  kind: LocalKind,
+  localRuntimeHash?: string,
+): PackagePick {
+  if (kind === 'dev') return { pkg: null, form: null };
+
+  const packs = (entry.packages || {}) as UpdatePackageRefs;
+  const usable = (r?: UpdatePackageRef | null): r is UpdatePackageRef =>
+    !!r && typeof r === 'object' && String(r.url || '').trim() !== '';
+
+  // 变体只对安装版小包有意义（我们只出 asar 变体；便携版是「替换 exe 本体」的整包，
+  // 没有差分这回事）。不加这个门，便携版会被当成能装 asar 的补丁 —— 实测就是这么中的招。
+  const variants = kind === 'asar' && Array.isArray(entry.variants) ? entry.variants : [];
+  const patches = [...variants, packs[kind as UpdateKind]].filter(usable);
+  const full = usable(packs.full) ? packs.full : null;
+
+  // ① 精确匹配的差分小包
+  if (localRuntimeHash) {
+    const exact = patches.find((v) => v.baseRuntimeHash === localRuntimeHash);
+    if (exact) return { pkg: exact, form: kind as UpdatePackageForm };
+  }
+
+  // ② 没声明基准的「老式」包：基准在包内 manifest 里，交给它判
+  const legacy = patches.find((v) => !v.baseRuntimeHash);
+  if (legacy) return { pkg: legacy, form: kind as UpdatePackageForm };
+
+  // ③ 完整资源包兜底：不看运行库基准，跨版本一次到位
+  if (full) {
+    return {
+      pkg: full,
+      form: 'full',
+      note: `本机版本（运行库与本版不一致）与最新版之间跨度较大，本次将下载完整资源包，一次升到位。`,
+    };
+  }
+
+  // ④ 有包但一个都对不上 → 明确说清楚，别让用户白下
+  if (patches.length) {
+    return {
+      pkg: null,
+      form: null,
+      note: '更新源里没有适配本机运行库的增量包（版本跨度较大）。请到更新源下载完整安装包覆盖安装。',
+    };
+  }
+  return { pkg: null, form: null };
 }
 
 /** 该版本没有本机形态的包时，给一句人话（两种形态的说法不一样） */

@@ -561,7 +561,10 @@ async function probeVpnAuthorized(serial: string): Promise<boolean | null> {
 
   // 先看通道是否已经在（说明之前建过）
   const st = await queryVpnState(VPN_CONTROL_PORT);
-  if (st) return st.authorized;
+  // ⚠️ VPN 正在运行时 `VpnService.prepare()` 必然返回非 null，/status 就会报
+  // authorized=false —— 但那只是「已有 VPN 在占位」，不是「没授权」。
+  // 不看 vpnActive 就会在弱网已生效时误报「尚未授权 VPN」，把人绕晕。
+  if (st) return st.authorized || st.vpnActive;
 
   // 通道不在：起一个临时的 forward 探一下，探完立刻撤掉，不留痕迹
   try {
@@ -575,7 +578,7 @@ async function probeVpnAuthorized(serial: string): Promise<boolean | null> {
       ['-s', serial, 'forward', '--remove', `tcp:${VPN_CONTROL_PORT}`],
       { silent: true, timeout: 8000 },
     );
-    return r ? r.authorized : null;
+    return r ? r.authorized || r.vpnActive : null;
   } catch {
     return null;
   }

@@ -138,6 +138,23 @@ function isWritableDir(dir: string): boolean {
   }
 }
 
+/**
+ * 沿父目录上溯，返回第一个真实存在的祖先目录；一路上都不存在就返回空串。
+ *
+ * 用途：更新包里的文件可能落在**本机还不存在**的目录下（新增子目录）。
+ * 这种情况下唯一能做的判断是「上级目录可写 ⇒ 待会儿能把它建出来」。
+ */
+function nearestExistingDir(dir: string): string {
+  let cur = dir;
+  for (let i = 0; i < 64; i++) {
+    const parent = dirname(cur);
+    if (!parent || parent === cur) return '';
+    cur = parent;
+    if (existsSync(cur)) return cur;
+  }
+  return '';
+}
+
 interface BackupMeta {
   dir: string;
   fromVersion: string;
@@ -300,12 +317,25 @@ export async function prepareUpdate(zipPath: string): Promise<UpdateInfo> {
     targets.push({ name: f.path, src, dest });
   }
 
-  // 目标目录可写性：现在就探测，别等到应用退出了才发现换不了
+  // 目标目录可写性：现在就探测，别等到应用退出了才发现换不了。
+  //
+  // ⚠️ 目标目录**可能还不存在**：包里出现「本版才新增的文件」时，它所在的目录在本机
+  //    压根没有（v1.0.29 的 bin/weaknet/weaknet-vpn.apk 就是活例子）。
+  //    早期实现只要 `!existsSync(dir)` 就报「目录不可写」——
+  //    既把一次完全合法的更新拦死在门口，给出的原因还是错的（用户去查权限，查不出东西）。
+  //    正确做法：目录不存在就沿父目录上溯，拿第一个真实存在的祖先探写权限；
+  //    真正建目录的活儿交给助手脚本在替换前干（见 update-helper.ps1 第 4 步）。
   for (const dir of new Set(targets.map((t) => dirname(t.dest)))) {
-    if (!isWritableDir(dir)) {
-      rmSync(stageDir, { recursive: true, force: true });
-      return { ...meta, reason: `目录不可写，无法替换程序文件：${dir}` };
-    }
+    const dirExists = existsSync(dir);
+    const probe = dirExists ? dir : nearestExistingDir(dir);
+    if (probe && isWritableDir(probe)) continue;
+    rmSync(stageDir, { recursive: true, force: true });
+    return {
+      ...meta,
+      reason: dirExists
+        ? `目录不可写，无法替换程序文件：${dir}`
+        : `无法新建目标目录（上级 ${probe || '根目录'} 不可写）：${dir}`,
+    };
   }
 
   const info: UpdateInfo = {
@@ -318,7 +348,11 @@ export async function prepareUpdate(zipPath: string): Promise<UpdateInfo> {
   };
 
   prepared = { info, manifest, stageDir, snapshot: s, targets };
-  log('info', '更新', `已就绪：v${s.version} → v${manifest.version}（${(base.zipSize / 1024).toFixed(0)} KB，${targets.length} 个文件）`);
+  log(
+    'info',
+    '更新',
+    `已就绪：v${s.version} → v${manifest.version}${manifest.full ? '（完整资源包）' : ''}（${(base.zipSize / 1024).toFixed(0)} KB，${targets.length} 个文件）`,
+  );
   return info;
 }
 
@@ -802,7 +836,15 @@ export async function checkOnlineUpdate(force = false): Promise<UpdateCheckResul
     return cachedCheck.result;
   }
 
-  const src = httpSource({ baseUrl, localVersion: s.version, kind: s.kind, channel });
+  const src = httpSource({
+    baseUrl,
+    localVersion: s.version,
+    kind: s.kind,
+    channel,
+    // 带上运行库指纹：清单里声明了 baseRuntimeHash 时可以在**下载前**挑对包；
+    // 本机与最新版跨度太大（一个变体都对不上）时自动改走完整资源包（v1.0.31）
+    runtimeHash: s.runtimeHash,
+  });
   try {
     const info = await src.check();
     const result: UpdateCheckResult = {
@@ -818,12 +860,21 @@ export async function checkOnlineUpdate(force = false): Promise<UpdateCheckResul
         notes: info.notes,
         critical: info.critical,
         pkg: info.pkg,
+        pkgForm: info.form ?? undefined,
+        pkgNote: info.note,
       },
     };
-    if (info.newer && !info.pkg && s.kind !== 'dev') {
-      result.reason = `发现新版本 v${info.version}，但没有提供${
-        s.kind === 'portable' ? '便携版整包' : '安装版增量包'
-      }，请到更新源下载完整安装包。`;
+    if (info.newer && s.kind !== 'dev') {
+      if (!info.pkg) {
+        result.reason =
+          info.note ||
+          `发现新版本 v${info.version}，但没有提供${
+            s.kind === 'portable' ? '便携版整包' : '安装版增量包'
+          }，请到更新源下载完整安装包。`;
+      } else if (info.note) {
+        // 选了非首选包（例如跨版本改用完整资源包）—— 界面把这个原因显示在提示里
+        result.reason = info.note;
+      }
     }
     cachedCheck = { at: Date.now(), key, result };
     if (settings.lastCheckAt !== checkedAt) {

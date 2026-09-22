@@ -70,6 +70,17 @@ function Restore-Files($restore) {
     } elseif (Test-Path -LiteralPath $e.dest) {
       Remove-Item -LiteralPath $e.dest -Force
       Write-Log ('removed ' + $e.dest)
+      # 这个文件原本不存在 → 它所在的那层目录可能也是本次才建的，
+      # 顺手把空目录收掉，别在用户的安装目录里留空文件夹（失败不留痕）。
+      $pd = Split-Path -Parent $e.dest
+      if ($pd) {
+        try {
+          if ((Get-ChildItem -LiteralPath $pd -Force -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) {
+            Remove-Item -LiteralPath $pd -Force
+            Write-Log ('rmdir ' + $pd)
+          }
+        } catch { }
+      }
     }
   }
 }
@@ -192,6 +203,15 @@ try {
   # ---- 4) 替换 / 还原 ----
   if ($job.mode -eq 'apply') {
     foreach ($t in $job.targets) {
+      # ⚠️ 目标目录可能是**这一版才新增的**（例如 bin/weaknet/ 这种子目录）。
+      #    不先建出来，下面的 Copy-Item 会直接抛「找不到路径的一部分」，
+      #    整轮更新被 catch 判失败、刚替换好的文件全被还原 —— 用户看到的是
+      #    「更新了一趟、版本却没变」。建目录是无害的幂等操作，放在替换前。
+      $dd = Split-Path -Parent $t.dest
+      if ($dd -and -not (Test-Path -LiteralPath $dd)) {
+        New-Item -ItemType Directory -Force -Path $dd | Out-Null
+        Write-Log ('mkdir ' + $dd)
+      }
       $new = $t.dest + '.new'
       if (Test-Path -LiteralPath $new) { Remove-Item -LiteralPath $new -Force }
       Copy-Item -LiteralPath $t.src -Destination $new -Force

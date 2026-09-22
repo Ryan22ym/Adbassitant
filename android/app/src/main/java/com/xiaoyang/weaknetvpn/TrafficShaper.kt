@@ -168,10 +168,17 @@ class Shaper(
      * @return true = 已接管；false = 调用方应当立即自行处理（未启用整形）
      */
     fun offer(data: ByteArray, meta: Any? = null): Boolean {
-        if (closed || data.isEmpty()) return false
+        // ⚠️ 这里**不能**用 `data.isEmpty()` 提前返回 false：
+        //    TCP 的控制包（SYN-ACK / ACK / FIN）payload 就是空的，
+        //    把它们排除在整形之外，握手和确认就会绕过延迟/丢包，
+        //    弱网参数对"连接建立"这一段完全失效。
+        if (closed) return false
 
         val p = paramsProvider()
-        if (p.blockNetwork) return true          // 整体断网：什么都不过
+        // 整体断网（blockNetwork）是**会话级**参数，这里看不到也不该看 ——
+        // paramsProvider 给的是单方向参数（DirectionParams）。
+        // 断网由外层 TrafficShaper.blocked 在读取循环里统一处理
+        // （见 WeakNetVpnService.readLoop 里的 `if (sp.blocked) continue`）。
         if (!p.shaping) return false             // 该方向不整形 → 零开销透传
 
         /* ---- 丢包：真的丢。TCP 会重传，这就是真实丢包的形态 ---- */
@@ -184,7 +191,9 @@ class Shaper(
         val payload = data.copyOf()
 
         /* ---- 错报：篡改一个 bit（校验和随之失效 → 接收端丢弃重传）---- */
-        if (p.corruptPercent > 0 && rand.nextDouble() * 100.0 < p.corruptPercent) {
+        if (p.corruptPercent > 0 && payload.isNotEmpty() &&
+            rand.nextDouble() * 100.0 < p.corruptPercent
+        ) {
             val i = rand.nextInt(payload.size)
             val bit = 1 shl rand.nextInt(8)
             payload[i] = (payload[i].toInt() xor bit).toByte()
@@ -304,12 +313,25 @@ class TrafficShaper(
  * IPv4 / TCP / UDP 头的最小构造器（只用于**下行**：把从真实 socket 读到的
  * 字节重新封装成 IP 包写回隧道）。
  *
- * 为什么要自己造头：tun 只接受完整的 IP 包。我们从真实 socket 拿到的是裸字节流，
- * 必须补上 IP + TCP/UDP 头。这是个「够用就好」的实现 —— 校验和不填（置 0），
- * 因为：
- *   · tun 写回方向的包会被设备内核当作「从网络收到的包」直接交给 TCP 栈；
- *   · Linux 的 tun 在 `IFF_NO_PI` 模式下**不校验 IP 头校验和**（内核自己会算）。
- * 实测确实可用；若某天在某个 ROM 上被拦，把 checksum 补上即可（见 computeChecksum）。
+ * 🔴 校验和**必须自己算**（本项目最贵的一个坑，别再改回去）
+ * ------------------------------------------------------------
+ * 曾经的实现把 IP 头校验和与 TCP 校验和都置 0，注释里写的理由是
+ * 「tun 在 IFF_NO_PI 模式下内核不校验」—— **这是错的**：
+ *
+ *   · `ip_rcv_core()` 对进 tun 的包**无条件**执行
+ *     `if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl))) goto csum_error;`
+ *     —— IP 头校验和有错就直接丢。
+ *   · tun 没有开 TUNSETOFFLOAD，`tun_get_user()` 会置
+ *     `skb->ip_summed = CHECKSUM_NONE`，于是 TCP 校验和会被**完整校验**
+ *     （`tcp_v4_rcv` → `skb_checksum_init`）。TCP 校验和为 0 是非法值。
+ *   · 而 UDP 校验和置 0 在 IPv4 里是**合法**的（RFC 768 表示「不校验」），
+ *     所以 DNS 反而能通。
+ *
+ * 症状（曾真实发生，且极具迷惑性）：
+ *   · 隧道 stats 里 connections / upBytes / downBytes 都在涨，看着「在转发」；
+ *   · 但设备侧**每个 TCP 连接都卡在 SYN_SENT**：我们回的 SYN-ACK 被内核丢掉，
+ *     三次握手永远完不成 —— 表现就是「开了弱网 = 所有应用上不了网」。
+ *   · 因为 UDP（DNS）恰好能过，会觉得「网络没全断」，进一步误导排查。
  */
 object PacketBuilder {
 
@@ -338,11 +360,12 @@ object PacketBuilder {
         b[o + 12] = 0x50.toByte()          // data offset = 5 (20 bytes)
         b[o + 13] = flags.toByte()
         putU16(b, o + 14, 65535)           // window
-        // 校验和置 0：tun 写回路径由内核补
-        putU16(b, o + 16, 0)
+        putU16(b, o + 16, 0)               // 校验和：先占位，下面统一算
         putU16(b, o + 18, 0)               // urgent pointer
 
         System.arraycopy(payload, 0, b, 40, payloadLen)
+        // 必须算：tun 无 offload → CHECKSUM_NONE → 内核会校验 TCP 校验和
+        putU16(b, o + 16, transportChecksum(b, srcIp, dstIp, proto = 6, segOffset = o, segLen = 20 + payloadLen))
         return b
     }
 
@@ -361,9 +384,13 @@ object PacketBuilder {
         putU16(b, o, srcPort)
         putU16(b, o + 2, dstPort)
         putU16(b, o + 4, udpLen)
-        putU16(b, o + 6, 0) // 校验和置 0 = 不校验（IPv4 下合法）
+        putU16(b, o + 6, 0) // 先占位
 
         System.arraycopy(payload, 0, b, 28, payloadLen)
+        // UDP 校验和 0 = 「不校验」（IPv4 合法），但既然算了就用真值；
+        // 算出 0 时要写成 0xFFFF（RFC 768：0 有特殊含义，全 1 表示结果本身为 0）
+        val c = transportChecksum(b, srcIp, dstIp, proto = 17, segOffset = o, segLen = udpLen)
+        putU16(b, o + 6, if (c == 0) 0xFFFF else c)
         return b
     }
 
@@ -375,9 +402,66 @@ object PacketBuilder {
         putU16(b, 6, 0x4000)                 // don't fragment
         b[8] = 64                            // TTL
         b[9] = proto.toByte()
-        putU16(b, 10, 0)                     // header checksum（内核补）
+        putU16(b, 10, 0)                     // 先占位
         putIp(b, 12, srcIp)
         putIp(b, 16, dstIp)
+        // 🔴 IP 头校验和必须正确：ip_rcv_core() 无条件校验，错一个字节就丢包
+        putU16(b, 10, onesComplementSum(b, 0, 20))
+    }
+
+    /**
+     * 传输层校验和：伪首部 + 段内容。
+     *
+     * 伪首部 = 源 IP(4) + 目的 IP(4) + 0x00 + 协议号(1) + 段长度(2)。
+     * 调用前段内的校验和字段必须是 0（占位），否则会算错。
+     */
+    private fun transportChecksum(
+        b: ByteArray, srcIp: String, dstIp: String,
+        proto: Int, segOffset: Int, segLen: Int,
+    ): Int {
+        var sum = 0
+        val s = ipBytes(srcIp)
+        val d = ipBytes(dstIp)
+        sum += ((s[0] and 0xFF) shl 8) or (s[1] and 0xFF)
+        sum += ((s[2] and 0xFF) shl 8) or (s[3] and 0xFF)
+        sum += ((d[0] and 0xFF) shl 8) or (d[1] and 0xFF)
+        sum += ((d[2] and 0xFF) shl 8) or (d[3] and 0xFF)
+        sum += proto and 0xFF
+        sum += segLen and 0xFFFF
+        sum = fold(sum)
+        sum += onesComplementSumRaw(b, segOffset, segLen)
+        return fold(sum).inv() and 0xFFFF
+    }
+
+    /** 把累加值折叠回 16 位 */
+    private fun fold(v: Int): Int {
+        var s = v
+        s = (s and 0xFFFF) + (s ushr 16)
+        s = (s and 0xFFFF) + (s ushr 16)
+        return s and 0xFFFF
+    }
+
+    /** 一段连续字节的 16 位反码和（不取反，仅求和） */
+    private fun onesComplementSumRaw(b: ByteArray, offset: Int, len: Int): Int {
+        var sum = 0
+        var i = offset
+        val end = offset + len
+        while (i + 1 < end) {
+            sum += ((b[i].toInt() and 0xFF) shl 8) or (b[i + 1].toInt() and 0xFF)
+            sum = fold(sum)
+            i += 2
+        }
+        if (i < end) sum += (b[i].toInt() and 0xFF) shl 8 // 奇数长度补 0
+        return fold(sum)
+    }
+
+    /** 一段连续字节的校验和（反码和的取反） */
+    private fun onesComplementSum(b: ByteArray, offset: Int, len: Int): Int =
+        onesComplementSumRaw(b, offset, len).inv() and 0xFFFF
+
+    private fun ipBytes(ip: String): IntArray {
+        val parts = ip.split('.')
+        return IntArray(4) { (parts.getOrNull(it)?.toIntOrNull() ?: 0) and 0xFF }
     }
 
     private fun putU16(b: ByteArray, o: Int, v: Int) {
@@ -397,19 +481,6 @@ object PacketBuilder {
         for (i in 0..3) {
             b[o + i] = ((parts.getOrNull(i)?.toIntOrNull() ?: 0) and 0xFF).toByte()
         }
-    }
-
-    /** 需要时补 IP 头校验和（当前不启用，留作兼容某些严格 ROM 的手段） */
-    @Suppress("unused")
-    fun computeChecksum(b: ByteArray, headerLen: Int = 20): Int {
-        var sum = 0
-        var i = 0
-        while (i < headerLen) {
-            sum += ((b[i].toInt() and 0xFF) shl 8) or (b[i + 1].toInt() and 0xFF)
-            sum = (sum and 0xFFFF) + (sum ushr 16)
-            i += 2
-        }
-        return (sum.inv() and 0xFFFF)
     }
 }
 

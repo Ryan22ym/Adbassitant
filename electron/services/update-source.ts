@@ -18,6 +18,7 @@ import type {
   UpdateChannel,
   UpdateDownloadProgress,
   UpdateManifest,
+  UpdatePackageForm,
   UpdatePackageRef,
 } from '../../shared/types';
 import {
@@ -26,6 +27,7 @@ import {
   noPackageReason,
   normalizeBaseUrl,
   parseLatestJson,
+  pickPackage,
   resolvePackageUrl,
 } from './update-core';
 import { downloadToFile, httpGetText } from './update-net';
@@ -41,6 +43,10 @@ export interface LatestInfo {
   newer: boolean;
   /** 与本机形态匹配的包；null = 该版本未提供此形态（fetch 会拒绝） */
   pkg: UpdatePackageRef | null;
+  /** 选中包的形态；'full' = 跨版本完整资源包（v1.0.31） */
+  form?: UpdatePackageForm | null;
+  /** 挑包时给用户的一句话（例如「改用完整资源包」「没有适配本机的增量包」） */
+  note?: string;
   /** 面向用户的源描述 */
   sourceDesc: string;
   /** 清单里列出的全部形态，供界面提示「这个版本只有便携包」用 */
@@ -65,6 +71,12 @@ export interface HttpSourceOptions {
   /** 本机形态（dev 时调用方不该走到这里） */
   kind: LocalKind;
   channel: UpdateChannel;
+  /**
+   * 本机 `resources/bin` 指纹（v1.0.31）。
+   * 清单里带 baseRuntimeHash 时用它挑出**精确匹配**的小包；跨版本时则会自动退到完整资源包。
+   * 不传 = 保持老行为（直接取 packages[kind]，由包内 manifest 说了算）。
+   */
+  runtimeHash?: string;
   /** 下载落盘目录；默认 %TEMP%\adba-update-dl-<ts> */
   downloadDir?: string;
 }
@@ -126,12 +138,16 @@ export function httpSource(opts: HttpSourceOptions): UpdateSource {
     }
     const entry = parsed.entry;
 
+    // 挑包：精确匹配的小包 → 老式无基准包 → 完整资源包 → 一个都没有
+    // （清单里 baseRuntimeHash 与本机不符时，在这里就改走 full，不必先下几十 MB 再被拒）
+    const pick = pickPackage(entry, opts.kind, opts.runtimeHash);
+
     // 清单允许写相对路径 —— 这里一次性解析成绝对 URL，fetch 直接用
     let pkg: UpdatePackageRef | null = null;
-    if (parsed.pkg) {
-      const abs = resolvePackageUrl(parsed.pkg.url, base);
-      if (!abs) throw new Error(`更新源里的包地址无法解析：${parsed.pkg.url}`);
-      pkg = { ...parsed.pkg, url: abs };
+    if (pick.pkg) {
+      const abs = resolvePackageUrl(pick.pkg.url, base);
+      if (!abs) throw new Error(`更新源里的包地址无法解析：${pick.pkg.url}`);
+      pkg = { ...pick.pkg, url: abs };
     }
     ready = pkg ? { absUrl: pkg.url, sha256: pkg.sha256, version: entry.version } : null;
 
@@ -142,6 +158,8 @@ export function httpSource(opts: HttpSourceOptions): UpdateSource {
       critical: entry.critical,
       newer: !!parsed.newer,
       pkg,
+      form: pick.form,
+      note: pick.note,
       sourceDesc,
       allPackages: entry.packages as Record<string, UpdatePackageRef>,
     };

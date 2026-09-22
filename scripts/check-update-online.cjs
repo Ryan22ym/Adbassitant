@@ -125,6 +125,46 @@ ok('无文件名 → 补 .zip', src.safeFileNameFromUrl('https://a.com/x/') === 
 ok('无扩展名 → 补 .zip', src.safeFileNameFromUrl('https://a.com/x/latest') === 'latest.zip');
 ok('describeSource', /a\.com/.test(src.describeSource('https://a.com/x/')));
 
+console.log('== E. pickPackage（跨版本挑包，v1.0.31） ==');
+{
+  const RH_A = 'a'.repeat(64), RH_B = 'b'.repeat(64);
+  const withVariants = {
+    ...GOOD.latest,
+    packages: {
+      asar: { url: 'p-from-b.zip', size: 100, sha256: 'S1', baseRuntimeHash: RH_B },
+      full: { url: 'full.zip', size: 30000000, sha256: 'S3' },
+    },
+    variants: [
+      { url: 'p-from-a.zip', size: 90, sha256: 'S0', baseRuntimeHash: RH_A },
+      { url: 'p-from-b.zip', size: 100, sha256: 'S1', baseRuntimeHash: RH_B },
+    ],
+  };
+  const noFull = { ...withVariants, packages: { asar: withVariants.packages.asar } };
+  const P = (entry, kind, hash) => core.pickPackage(entry, kind, hash);
+
+  let r = P(withVariants, 'asar', RH_A);
+  ok('变体精确匹配 → 选它', r.pkg && r.pkg.url === 'p-from-a.zip' && r.form === 'asar' && !r.note, r);
+  r = P(withVariants, 'asar', RH_B);
+  ok('匹配默认包 → 选默认那份', r.pkg && r.pkg.url === 'p-from-b.zip' && r.form === 'asar', r);
+  r = P(withVariants, 'asar', 'c'.repeat(64));
+  ok('全部对不上 → 退到完整资源包', r.pkg && r.pkg.url === 'full.zip' && r.form === 'full'
+    && /完整资源包/.test(r.note || ''), r);
+  r = P(noFull, 'asar', 'c'.repeat(64));
+  ok('对不上且没有 full → pkg=null + 明确原因（不让人白下）',
+    r.pkg === null && /完整安装包/.test(r.note || ''), r);
+  r = P(GOOD.latest, 'asar', 'd'.repeat(64));
+  ok('老式包（清单不带基准）→ 照旧选它，交给包内 manifest 判',
+    r.pkg && r.pkg.url.endsWith('patch.zip') && r.form === 'asar', r);
+  r = P(GOOD.latest, 'asar');
+  ok('不传本机指纹 → 保持 v1.0.22~30 老行为', r.pkg && r.pkg.url.endsWith('patch.zip'), r);
+  r = P(GOOD.latest, 'portable', RH_A);
+  ok('便携版取 portable', r.pkg && /cdn/.test(r.pkg.url), r);
+  r = P(noFull, 'portable', RH_A);
+  ok('便携版只给 asar → null', r.pkg === null, r);
+  r = P(withVariants, 'dev', RH_A);
+  ok('开发模式 → null', r.pkg === null && r.form === null, r);
+}
+
 /* ---- D. 本地假服务器 + 下载器 ---- */
 const PAYLOAD = Buffer.from('PK\x03\x04 fake patch payload 一丁点内容'.repeat(50));
 const GOOD_SHA = crypto.createHash('sha256').update(PAYLOAD).digest('hex');
@@ -137,6 +177,26 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u.pathname === '/pkg.zip') {
+    res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': String(PAYLOAD.length) });
+    res.end(PAYLOAD);
+    return;
+  }
+  // 跨版本场景：小包基准与本机完全不同 → 客户端应当自动改走完整资源包
+  if (u.pathname === '/xv/latest.json') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ...GOOD,
+      latest: {
+        ...GOOD.latest,
+        packages: {
+          asar: { url: 'patch-old.zip', size: 10, sha256: 'x', baseRuntimeHash: 'OLD-HASH' },
+          full: { url: 'full.zip', size: PAYLOAD.length, sha256: GOOD_SHA },
+        },
+      },
+    }));
+    return;
+  }
+  if (u.pathname === '/xv/full.zip') {
     res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Length': String(PAYLOAD.length) });
     res.end(PAYLOAD);
     return;
@@ -206,6 +266,18 @@ server.listen(0, '127.0.0.1', async () => {
   try { await s3.check(); } catch (e) { cfgErr = e.message; }
   ok('空地址 → 明确报错', !!cfgErr && /更新源地址/.test(cfgErr), cfgErr);
   ok('localFileSource.describe', /本地文件/.test(src.localFileSource('D:/x/y-patch.zip').describe()));
+
+  console.log('== D. 整链路（跨版本 → 完整资源包） ==');
+  const xv = src.httpSource({
+    baseUrl: base + 'xv/', localVersion: '1.0.2', kind: 'asar', channel: 'stable',
+    runtimeHash: 'NEW-HASH', downloadDir: tmp,
+  });
+  const xvInfo = await xv.check();
+  ok('基准对不上 → 自动选完整资源包', xvInfo.pkg && /full\.zip$/.test(xvInfo.pkg.url) && xvInfo.form === 'full', xvInfo);
+  ok('并给出面向用户的说明', /完整资源包/.test(xvInfo.note || ''), xvInfo.note);
+  const xvGot = await xv.fetch();
+  ok('完整资源包能下载且 sha256 对得上',
+    fs.existsSync(xvGot) && crypto.createHash('sha256').update(fs.readFileSync(xvGot)).digest('hex') === GOOD_SHA);
 
   server.close();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

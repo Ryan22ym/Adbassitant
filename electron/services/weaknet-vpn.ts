@@ -72,6 +72,29 @@ const REQ_TIMEOUT_MS = 6_000;
 /** 心跳间隔：设备侧超时是 15s，1s 轮询留了足够余量 */
 const HEARTBEAT_MS = 1_000;
 
+/**
+ * 下发 `/start` 后，等设备侧真正把隧道建起来的上限。
+ *
+ * 🔴 `/start` 只是「把 Intent 交给系统」，设备侧的
+ * `startForegroundService → onStartCommand → establish()` 全是**异步**的：
+ * 实测从下发到 `/status` 报 `vpnActive=true` 需要数百毫秒到数秒
+ * （App 冷启动 / 被系统冻结过时更久）。
+ *
+ * 所以「下发成功」≠「已生效」，必须轮询确认。不确认就会踩这个坑：
+ * 下发后立刻查 `/status` 拿到 `vpnActive=false` → 被心跳误判成
+ * 「设备侧已停止」→ 反手发 `/stop` 把**刚建好的**隧道关掉 ——
+ * 用户看到的就是「点了启动，手机上 VPN 一闪即逝，弱网完全没效果」。
+ */
+const TUNNEL_READY_TIMEOUT_MS = 12_000;
+
+/**
+ * 启动宽限期：下发 `/start` 之后这么久内的「查不到 / 报未运行」都不算异常。
+ *
+ * 上面那条坑的第二道保险 —— 即使某条路径没等到隧道就绪就进了心跳，
+ * 宽限期内也不会把会话收摊。
+ */
+const START_GRACE_MS = 8_000;
+
 /* ------------------------------------------------------------------ */
 /* HTTP over adb forward                                               */
 /* ------------------------------------------------------------------ */
@@ -332,6 +355,13 @@ export interface VpnSession {
   serial: string;
   port: number;
   startedAt: number;
+  /**
+   * 下发 `/start` 的时刻。
+   *
+   * 用于启动宽限期判断：设备侧建隧道是异步的，这之后的一小段时间内
+   * 「查不到状态 / 报未运行」都只是「还在启动」，不能当成已停止去收摊。
+   */
+  dispatchedAt: number;
   /** 心跳定时器（同时负责把 stats 推给 UI） */
   heartbeat: NodeJS.Timeout | null;
   /** 电脑侧自己算的剩余秒数，与设备侧相互独立（双端定时器） */
@@ -420,8 +450,12 @@ export async function queryVpnState(
 /**
  * 随包 APK 的位置。
  *
- * 放在 `bin/weaknet/` 而不是与 adb.exe 同级：`bin/` 根目录已经被
- * adb/scrcpy/ffmpeg 的几十个文件占满，混进去不好认也不好升级。
+ * 🔴 必须放在 `bin/` 根下（`bin/weaknet-vpn.apk`），**不能**放进子目录。
+ *    原因不在整洁，在升级：应用内增量更新只替换 manifest.files 里那几个文件，
+ *    **不会新建目录**（v1.0.28 及以前的更新助手连 mkdir 都没有），而更新前的
+ *    预检曾把「目标目录还不存在」误判成「目录不可写」直接拒收整包 ——
+ *    APK 一旦放进 `bin/weaknet/`，「还没有这个子目录」的旧版本就再也升不上来。
+ *    v1.0.29 首版正是踩了这个坑，详见 electron/services/update.ts 的同名注释。
  *
  * 为什么要随包：本机没有 Android SDK / NDK / Gradle，APK 必须预先构建好
  * 一起发；而且用户装工具时不应该被迫再装一套安卓构建链。
@@ -432,9 +466,9 @@ export async function queryVpnState(
  */
 export function findVpnApk(): string | null {
   const candidates = [
-    join(binDir(), 'weaknet', 'weaknet-vpn.apk'),
+    join(binDir(), 'weaknet-vpn.apk'), // 现行布局（放 bin 根下，更新安全）
+    join(binDir(), 'weaknet', 'weaknet-vpn.apk'), // 历史布局，仅兼容老安装
     join(binDir(), 'weaknet', 'app-release.apk'),
-    join(binDir(), 'weaknet-vpn.apk'),
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;
@@ -482,7 +516,7 @@ export async function startVpn(
     if (!opts.apkPath) {
       return {
         ok: false,
-        message: '设备上未安装弱网配套 App，且找不到随包 APK（bin/weaknet/weaknet-vpn.apk）',
+        message: '设备上未安装弱网配套 App，且找不到随包 APK（bin/weaknet-vpn.apk）',
       };
     }
     if (opts.autoInstall === false) {
@@ -509,7 +543,11 @@ export async function startVpn(
     await closeChannel(serial, port);
     return { ok: false, message: '控制端口已通但状态查询失败，请重试' };
   }
-  if (!st.authorized) {
+  // ⚠️ `authorized` 为 false 不一定代表「没授权」：只要设备上有 VPN 正在运行
+  // （包括我们自己上一轮还没停干净的），`VpnService.prepare()` 就会返回非 null，
+  // 于是 /status 报 authorized=false。这种情况直接放行 —— 真没授权的话，
+  // 设备侧 /start 里还会再查一次 prepare()，会明确回 need_authorize，兜得住。
+  if (!st.authorized && !st.vpnActive) {
     // 弹框，但不关通道 —— 用户点完确定我们还要继续
     await call(port, 'POST', '/authorize');
     return {
@@ -534,11 +572,31 @@ export async function startVpn(
     return { ok: false, message: String(start.json.error || '设备侧拒绝了启动请求') };
   }
 
+  /* ⑤.5 等设备侧把隧道真正建起来
+   *
+   * `/start` 是「把 Intent 交给系统」后就立即返回的，设备侧 establish() 是异步的。
+   * 不等就往下走的话，第一次心跳会看到 vpnActive=false，被误判成
+   * 「设备侧已停止」→ 反手一个 /stop 关掉**刚建好的**隧道 →
+   * 用户看到「点了启动，手机上 VPN 一闪即逝，弱网完全没效果」。
+   */
+  if (!(await waitTunnelReady(port, TUNNEL_READY_TIMEOUT_MS))) {
+    await call(port, 'POST', '/stop');
+    await closeChannel(serial, port);
+    return {
+      ok: false,
+      message:
+        `设备侧未能在 ${TUNNEL_READY_TIMEOUT_MS / 1000}s 内建立 VPN 隧道。` +
+        '设备上的「弱网模拟」App 若长时间未用可能被系统冻结，' +
+        '先手动打开一次它再重试。',
+    };
+  }
+
   /* ⑥ 会话登记 + 心跳 */
   const ctx: VpnSession = {
     serial,
     port,
     startedAt: Date.now(),
+    dispatchedAt: Date.now(),
     heartbeat: null,
     timer: null,
     note: 'VPN 已下发，等待设备侧确认',
@@ -577,6 +635,25 @@ export async function startVpn(
  *      或在系统设置里撤销了授权、或系统回收了），我们也要跟着收摊，
  *      不然 UI 会一直显示「运行中」而实际早停了
  */
+/**
+ * 轮询等设备侧把隧道真正建起来。
+ *
+ * 每 300ms 查一次 `/status`，命中 `vpnActive=true` 立刻返回 true。
+ * 轮询本身顺带刷新了设备侧的 `lastControlTouch`，所以等待期间
+ * 也不会被「15s 无控制请求就自停」的保护误伤。
+ *
+ * @returns true = 隧道已就绪；false = 超时（调用方负责清理，别留半生效状态）
+ */
+async function waitTunnelReady(port: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const st = await queryVpnState(port);
+    if (st?.vpnActive) return true;
+    await sleep(300);
+  }
+  return false;
+}
+
 async function tickVpn(): Promise<void> {
   const ctx = vpnSession;
   if (!ctx) return;
@@ -584,7 +661,17 @@ async function tickVpn(): Promise<void> {
   const st = await queryVpnState(ctx.port);
   if (vpnSession !== ctx) return; // 期间被停了
 
+  // 启动宽限期：刚下发 /start 的这几秒里设备侧可能还在 establish()，
+  // 此时「查不到 / 报未运行」都只代表「还在启动」，绝不能收摊。
+  const starting = Date.now() - ctx.dispatchedAt < START_GRACE_MS;
+
   if (!st) {
+    if (starting) {
+      ctx.reachable = true;
+      ctx.note = '正在等待设备侧建立隧道……';
+      tickSink?.();
+      return;
+    }
     ctx.reachable = false;
     ctx.note = '与设备侧控制通道失联 —— 若持续如此，设备会在 15s 后自动恢复网络';
     tickSink?.();
@@ -592,8 +679,13 @@ async function tickVpn(): Promise<void> {
   }
   ctx.reachable = true;
 
-  // 设备侧说没在跑了 → 跟着收摊
+  // 设备侧说没在跑了 → 跟着收摊（启动宽限期内除外：那只是还没起完）
   if (!st.vpnActive) {
+    if (starting) {
+      ctx.note = '正在等待设备侧建立隧道……';
+      tickSink?.();
+      return;
+    }
     ctx.note = st.note || '设备侧已停止 VPN';
     log('info', '弱网', `设备侧已停止 VPN：${ctx.note}`);
     await stopVpn(true);

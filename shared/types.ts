@@ -1042,6 +1042,14 @@ export interface UpdateManifest {
   /** 安装本包**之后**的 resources/bin 指纹（无 bin 差量时与 base 相同） */
   resultRuntimeHash: string;
   kind: UpdateKind;
+  /**
+   * 完整资源包标记（v1.0.31）。
+   *
+   * true = 本包携带**全部** `bin/` 文件（不是差量），因此不依赖目标机原有的运行库，
+   * 可以从任意旧版本一次升到位。为 true 时 baseRuntimeHash 不参与校验
+   * （见 update-core.validateManifest）—— 这就是「跨版本在线更新」的实现方式。
+   */
+  full?: boolean;
   files: UpdateFileEntry[];
 }
 
@@ -1126,7 +1134,21 @@ export interface UpdatePackageRef {
   url: string;
   size?: number;
   sha256?: string;
+  /**
+   * 本包要求目标机 `resources/bin` 在**应用之前**是哪个指纹（v1.0.31）。
+   *
+   * 为什么放进清单：老流程只把基准写在包内 manifest.json 里，客户端必须先下完整包
+   * 才能知道对不对得上 —— 跨版本升级的用户会白下几十 MB 再被拒。清单里带上它，
+   * 就能在**下载之前**挑出精确匹配的那一份，或者直接改走完整资源包。
+   */
+  baseRuntimeHash?: string;
 }
+
+/** 包形态：asar / portable 之外再多一个 full（完整资源包，跨版本兜底） */
+export type UpdatePackageForm = UpdateKind | 'full';
+
+/** 清单里的包集合：按形态索引，另有一个 full 兜底槽 */
+export type UpdatePackageRefs = Partial<Record<UpdatePackageForm, UpdatePackageRef>>;
 
 /** latest.json 的 latest 节点 */
 export interface UpdateLatestEntry {
@@ -1136,7 +1158,15 @@ export interface UpdateLatestEntry {
   notes?: string;
   /** 是否重要更新（本次只做展示，不强制） */
   critical?: boolean;
-  packages: Partial<Record<UpdateKind, UpdatePackageRef>>;
+  packages: UpdatePackageRefs;
+  /**
+   * 多基线差分小包（v1.0.31）。
+   *
+   * 同一个新版本可以针对**多个旧版本基线**各出一份补丁，每份自带 baseRuntimeHash。
+   * 老客户端不认这个字段，只会读 packages[kind]（原行为不变）；
+   * 新客户端优先在这里挑与本机运行库精确匹配的那一份，挑不到再退到 packages.full。
+   */
+  variants?: UpdatePackageRef[];
 }
 
 /** 服务器上的 latest.json 全文 */
@@ -1183,5 +1213,9 @@ export interface UpdateCheckResult {
     critical?: boolean;
     /** 与本机形态匹配的包；null = 该版本未提供此形态的更新包 */
     pkg: UpdatePackageRef | null;
+    /** 选中的包属于哪种形态；'full' = 跨版本完整资源包（v1.0.31） */
+    pkgForm?: UpdatePackageForm;
+    /** 为什么选了它 / 为什么一个都没选上（面向用户的一句话，界面可直接展示） */
+    pkgNote?: string;
   };
 }

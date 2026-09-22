@@ -32,8 +32,50 @@
 - JDK 17
 - Android SDK（`compileSdk 34`），或让 `local.properties` 指向 SDK 位置
 
-本机（开发机）**没有**装 Android SDK / NDK / Gradle，所以 APK 需要在一台有
-构建环境的机器上产出，然后放到 `bin/weaknet/weaknet-vpn.apk` 随工具一起发布。
+#### 本机（开发机）的现成工具链
+
+开发机上原本没有 Android SDK / NDK / Gradle。现在把一整套**装在仓库之外的独立目录**，
+不污染系统环境、也不进 git：
+
+```
+D:\WorkSpace\android-toolchain\
+  jdk-17.0.20.1+1\     Temurin JDK 17            （清华 Adoptium 镜像）
+  gradle-8.7\          Gradle 发行版              （腾讯云 gradle 镜像）
+  android-sdk\         platform-tools + platforms;android-34 + build-tools;34.0.0
+  gradle-home\         Gradle 依赖缓存（独立，不动 ~/.gradle）
+```
+
+> 🔴 **路径必须纯 ASCII，所以它刻意放在工作区外面。**
+> 本仓库路径含中文（`D:\WorkSpace\手机助手\`），AGP 默认会拒绝构建，
+> 加 `-Pandroid.overridePathCheck=true` 可以绕过；但真正绕不过去的是 **aapt2** ——
+> 它拿到非 ASCII 的 **SDK 路径**时会按非 UTF-8 处理，直接报「找不到 android.jar」。
+> 所以项目路径可以带中文（override 掉），**SDK 路径绝对不行**。
+> 曾经把它放在 `D:\WorkSpace\手机助手\.toolchain\`，构建就卡死在这里。
+>
+> 换路径的话改 `build-weaknet-apk.mjs` 的 `LOCAL_TC`，或设环境变量 `WEAKNET_TOOLCHAIN`。
+
+一键构建（在仓库根目录）：
+
+```bash
+node scripts/build-weaknet-apk.mjs
+# 产物：bin/weaknet-vpn.apk
+```
+
+> `build-weaknet-apk.mjs` 会**优先探测仓库外的工具链目录**并自动拼好
+> `JAVA_HOME` / `ANDROID_HOME` / `GRADLE_USER_HOME` / `PATH`，所以在没配过 PATH 的机器上
+> 也能直接跑；探测不到就退回原行为（用 PATH 里的 `gradle`），与以前完全一致。
+> 它同时会自动带上 `-Pandroid.overridePathCheck=true`（本项目路径含中文，见上）。
+
+> 整套工具链只是「下载 + 解压」，换机器照做一遍即可，**不需要装 Android Studio**：
+> Gradle 8.7 ← `mirrors.cloud.tencent.com/gradle/`；
+> JDK 17 ← `mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/windows/`；
+> cmdline-tools ← `mirrors.cloud.tencent.com/AndroidSDK/`，
+> 然后 `sdkmanager --licenses` 接受许可，再装 `platform-tools` / `platforms;android-34` / `build-tools;34.0.0`。
+
+当然，也可以在另一台有构建环境的机器上产出，产物同样放到 `bin/weaknet-vpn.apk`。
+
+> ⚠️ 放 `bin/` 根下、**不要**建子目录：应用内增量更新不新建目录，
+> 放进新子目录会让老版本（无 mkdir 的更新助手）永远升不上来。
 
 ### 命令
 
@@ -56,7 +98,7 @@ gradle :app:assembleRelease
 产出后复制到随包位置：
 
 ```bash
-cp app/build/outputs/apk/release/app-release.apk ../bin/weaknet/weaknet-vpn.apk
+cp app/build/outputs/apk/release/app-release.apk ../bin/weaknet-vpn.apk
 ```
 
 或者直接用封装好的脚本（在仓库根目录）：

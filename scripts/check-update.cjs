@@ -274,6 +274,28 @@ function partA() {
     L,
   );
   record(!!withBin.warning, '含 bin 差量会提醒用户「同时替换运行库文件」', String(withBin.warning || '').slice(0, 50));
+
+  /* --- 完整资源包（v1.0.31）：跨版本升级的实现方式 --- */
+  // 它把 bin 整份带过来，本来就不依赖目标机原有的运行库 → 必须放行，
+  // 哪怕清单里的 baseRuntimeHash 与本机完全不同（这正是「1.0.2 直升 1.0.35」的场景）。
+  const fullOk = acc(
+    '完整资源包忽略运行库基准（跨版本可升）',
+    baseManifest({
+      full: true,
+      baseRuntimeHash: '',
+      files: [
+        { path: 'app.asar', size: 1, sha256: 'x' },
+        { path: 'bin/adb.exe', size: 1, sha256: 'y' },
+      ],
+    }),
+    L,
+  );
+  record(fullOk.ok === true, '完整资源包在基准完全对不上时仍然可用', String(fullOk.reason || '').slice(0, 60));
+  record(/完整资源包/.test(String(fullOk.warning || '')), '完整资源包给出「会覆盖 N 个运行库文件」的提醒', String(fullOk.warning || '').slice(0, 60));
+  // 但 Electron 换代仍然拦得住：完整资源包里没有 electron.exe / 那堆 dll
+  rej('完整资源包也不能跨 Electron 大版本', baseManifest({ full: true, electronVersion: '34.0.0' }), L);
+  // 差量包带 full 之外的字段不能顺手放行 —— 只有 full:true 才跳过基准
+  rej('非 full 的包照旧校验基准', baseManifest({ baseRuntimeHash: 'RH-OTHER' }), L);
 }
 
 /* ------------------------------------------------------------------ */

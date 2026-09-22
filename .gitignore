@@ -7,6 +7,16 @@ dist-electron/
 release/
 bin/
 
+# Android / Gradle 构建产物
+android/.gradle/
+android/build/
+android/app/build/
+android/probe/.gradle/
+android/probe/build/
+android/local.properties
+*.apk
+*.aab
+
 # 打包产物
 dist-release/
 dist-release-broken-*/

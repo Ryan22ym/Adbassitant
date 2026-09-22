@@ -107,10 +107,14 @@ python -m http.server 8000
 ```
 https://<你的域名>/adb-assistant/
   latest.json                                     ← 客户端唯一入口，必须叫这个名字（只有 1 个，永远指向最新版）
-  ADB桌面助手-v1.0.26-patch.zip                    ← 安装版增量包（约 150–260 KB）
-  ADB桌面助手-v1.0.26-patch.zip.sha256             ← 可选：给人看的，客户端不读
-  ADB桌面助手-v1.0.25-patch.zip                    ← ↓ 历史版本，保留最近 10 版
-  ADB桌面助手-v1.0.25-patch.zip.sha256
+  ADB桌面助手-v1.0.31-patch.zip                    ← 主小包（约 150–270 KB）；基准 = 紧邻的上一版
+  ADB桌面助手-v1.0.31-patch.zip.sha256             ← 可选：给人看的，客户端不读
+  ADB桌面助手-v1.0.31-patch-from-v1.0.28.zip       ← 多基线变体（--also-from）：给落后好几版的用户
+  ADB桌面助手-v1.0.31-patch-from-v1.0.28.zip.sha256
+  ADB桌面助手-v1.0.31-full.zip                     ← 完整资源包（--full，约 39 MB）：跨版本兜底
+  ADB桌面助手-v1.0.31-full.zip.sha256
+  ADB桌面助手-v1.0.30-patch.zip                    ← ↓ 历史版本，保留最近 10 版
+  ADB桌面助手-v1.0.30-patch.zip.sha256
   ...
 ```
 
@@ -124,6 +128,40 @@ https://<你的域名>/adb-assistant/
 > **v1.0.24 起只发安装版小包**，不再产出/上传便携版整包
 > （`ADB桌面助手-vX-portable-patch.zip`，约 105 MB）。理由：打包已只出 NSIS 安装包，
 > 没有便携形态的新包可发。清单里不再写 `packages.portable`。
+
+### 2.1 🔴 跨版本更新（v1.0.31 起）：三种包各管一摊
+
+| 包 | 名字 | 体积 | 谁用得上 |
+|---|---|---|---|
+| 主小包 | `-vX-patch.zip` | ~270 KB | 运行库指纹正好等于**上一版**的机器 |
+| 基线变体 | `-vX-patch-from-vY.zip` | ~250 KB 起 | 漏更了几版、指纹 = 某个老版本基线的机器 |
+| 完整资源包 | `-vX-full.zip` | ~39 MB | **任意**旧版本（它带全部 `bin/`，不挑基线） |
+
+**为什么需要后面两个**：`baseRuntimeHash` 是**严格相等**校验 —— 一份小包只服务一种运行库基线。
+只发「紧邻上一版」的补丁时，用户只要漏更一版，基对不上就被直接拒收
+（表现：「更新包与当前安装的运行库不一致…请改用完整安装包」），只能自己去下 115 MB 的全量安装包。
+`latest.json` 里对应两个新字段：
+
+```jsonc
+"latest": {
+  "packages": {
+    "asar": { "url": "...-patch.zip", "size": …, "sha256": …, "baseRuntimeHash": "e0c3ca14…" },
+    "full": { "url": "...-full.zip", "size": …, "sha256": … }
+  },
+  "variants": [                       // 多于一份小包时才写；客户端按本机指纹挑最小的一份
+    { "url": "...-patch.zip",             "baseRuntimeHash": "e0c3ca14…", … },
+    { "url": "...-patch-from-v1.0.28.zip", "baseRuntimeHash": "de427368…", … }
+  ]
+}
+```
+
+挑包顺序（`electron/services/update-core.ts` 的 `pickPackage()`）：
+**① 指纹精确匹配的小包 → ② 没声明基准的老式包（交给包内 manifest 判）→ ③ `packages.full` → ④ 都没有则明确报错**。
+`packages.asar` 的 `baseRuntimeHash` 是客户端**下载前**就能挑包的依据，所以 `make-manifest.py` 会从包内 manifest 读出来写进清单 —— 别手写。
+
+> ⚠️ **`variants` 只对 v1.0.31 及以后的客户端有效。** 已经装在用户机器上的 ≤v1.0.30 客户端代码里
+> 写死了「只读 `packages[kind]` + 基准必须严格相等」，改不了。所以：
+> **那批老客户端要么靠 `packages.asar` 正好对上它的基线，要么只能下全量安装包。**
 
 - 客户端的「更新源」填 `https://<你的域名>/adb-assistant/`（**结尾斜杠可有可无**，程序会自动补；缺 `https://` 也会自动补）。
 - 它会去请求 `<更新源>latest.json`。
@@ -256,7 +294,9 @@ python scripts/make-manifest.py --out out-v1.0.24 --check
 
 - 覆盖 `latest.json`（这是唯一会变的文件）
 - 新增本版的 2 个文件（`-patch.zip` 与它的 `.sha256`）
-- **顺手删掉上一版的 2 个文件**（当前策略：只留最新，见 §2）
+- **不用删任何东西** —— 托管上保留最近 10 个版本（见 §2）。
+  **只有当目录里的版本数超过 10 个时**，才把最老的那一版（zip + 其 `.sha256`）删掉。
+  平时发版只管上传；删多了会把还能回退的版本弄丢。
 
 Nginx 参考配置：
 
@@ -362,22 +402,32 @@ asar 是未压缩容器、正文可搜，但假阳性极常见：搜 `SIGKILL` �
 ```powershell
 # 1) 改版本号三件套（缺一即失败，见项目记忆）
 #    package.json version / SettingsPage.tsx VERSION_NOTES / 然后打包
-python scripts/build.py --out out-v1.0.24
-python scripts/install-local.py --out out-v1.0.24
+python scripts/build.py --out out-v1.0.31
+python scripts/install-local.py --out out-v1.0.31
 
-# 2) 出更新包 + 发布清单（build.py 收尾已自动跑这两条；这里显式跑一遍是为了改说明 / 重算）
-python scripts/make-update.py --out out-v1.0.24
-python scripts/make-manifest.py --out out-v1.0.24
+# 2) 出更新包 + 发布清单（build.py 收尾已自动跑这两条；这里显式跑一遍是为了加上变体/完整包）
+#    --also-from：给「落后好/几版」的用户也备一份小包（可重复，一个基线一份）
+#    --full      ：完整资源包，跨版本兜底（约 39 MB）。有 bin 变化或里程牌版本时务必带上
+python scripts/make-update.py --out out-v1.0.31 --also-from out-v1.0.28 --full
+python scripts/make-manifest.py --out out-v1.0.31
 
 # 3) 本地复核：清单与产物还对得上吗（几秒，值得）
-python scripts/make-manifest.py --out out-v1.0.24 --check
+python scripts/make-manifest.py --out out-v1.0.31 --check
 
-# 4) 上传（覆盖 latest.json + 新增 2 个文件：patch.zip / patch.zip.sha256）
-#    🔴 顺序：先传 zip + sha256，latest.json 最后传
+# 3b) 跨版本链路验收（纯 node，不需要设备；会真跑一次更新助手）
+node scripts/check-update-crossversion.cjs --out out-v1.0.31
+node scripts/check-update-online.cjs
+
+# 4) 上传（覆盖 latest.json + 新增若干文件：主小包 / 变体小包 / 完整包 及其 .sha256）
+#    🔴 顺序：先传所有包 + .sha256，latest.json 最后传
 #    历史包保留最近 10 版 —— 平时这一步不需要删任何东西
 
 # 5) 自检 4 项（§3 步骤 6）
 ```
+
+> `--full` 不带时 `make-manifest.py` 会**明确告警**（跨版本兜底缺失），不是静默跳过。
+> 完整包 39 MB，10 版全带约 390 MB —— 托管容量吃紧时可以只在「有 bin 变化」的版本带，
+> 但**别长期不带**，否则漏更多版的用户又回到「只能下载全量安装包」。
 
 > 托管上的历史包按「**最近 10 版**」保留（§2）。发版本身不涉及清理；
 > 隔一段时间可以数一下目录里有几个版本，**超过 10 个再把最老的删掉**。

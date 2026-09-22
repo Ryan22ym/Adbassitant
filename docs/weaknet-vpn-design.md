@@ -181,7 +181,7 @@ App 冷启动 → 起前台服务 → `ControlServer` 监听 `127.0.0.1:18080` �
 
 | 情况 | 处理 |
 |---|---|
-| 电脑没有 Android SDK / 构建不出 APK | 仓库**预置 APK**（`bin/weaknet/weaknet-vpn.apk`）。电脑侧只负责「装 + 用」。 |
+| 电脑没有 Android SDK / 构建不出 APK | 仓库**预置 APK**（`bin/weaknet-vpn.apk`）。电脑侧只负责「装 + 用」。 |
 | App 没装 | 电脑侧自动 `adb install -r`，装完用 `pm path` 复核（沿用本项目一贯的硬规矩） |
 | 设备未授权且有交互需求 | 走 `/authorize`，UI 显示「等待设备授权」，并提供「重新弹出授权框」按钮 |
 | 设备无 VPN 能力（极老 ROM） | 回退到旧代理方案（保留，不删） |
@@ -202,7 +202,10 @@ App 冷启动 → 起前台服务 → `ControlServer` 监听 `127.0.0.1:18080` �
 
 本机**没有** Android SDK / NDK / Gradle（`.gradle`、`.m2` 均不存在，`D:\AdbSDk`
 里只有 platform-tools）。实测可访问 `dl.google.com` 与 `services.gradle.org`，
-所以 APK 可以在配好环境的机器上构建，产出后预置到 `bin/weaknet/`。
+所以 APK 可以在配好环境的机器上构建，产出后预置到 `bin/weaknet-vpn.apk`。
+
+> 🔴 位置必须是 `bin/` **根下**，不能是 `bin/weaknet/` 这类子目录：
+> 应用内增量更新只替换文件、不新建目录（见 `docs/update-design.md`）。
 
 **关于 gradle wrapper（踩过的坑，记下来免得重复）：**
 

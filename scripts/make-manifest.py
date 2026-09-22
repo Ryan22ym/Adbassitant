@@ -16,9 +16,12 @@ isn't 什么：
   latest.notes                             —— 默认从 SettingsPage.tsx 的 VERSION_NOTES 抠，
                                               保证与设置页「软件更新」里显示的一模一样
   latest.critical                          —— --critical 才为 true
-  latest.packages.asar.size / .sha256      —— 直接算，不手抄
+  latest.packages.asar.size / .sha256 / .baseRuntimeHash  —— 直接算/直接读，不手抄
+  latest.packages.full                     —— 完整资源包（跨版本兜底），产物里没就告警
+  latest.variants                          —— 多基线小包（make-update.py 的 variants.json），
+                                              多于一份时才写；客户端按本机指纹挑最小的一份
 
-v1.0.24 起打包只出 NSIS 安装包，所以 packages 只有 asar 一项。若产物目录里确实躺着
+v1.0.24 起打包只出 NSIS 安装包，所以 packages 里没有 portable。若产物目录里确实躺着
 portable 整包（历史产物），会打一条警告 —— 那说明 make-update.py 被改回去了。
 
 用法：
@@ -34,6 +37,7 @@ import json
 import os
 import re
 import sys
+import zipfile
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +48,8 @@ APP_ID = 'com.xiaoyang.adbassistant'
 CHANNEL = 'stable'
 PATCH_TMPL = '%s-v%s-patch.zip'
 PORTABLE_TMPL = '%s-v%s-portable-patch.zip'
+FULL_TMPL = '%s-v%s-full.zip'
+VARIANTS_JSON = 'variants.json'
 SETTINGS_PAGE = os.path.join('src', 'pages', 'SettingsPage.tsx')
 VERSION_RE = re.compile(r'^out-v(\d+\.\d+\.\d+)')
 
@@ -143,9 +149,62 @@ def artifact(upd_dir, name):
     return {'url': name, 'size': os.path.getsize(p), 'sha256': sha256_file(p)}, p
 
 
+def zip_manifest(zip_path):
+    """读更新包内的 manifest.json（读不到返回 {}，不算致命 —— 老包可能没有某些字段）"""
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            with z.open('manifest.json') as f:
+                return json.loads(f.read().decode('utf-8'))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def patch_ref(upd_dir, name):
+    """小包引用：顺带把包内的 baseRuntimeHash 提到清单里。
+
+    为什么值得多读一次包：客户端拿到清单后**不用先下载**就能判断
+    「这份补丁适不适合本机的运行库」，不合适就直接改走完整资源包。
+    没有这个字段时，跨版本用户要先白下几十 MB 才会被拒（v1.0.30 及以前的行为）。
+    """
+    ref, p = artifact(upd_dir, name)
+    b = zip_manifest(p).get('baseRuntimeHash')
+    if isinstance(b, str) and b:
+        ref['baseRuntimeHash'] = b
+    return ref, p
+
+
 def build_doc(out_dir, version, notes, critical, published_at, upd_dir):
-    asar_ref, zip_path = artifact(upd_dir, PATCH_TMPL % (PRODUCT_NAME, version))
+    asar_ref, zip_path = patch_ref(upd_dir, PATCH_TMPL % (PRODUCT_NAME, version))
     packages = {'asar': asar_ref}
+
+    # ---- 多基线变体 ----
+    # variants.json 由 make-update.py 写（主变体 + --also-from 的额外基线）。
+    # 客户端会在这里挑 baseRuntimeHash 与本机一致的**最小**那一份；挑不到再退到 packages.full。
+    variants = []
+    seen_urls = set()
+    vj_path = os.path.join(upd_dir, VARIANTS_JSON)
+    vj = read_json(vj_path) if os.path.isfile(vj_path) else {}
+    for item in (vj.get('patches') or []):
+        name = str(item.get('file') or '').strip()
+        if not name or name in seen_urls:
+            continue
+        ref, _p = patch_ref(upd_dir, name)
+        if item.get('baseRuntimeHash'):
+            ref['baseRuntimeHash'] = str(item['baseRuntimeHash'])
+        if str(ref.get('url')) == str(asar_ref.get('url')):
+            ref = asar_ref  # 与主变体同一份，保持字段一致
+        variants.append(ref)
+        seen_urls.add(name)
+    if str(asar_ref.get('url')) not in seen_urls:
+        variants.insert(0, asar_ref)
+
+    # ---- 完整资源包（跨版本兜底）----
+    full_name = FULL_TMPL % (PRODUCT_NAME, version)
+    if os.path.isfile(os.path.join(upd_dir, full_name)):
+        packages['full'] = artifact(upd_dir, full_name)[0]
+    else:
+        warn('没有完整资源包 %s —— 漏更了好几版的用户无法在线跨版本更新（只能下完整安装包）。'
+             '发版时在 make-update.py 上加 --full 产出它。' % full_name)
 
     portable_name = PORTABLE_TMPL % (PRODUCT_NAME, version)
     if os.path.isfile(os.path.join(upd_dir, portable_name)):
@@ -155,24 +214,42 @@ def build_doc(out_dir, version, notes, critical, published_at, upd_dir):
         packages['portable'] = artifact(upd_dir, portable_name)[0]
 
     stamp = published_at or now_stamp()
+    latest = {
+        'version': version,
+        'publishedAt': stamp,
+        'notes': notes,
+        'critical': bool(critical),
+        'packages': packages,
+    }
+    if len(variants) > 1:
+        latest['variants'] = variants
     doc = {
         'schema': SCHEMA,
         'productName': PRODUCT_NAME,
         'appId': APP_ID,
         'channel': CHANNEL,
         'generatedAt': now_stamp(),
-        'latest': {
-            'version': version,
-            'publishedAt': stamp,
-            'notes': notes,
-            'critical': bool(critical),
-            'packages': packages,
-        },
+        'latest': latest,
     }
     return doc, zip_path
 
 
-def self_check(doc, text, zip_path):
+def check_ref(upd_dir, label, ref):
+    """清单里一个包引用 vs 磁盘上的真实文件 —— 对不上就是「所有客户端都下不了这一版」"""
+    if not ref or not ref.get('url'):
+        return '%s 没有 url' % label
+    p = os.path.join(upd_dir, os.path.basename(str(ref['url'])))
+    if not os.path.isfile(p):
+        return '%s 指向的文件不存在：%s' % (label, ref.get('url'))
+    if ref.get('size') != os.path.getsize(p):
+        return '%s.size 与文件实际字节数不符（清单 %s / 实际 %s）' % (label, ref.get('size'), os.path.getsize(p))
+    if str(ref.get('sha256') or '').lower() != sha256_file(p):
+        return '%s.sha256 与文件实际摘要不符（清单 %s… / 实际 %s…）' % (
+            label, str(ref.get('sha256'))[:16], sha256_file(p)[:16])
+    return None
+
+
+def self_check(doc, text, upd_dir):
     """按客户端的硬校验重读一遍 —— 生成的清单必须自己先认识。"""
     back = json.loads(text)  # 顺带证明「写出来的就是合法 JSON」
     for k, want in (('schema', SCHEMA), ('productName', PRODUCT_NAME),
@@ -181,15 +258,27 @@ def self_check(doc, text, zip_path):
             die('自检失败：%s = %r，应为 %r' % (k, back.get(k), want))
     if not re.match(r'^\d+\.\d+\.\d+$', str(back['latest'].get('version', ''))):
         die('自检失败：version 不是合法版本号')
-    ref = (back['latest'].get('packages') or {}).get('asar')
+
+    packs = back['latest'].get('packages') or {}
+    ref = packs.get('asar')
     if not ref or not ref.get('url'):
         die('自检失败：packages.asar 缺失（客户端会当作「这一版没有你这种形态的包」）')
-    if ref['size'] != os.path.getsize(zip_path):
-        die('自检失败：asar.size 与文件实际字节数不符')
-    if ref['sha256'].lower() != sha256_file(zip_path):
-        die('自检失败：asar.sha256 与文件实际摘要不符')
+
+    problems = []
+    for form, r in packs.items():
+        msg = check_ref(upd_dir, 'packages.%s' % form, r)
+        if msg:
+            problems.append(msg)
+    for i, v in enumerate(back['latest'].get('variants') or []):
+        msg = check_ref(upd_dir, 'variants[%d]' % i, v)
+        if msg:
+            problems.append(msg)
+        elif not v.get('baseRuntimeHash'):
+            problems.append('variants[%d] 没有 baseRuntimeHash —— 客户端没法在下载前挑包' % i)
     if not str(back['latest'].get('notes') or '').strip():
-        die('自检失败：notes 为空')
+        problems.append('notes 为空')
+    if problems:
+        die('自检失败：' + '；'.join(problems))
 
 
 def do_check(out_dir, version, upd_dir):
@@ -206,20 +295,17 @@ def do_check(out_dir, version, upd_dir):
     got = str((doc.get('latest') or {}).get('version') or '')
     if got != version:
         problems.append('清单版本 %s ≠ 产物版本 %s' % (got, version))
-    ref = ((doc.get('latest') or {}).get('packages') or {}).get('asar')
-    if not ref:
+    packs = (doc.get('latest') or {}).get('packages') or {}
+    if not packs.get('asar'):
         problems.append('packages.asar 缺失')
-    else:
-        p = os.path.join(upd_dir, os.path.basename(str(ref.get('url') or '')))
-        if not os.path.isfile(p):
-            problems.append('url 指向的文件不存在：%s' % ref.get('url'))
-        else:
-            if ref.get('size') != os.path.getsize(p):
-                problems.append('size 不符：清单 %s / 实际 %s' % (ref.get('size'), os.path.getsize(p)))
-            real = sha256_file(p)
-            if str(ref.get('sha256') or '').lower() != real:
-                problems.append('sha256 不符：清单 %s / 实际 %s'
-                                % (str(ref.get('sha256'))[:16] + '…', real[:16] + '…'))
+    for form, r in packs.items():
+        msg = check_ref(upd_dir, 'packages.%s' % form, r)
+        if msg:
+            problems.append(msg)
+    for i, v in enumerate((doc.get('latest') or {}).get('variants') or []):
+        msg = check_ref(upd_dir, 'variants[%d]' % i, v)
+        if msg:
+            problems.append(msg)
     if not str((doc.get('latest') or {}).get('notes') or '').strip():
         problems.append('notes 为空')
 
@@ -230,8 +316,13 @@ def do_check(out_dir, version, upd_dir):
         sys.exit(1)
 
     print('[make-manifest] --check 通过：%s' % manifest_path)
-    print('  version = %s   asar = %s bytes / sha256 %s…'
-          % (got, ref.get('size'), str(ref.get('sha256'))[:16]))
+    print('  version = %s' % got)
+    for form, r in packs.items():
+        print('  %-9s size=%-10s sha256=%s…  url=%s'
+              % (form, r.get('size'), str(r.get('sha256'))[:16], r.get('url')))
+    for v in ((doc.get('latest') or {}).get('variants') or []):
+        print('  variant   base=%s…  url=%s'
+              % (str(v.get('baseRuntimeHash'))[:12], v.get('url')))
     print('  可以上传（记得先传包，latest.json 最后传）')
     return 0
 
@@ -285,7 +376,7 @@ def main():
     notes = args.notes if args.notes is not None else extract_notes(version)
     doc, zip_path = build_doc(out_dir, version, notes, args.critical, args.published_at, upd_dir)
     text = json.dumps(doc, ensure_ascii=False, indent=2) + '\n'
-    self_check(doc, text, zip_path)
+    self_check(doc, text, upd_dir)
 
     manifest_path = os.path.join(upd_dir, 'latest.json')
     with open(manifest_path, 'w', encoding='utf-8', newline='\n') as f:
@@ -294,6 +385,8 @@ def main():
     print('已写 %s（版本 %s%s）' % (manifest_path, version, '，关键更新' if doc['latest']['critical'] else ''))
     for k, v in doc['latest']['packages'].items():
         print('  %-9s size=%-10s sha256=%s…  url=%s' % (k, v['size'], v['sha256'][:16], v['url']))
+    for v in (doc['latest'].get('variants') or []):
+        print('  variant   base=%s…  url=%s' % (str(v.get('baseRuntimeHash'))[:12], v['url']))
     print('  notes 长度 = %d 字' % len(notes))
     print('  下一步：先传包、latest.json 最后传；传完跑 python scripts/make-manifest.py --out %s --check'
           % out_dir)
