@@ -1421,3 +1421,519 @@
   border-left: 2px solid var(--border-strong);
   padding-left: 10px;
 }
+
+/* ================================================================== */
+/* 自动连点器（v1.0.32）                                               */
+/* ================================================================== */
+
+.ck-layout {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.5fr) minmax(280px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .ck-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ck-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ck-col-side {
+  min-width: 0;
+}
+
+/* ---------------- 回放控制条 ---------------- */
+
+.ck-run {
+  border-left: 3px solid var(--border-strong);
+}
+
+.ck-run.running {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ck-run-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ck-run-info {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ck-run-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+
+.ck-run-desc {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.ck-run-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ck-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.ck-progress .progress {
+  flex: 1;
+}
+
+.ck-progress-text {
+  white-space: nowrap;
+}
+
+/* ---------------- 步骤列表 ---------------- */
+
+.ck-steps-col {
+  min-width: 0;
+}
+
+.ck-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ck-step {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  overflow: hidden;
+  transition: border-color var(--t-fast);
+}
+
+.ck-step:hover {
+  border-color: var(--border-strong);
+}
+
+/*
+ * note 步骤（录制时从系统事件转来的分节说明）用虚线边框 + 灰底，
+ * 一眼能看出「这行不执行任何操作」，不会跟真实动作混淆。
+ */
+.ck-step.is-note {
+  border-style: dashed;
+  background: var(--bg-inset);
+  opacity: 0.85;
+}
+
+.ck-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.ck-step-idx {
+  flex: 0 0 22px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.ck-step-icon {
+  flex: 0 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.ck-step-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ck-step.is-note .ck-step-icon {
+  color: var(--text-tertiary);
+}
+
+.ck-step-kind {
+  flex: 0 0 96px;
+  height: 26px;
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.ck-step-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+
+.ck-step-tools {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+}
+
+.ck-step-tools .icon-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+}
+
+.ck-step-tools .icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ck-step-tools .icon-btn:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+
+.ck-step-tools .icon-btn.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ck-step-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  padding: 10px;
+}
+
+.ck-step-body .field {
+  gap: 3px;
+}
+
+.ck-step-body .field-label {
+  font-size: 11px;
+}
+
+.ck-step-body .input,
+.ck-step-body .select {
+  height: 30px;
+  font-size: 12.5px;
+}
+
+.ck-hint {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.ck-hint-inline {
+  grid-column: 1 / -1;
+}
+
+.ck-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+/* ---------------- 脚本库 ---------------- */
+
+.ck-script-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.ck-script {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.ck-script:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.ck-script.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ck-script-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ck-script-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ck-script-desc {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ck-script-del {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+
+.ck-script:hover .ck-script-del {
+  opacity: 1;
+}
+
+.ck-script-del:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ck-script-del svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ---------------- 录制面板 ---------------- */
+
+.ck-rec.recording {
+  border-left: 3px solid var(--danger);
+}
+
+.ck-rec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ck-rec-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+
+.ck-rec-ver {
+  font-size: 11px;
+}
+
+.ck-rec-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 录制中的红点：只靠颜色不够，配呼吸动画才在余光里也能注意到 */
+.ck-rec-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: ck-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes ck-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.ck-rec-note {
+  margin: 10px 0 0;
+  line-height: 1.7;
+}
+
+.ck-rec-steps {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.ck-rec-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.ck-rec-pull {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  border-radius: var(--r-md);
+}
+
+/* ---------------- 关键帧预览 ---------------- */
+
+.ck-frame-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ck-frame-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.ck-frame-chip:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.ck-frame-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ck-frame-chip em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.ck-frame-view {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  min-height: 80px;
+  align-items: center;
+}
+
+.ck-frame-view img {
+  max-width: 100%;
+  max-height: 460px;
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.ck-sys-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px 16px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/*
+ * 回放中的「最近一步」实时行。
+ *
+ * 与进度条配合：进度条回答「还有多少」，这一行回答「现在在干什么」。
+ * 步骤可能短到几十毫秒，仅靠轮询状态会整段跳过，所以这行内容来自
+ * 主进程逐步推送（push:clickerProgress）而不是轮询。
+ */
+.ck-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+
+.ck-live-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ck-blink 1.2s ease-in-out infinite;
+}
+
+.ck-live-dot.bad {
+  background: var(--danger);
+  animation: none;
+}
+
+.ck-live-text {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

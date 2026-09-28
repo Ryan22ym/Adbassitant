@@ -13,6 +13,9 @@ import {
   type AabEnv,
   type AabSigningConfig,
   type QuickAction,
+  type ClickerScript,
+  type ClickerStep,
+  type RecordedSession,
 } from '../shared/types';
 import {
   listDevices,
@@ -128,6 +131,32 @@ import {
 import { checkEnv } from './env-check';
 import { setLogSink } from './services/adb';
 import { setMirrorStatusSink } from './services/mirror';
+import {
+  listScripts,
+  saveScript,
+  deleteScript,
+  resetScripts,
+  sessionToSteps,
+  startClicker,
+  stopClicker,
+  clickerStatus,
+  runSingleStep,
+  setClickerPusher,
+  CLICKER_KEYCODES,
+} from './services/auto-clicker';
+import {
+  recorderInfo,
+  installRecorder,
+  authorizeRecorder,
+  openRecorderUi,
+  startRecording,
+  pauseRecording,
+  stopRecording,
+  resetRecording,
+  recorderStatus,
+  pullRecording,
+  fetchFrame,
+} from './services/screen-recorder';
 
 /** 统一包装：捕获异常并转为 { ok, data, error } 结构 */
 type Handler = (...args: any[]) => Promise<any> | any;
@@ -172,6 +201,9 @@ export function registerIpc() {
 
   // 在线更新包下载进度（v1.0.22）
   setUpdateDownloadSink((p) => send(IPC.PUSH_UPDATE_DOWNLOAD, p));
+
+  // 连点器回放进度（v1.0.32）—— 回放是长任务，界面靠这个刷新"执行到第几步"
+  setClickerPusher((p) => send(IPC.PUSH_CLICKER_PROGRESS, p));
 
   /* ---------------- 环境 ---------------- */
 
@@ -1010,6 +1042,71 @@ export function registerIpc() {
       return { ok };
     }),
   );
+
+  /* ---------------- 自动连点器（v1.0.32） ---------------- */
+
+  ipcMain.handle(IPC.CLICKER_LIST, wrap(() => listScripts()));
+
+  // 返回 { script, list, created } —— script 是后端权威结果（id 由这里分配），
+  // 界面拿它回写草稿，避免靠「名字+步数」在列表里猜自己是哪一条
+  ipcMain.handle(IPC.CLICKER_SAVE, wrap((_e, script: ClickerScript) => saveScript(script)));
+
+  ipcMain.handle(IPC.CLICKER_DELETE, wrap((_e, id: string) => deleteScript(id)));
+
+  ipcMain.handle(IPC.CLICKER_RESET, wrap(() => resetScripts()));
+
+  // 录制数据 → 步骤预览（不落盘：用户在界面上确认/编辑后才保存）
+  ipcMain.handle(
+    IPC.CLICKER_FROM_RECORD,
+    wrap((_e, session: RecordedSession) => ({
+      steps: sessionToSteps(session),
+      meta: session?.meta ?? null,
+    })),
+  );
+
+  ipcMain.handle(
+    IPC.CLICKER_RUN,
+    wrap((_e, script: ClickerScript, serial?: string) => startClicker(script, serial)),
+  );
+
+  ipcMain.handle(IPC.CLICKER_STOP, wrap(() => stopClicker()));
+
+  ipcMain.handle(IPC.CLICKER_STATUS, wrap(() => clickerStatus()));
+
+  ipcMain.handle(IPC.CLICKER_RUN_STEP, wrap((_e, step: ClickerStep, serial?: string) =>
+    runSingleStep(step, serial),
+  ));
+
+  ipcMain.handle(IPC.CLICKER_KEYCODES, wrap(() => CLICKER_KEYCODES));
+
+  /* ---------------- 屏幕录制采集端（v1.0.32） ---------------- */
+
+  ipcMain.handle(IPC.RECORDER_INFO, wrap((_e, serial?: string) => recorderInfo(serial)));
+
+  ipcMain.handle(IPC.RECORDER_INSTALL, wrap((_e, serial?: string) => installRecorder(serial)));
+
+  ipcMain.handle(IPC.RECORDER_AUTHORIZE, wrap((_e, serial?: string) => authorizeRecorder(serial)));
+
+  ipcMain.handle(IPC.RECORDER_OPEN_UI, wrap((_e, serial?: string) => openRecorderUi(serial)));
+
+  ipcMain.handle(IPC.RECORDER_START, wrap((_e, serial?: string) => startRecording(serial)));
+
+  ipcMain.handle(
+    IPC.RECORDER_PAUSE,
+    wrap((_e, paused: boolean, serial?: string) => pauseRecording(!!paused, serial)),
+  );
+
+  ipcMain.handle(IPC.RECORDER_STOP, wrap((_e, serial?: string) => stopRecording(serial)));
+
+  ipcMain.handle(IPC.RECORDER_RESET, wrap((_e, serial?: string) => resetRecording(serial)));
+
+  ipcMain.handle(IPC.RECORDER_STATUS, wrap((_e, serial?: string) => recorderStatus(serial)));
+
+  ipcMain.handle(IPC.RECORDER_PULL, wrap((_e, serial?: string) => pullRecording(serial)));
+
+  ipcMain.handle(IPC.RECORDER_FRAME, wrap((_e, frameId: number, serial?: string) =>
+    fetchFrame(frameId, serial),
+  ));
 
   /* ---------------- 设置 ---------------- */
 

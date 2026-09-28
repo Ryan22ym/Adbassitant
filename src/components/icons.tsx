@@ -77,6 +77,29 @@ export const Icon = {
       <circle cx="12" cy="20" r="1" fill="currentColor" stroke="none" />
     </svg>
   ),
+  /**
+   * 自动连点器：手指 + 点击波纹。
+   *
+   * 刻意**不用「鼠标指针」** —— 这是 Android 设备工具，用户想到的是手指点屏幕；
+   * 鼠标图形会让人以为是电脑端的点击。波纹（同心弧）表达「点了不止一次」，
+   * 这是连点器的核心特征，与普通「点击」图标区分开。
+   */
+  clicker: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path
+        d="M10.4 11.2V6.6a1.7 1.7 0 013.4 0v4.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13.8 10.2h2.1a1.5 1.5 0 011.5 1.5v4.1a4.4 4.4 0 01-4.4 4.4h-1.9a4.4 4.4 0 01-4.4-4.4v-2.2l-1.3-2.2a1.6 1.6 0 012.7-1.7l1.3 2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M19.4 4.6a6.4 6.4 0 010 9" strokeLinecap="round" opacity="0.55" />
+      <path d="M21.9 2.4a9.8 9.8 0 010 13.6" strokeLinecap="round" opacity="0.3" />
+    </svg>
+  ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <circle cx="12" cy="12" r="3" />
@@ -126,6 +149,18 @@ export const Icon = {
   down: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <path d="M6 9.5l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  /**
+   * 在下方插入：横线 + 加号。
+   *
+   * 刻意做成「一条线 + 一个加号」而不是单纯加号 —— 加号太通用（新建、添加都可能是它），
+   * 带上那条横线才表达出「插到这一行的下面」，这是步骤表里最需要说清的一件事。
+   */
+  insertBelow: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4 6.5h16" strokeLinecap="round" />
+      <path d="M12 11v8M8 15h8" strokeLinecap="round" />
     </svg>
   ),
 };
@@ -228,6 +263,72 @@ export const ActionIcon: Record<QuickActionKind, ReactNode> = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <rect x="2.5" y="4" width="19" height="16" rx="2.5" />
       <path d="M7 9.5l3 2.5-3 2.5M13 15h4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+};
+
+/* ------------------------------------------------------------------ */
+/* 连点器步骤图标                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 9 种步骤的图形。
+ *
+ * 设计约束：这些图标会出现在**很窄**的步骤行左侧（13–14px），
+ * 所以每一格最多 2~3 笔 —— 笔画多了在这个尺寸下会糊成一坨。
+ * 因此 tap / longPress / swipe 用「同一个圆点 + 不同的辅助笔」表达，
+ * 让用户扫一眼就能看出「都是点击类，但这个是长按、那个是滑动」。
+ *
+ * | kind        | 图形              | 依据                                  |
+ * |-------------|-------------------|---------------------------------------|
+ * | tap         | 单圆点 + 小弧     | 「点一下」                            |
+ * | longPress   | 圆点 + 同心外圈   | 按住不放（外圈=持续）                  |
+ * | swipe       | 圆点 + 箭头轨迹   | 从 A 划到 B                           |
+ * | key         | 键盘键帽          | 按键                                  |
+ * | wait        | 时钟              | 等待                                  |
+ * | screenshot  | 相机（复用动作集） | ——                                    |
+ * | shell       | 终端（复用动作集） | ——                                    |
+ * | launch      | 播放三角（复用）   | 启动应用                              |
+ * | note        | 横线便签          | 纯说明，不执行                         |
+ */
+export const StepIcon: Record<string, ReactNode> = {
+  tap: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="11" cy="13" r="2.4" />
+      <path d="M16.6 8.4a7 7 0 010 9.2" strokeLinecap="round" />
+    </svg>
+  ),
+  longPress: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="2.2" />
+      <circle cx="12" cy="12" r="7" strokeDasharray="3.4 3" />
+    </svg>
+  ),
+  swipe: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4 17.5c4.5 0 5.5-11 12.4-11" strokeLinecap="round" />
+      <path d="M13.6 4.2l2.9 2.3-2.9 2.3" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="4" cy="17.5" r="1.3" fill="currentColor" stroke="none" />
+    </svg>
+  ),
+  key: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="3" y="7" width="18" height="10" rx="2.4" />
+      <path d="M7.5 12h9" strokeLinecap="round" />
+    </svg>
+  ),
+  wait: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="8.2" />
+      <path d="M12 7.6V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  screenshot: ActionIcon.screenshot,
+  shell: ActionIcon.shell,
+  launch: ActionIcon.launch,
+  note: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M5 8.5h14M5 12h14M5 15.5h8" strokeLinecap="round" />
     </svg>
   ),
 };

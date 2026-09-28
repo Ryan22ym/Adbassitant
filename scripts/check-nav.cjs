@@ -22,6 +22,7 @@ const CASES = [
   ['#/apps', '应用管理'],
   ['#/logcat', '实时 Logcat'],
   ['#/weaknet', '弱网模拟'],
+  ['#/clicker', '自动连点器'],
   ['#/command', '命令终端'],
   ['#/logs', '运行日志'],
   ['#/settings', '设置'],

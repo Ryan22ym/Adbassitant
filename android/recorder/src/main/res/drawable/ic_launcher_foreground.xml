@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  图标前景：一块"屏幕" + 一个录制红点。
+  用纯矢量，不需要为各密度出位图。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 屏幕外框 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,34h48a6,6 0 0 1 6,6v26a6,6 0 0 1 -6,6h-48a6,6 0 0 1 -6,-6v-26a6,6 0 0 1 6,-6zM30,40a2,2 0 0 0 -2,2v22a2,2 0 0 0 2,2h48a2,2 0 0 0 2,-2v-22a2,2 0 0 0 -2,-2z" />
+    <!-- 底座 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,76h20v4h-20z" />
+    <!-- 录制红点 -->
+    <path
+        android:fillColor="#FF5C5C"
+        android:pathData="M54,42m-8,0a8,8 0 1,0 16,0a8,8 0 1,0 -16,0" />
+</vector>

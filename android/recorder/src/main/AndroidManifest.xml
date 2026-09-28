@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 采集屏幕必须由 MediaProjection 授权（系统弹框，无法绕过） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14 (API 34) 起前台服务必须声明具体类型，否则启动即崩。
+         录屏归 mediaProjection 类型（系统另有专门约束：必须已有投影授权才允许跑） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 读前台应用（Activity 切换事件）。Android 5.0+ 起 getRunningTasks 需此权限，
+         但**第三方 App 实际拿不到**，所以前台事件走 UsageStats 兜底（见 ForegroundWatcher） -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.ScreenRecorder">
+
+        <!-- 主界面：内嵌画布（一块 SurfaceView 显示本机屏幕）+ 录制控制 -->
+        <activity
+            android:name=".RecorderActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|density"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 采集服务：持有 MediaProjection、跑 HTTP 控制端口。
+             前台类型 mediaProjection 是 Android 14 的硬性要求。 -->
+        <service
+            android:name=".CaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection">
+        </service>
+
+    </application>
+</manifest>

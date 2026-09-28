@@ -105,6 +105,31 @@ const IPC = {
   WEAKNET_VPN_INSTALL: 'weaknet:vpnInstall',
   WEAKNET_VPN_PARAMS: 'weaknet:vpnParams',
 
+  /* 自动连点器（v1.0.32） */
+  CLICKER_LIST: 'clicker:list',
+  CLICKER_SAVE: 'clicker:save',
+  CLICKER_DELETE: 'clicker:delete',
+  CLICKER_RESET: 'clicker:reset',
+  CLICKER_FROM_RECORD: 'clicker:fromRecord',
+  CLICKER_RUN: 'clicker:run',
+  CLICKER_STOP: 'clicker:stop',
+  CLICKER_STATUS: 'clicker:status',
+  CLICKER_RUN_STEP: 'clicker:runStep',
+  CLICKER_KEYCODES: 'clicker:keycodes',
+
+  /* 屏幕录制采集端（v1.0.32） */
+  RECORDER_INFO: 'recorder:info',
+  RECORDER_INSTALL: 'recorder:install',
+  RECORDER_AUTHORIZE: 'recorder:authorize',
+  RECORDER_START: 'recorder:start',
+  RECORDER_PAUSE: 'recorder:pause',
+  RECORDER_STOP: 'recorder:stop',
+  RECORDER_RESET: 'recorder:reset',
+  RECORDER_STATUS: 'recorder:status',
+  RECORDER_PULL: 'recorder:pull',
+  RECORDER_FRAME: 'recorder:frame',
+  RECORDER_OPEN_UI: 'recorder:openUi',
+
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
   LOG_LIST_ALL: 'log:listAll',
@@ -135,6 +160,8 @@ const IPC = {
   PUSH_AAB_OUTPUT: 'push:aabOutput',
   PUSH_AAB_DOWNLOAD: 'push:aabDownload',
   PUSH_UPDATE_DOWNLOAD: 'push:updateDownload',
+  PUSH_CLICKER_PROGRESS: 'push:clickerProgress',
+  PUSH_RECORDER_STATUS: 'push:recorderStatus',
 } as const;
 
 /**
@@ -362,6 +389,33 @@ const api = {
     invoke(IPC.WEAKNET_VPN_INSTALL, serial, apkPath),
   weaknetVpnParams: (params: any) => invoke(IPC.WEAKNET_VPN_PARAMS, params),
 
+  /* 自动连点器（v1.0.32） */
+  clickerList: () => invoke(IPC.CLICKER_LIST),
+  clickerSave: (script: any) => invoke(IPC.CLICKER_SAVE, script),
+  clickerDelete: (id: string) => invoke(IPC.CLICKER_DELETE, id),
+  clickerReset: () => invoke(IPC.CLICKER_RESET),
+  clickerFromRecord: (session: any) => invoke(IPC.CLICKER_FROM_RECORD, session),
+  clickerRun: (script: any, serial?: string) => invoke(IPC.CLICKER_RUN, script, serial),
+  clickerStop: () => invoke(IPC.CLICKER_STOP),
+  clickerStatus: () => invoke(IPC.CLICKER_STATUS),
+  clickerRunStep: (step: any, serial?: string) => invoke(IPC.CLICKER_RUN_STEP, step, serial),
+  clickerKeycodes: () => invoke(IPC.CLICKER_KEYCODES),
+
+  /* 屏幕录制采集端（v1.0.32）：设备侧 App 采集 → adb forward → 本机拉取 */
+  recorderInfo: (serial?: string) => invoke(IPC.RECORDER_INFO, serial),
+  recorderInstall: (serial?: string) => invoke(IPC.RECORDER_INSTALL, serial),
+  recorderAuthorize: (serial?: string) => invoke(IPC.RECORDER_AUTHORIZE, serial),
+  recorderOpenUi: (serial?: string) => invoke(IPC.RECORDER_OPEN_UI, serial),
+  recorderStart: (serial?: string) => invoke(IPC.RECORDER_START, serial),
+  recorderPause: (paused: boolean, serial?: string) =>
+    invoke(IPC.RECORDER_PAUSE, paused, serial),
+  recorderStop: (serial?: string) => invoke(IPC.RECORDER_STOP, serial),
+  recorderReset: (serial?: string) => invoke(IPC.RECORDER_RESET, serial),
+  recorderStatus: (serial?: string) => invoke(IPC.RECORDER_STATUS, serial),
+  recorderPull: (serial?: string) => invoke(IPC.RECORDER_PULL, serial),
+  recorderFrame: (frameId: number, serial?: string) =>
+    invoke(IPC.RECORDER_FRAME, frameId, serial),
+
   /* 日志 */
   getAllLogs: () => invoke(IPC.LOG_LIST_ALL),
   clearLogs: () => invoke(IPC.LOG_CLEAR),
@@ -408,6 +462,8 @@ const api = {
       IPC.PUSH_AAB_OUTPUT,
       IPC.PUSH_AAB_DOWNLOAD,
       IPC.PUSH_UPDATE_DOWNLOAD,
+      IPC.PUSH_CLICKER_PROGRESS,
+      IPC.PUSH_RECORDER_STATUS,
       'push:screenshot',
     ];
     if (!allowed.includes(channel as any)) {

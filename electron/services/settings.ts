@@ -14,6 +14,11 @@ const DEFAULTS: AppSettings = {
   updateChannel: 'stable',
   autoCheckUpdate: true,
   lastCheckAt: '',
+  // 连点器：1 倍速原速回放、默认开启 6px 随机偏移（模拟真实点击，防机械点击检测）
+  clickerSpeed: 1,
+  clickerJitterPx: 6,
+  // 与设备侧 ControlServer.DEFAULT_PORT 一致；改这里要同步改 android/recorder 里的常量
+  recorderPort: 18081,
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -68,6 +73,9 @@ function defaultDirs(): AppSettings {
     updateChannel: 'stable',
     autoCheckUpdate: true,
     lastCheckAt: '',
+    clickerSpeed: 1,
+    clickerJitterPx: 6,
+    recorderPort: 18081,
   };
 }
 

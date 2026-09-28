@@ -12,6 +12,7 @@ import ToolsPage from './pages/ToolsPage';
 import AppsPage from './pages/AppsPage';
 import LogcatPage from './pages/LogcatPage';
 import WeakNetworkPage from './pages/WeakNetworkPage';
+import AutoClickerPage from './pages/AutoClickerPage';
 import CommandPage from './pages/CommandPage';
 import LogsPage from './pages/LogsPage';
 import SettingsPage from './pages/SettingsPage';
@@ -23,6 +24,10 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/apps': { title: '应用管理', desc: '浏览应用列表，卸载、停止、清数据与提取 APK' },
   '/logcat': { title: '实时 Logcat', desc: '流式抓取设备日志，过滤与一键保存' },
   '/weaknet': { title: '弱网模拟', desc: '模拟带宽、延迟、抖动、丢包等真实网络状况' },
+  '/clicker': {
+    title: '自动连点器',
+    desc: '录制手机上的操作，编辑成脚本后倍速回放，支持随机偏移模拟真实点击',
+  },
   '/command': { title: '命令终端', desc: '直接执行任意 adb 命令' },
   '/logs': { title: '运行日志', desc: '实时查看操作记录并一键导出' },
   '/settings': { title: '设置', desc: '外观、默认目录与环境自检' },
@@ -193,6 +198,7 @@ export default function App() {
               <Route path="/apps" element={<AppsPage />} />
               <Route path="/logcat" element={<LogcatPage />} />
               <Route path="/weaknet" element={<WeakNetworkPage />} />
+              <Route path="/clicker" element={<AutoClickerPage />} />
               <Route path="/command" element={<CommandPage />} />
               <Route path="/logs" element={<LogsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

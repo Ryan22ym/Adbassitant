@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 主界面用深色（画布是黑的，浅色主题下会刺眼）；
+         与弱网 App 一样不引 Material 主题，只用系统内置的，省依赖 -->
+    <style name="Theme.ScreenRecorder" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0D1117</item>
+        <item name="android:colorBackground">#0D1117</item>
+        <item name="android:statusBarColor">#0D1117</item>
+        <item name="android:navigationBarColor">#0D1117</item>
+    </style>
+</resources>

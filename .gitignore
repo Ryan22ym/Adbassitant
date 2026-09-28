@@ -8,12 +8,14 @@ release/
 bin/
 
 # Android / Gradle 构建产物
+# ⚠️ 模块目录会新增（app / probe / recorder …），这里用通配兜住，
+#    否则每次加模块都要补一条，漏了就会把 ~30 MB 的 build/ 提交上去。
 android/.gradle/
+android/**/.gradle/
 android/build/
-android/app/build/
-android/probe/.gradle/
-android/probe/build/
+android/**/build/
 android/local.properties
+android/**/local.properties
 *.apk
 *.aab
 

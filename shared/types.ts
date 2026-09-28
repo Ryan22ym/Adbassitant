@@ -813,6 +813,200 @@ export interface AppSettings {
   autoCheckUpdate: boolean;
   /** 上次检查时间（ISO），仅用于界面展示 */
   lastCheckAt: string;
+  /*
+   * 自动连点器 / 屏幕录制（v1.0.32）
+   */
+  /** 连点器默认倍速（新建脚本时套用） */
+  clickerSpeed: number;
+  /** 连点器默认随机偏移半径（像素，0 = 关闭） */
+  clickerJitterPx: number;
+  /** 采集端控制端口（设备侧，adb forward 映射用） */
+  recorderPort: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* 自动连点器（v1.0.32）                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 一个脚本步骤。
+ *
+ * 设计原则：**坐标一律存归一化比例（0~1）**，不存像素。
+ * 理由：录制时的屏幕分辨率、回放时的设备分辨率、投屏窗口大小三者都可能不同；
+ * 只有「占屏幕宽高的比例」是这些场景都认的。回放时由执行器乘以目标分辨率。
+ */
+export type ClickerStep =
+  /** 点击 / 连击。count > 1 即连击（间隔 clickGapMs） */
+  | { kind: 'tap'; nx: number; ny: number; count?: number }
+  /** 长按 */
+  | { kind: 'longPress'; nx: number; ny: number; ms: number }
+  /** 滑动。durationMs 为滑动过程耗时 */
+  | { kind: 'swipe'; nx1: number; ny1: number; nx2: number; ny2: number; durationMs: number }
+  /** 按键。code 为 Android keycode（3=HOME、4=BACK、26=电源…） */
+  | { kind: 'key'; code: number }
+  /** 等待 */
+  | { kind: 'wait'; ms: number }
+  /** 截图（存到截图目录） */
+  | { kind: 'screenshot' }
+  /** 任意 adb shell 命令 */
+  | { kind: 'shell'; cmd: string }
+  /** 启动应用 */
+  | { kind: 'launch'; pkg: string }
+  /** 步骤分组说明（不执行，只用于在列表里分节，来自录制时的系统事件） */
+  | { kind: 'note'; text: string };
+
+export type ClickerStepKind = ClickerStep['kind'];
+
+/** 步骤在界面上的中文名 */
+export const CLICKER_STEP_LABEL: Record<ClickerStepKind, string> = {
+  tap: '点击',
+  longPress: '长按',
+  swipe: '滑动',
+  key: '按键',
+  wait: '等待',
+  screenshot: '截图',
+  shell: 'ADB 命令',
+  launch: '启动应用',
+  note: '说明',
+};
+
+/**
+ * 一套连点脚本。
+ *
+ * `steps` 是本体；`loop` / `speed` / `jitterPx` 是执行参数，
+ * 刻意与步骤分开存：调倍速不该改写脚本内容（用户随时能调回来）。
+ */
+export interface ClickerScript {
+  id: string;
+  name: string;
+  steps: ClickerStep[];
+  /** 循环次数。0 = 无限循环（直到手动停止） */
+  loop: number;
+  /** 倍速。1 = 原速；0.5 = 放慢一倍；2 = 快一倍 */
+  speed: number;
+  /**
+   * 「模拟真实点击」的随机偏移半径（像素）。
+   *
+   * 每次点击在 [0, jitterPx) 内随机偏移 x/y，避免每次都精确打在同一点 ——
+   * 不少游戏/风控会检测「坐标完全一致」的机械点击。
+   * 0 = 关闭（精确点击）。
+   */
+  jitterPx: number;
+  /** 创建时间（ISO） */
+  createdAt: string;
+  /** 最后修改时间（ISO） */
+  updatedAt: string;
+  /** 来源：录制生成 / 手工创建 */
+  source: 'record' | 'manual';
+  /** 若来自录制，记录当时的屏幕信息，便于回放时判断比例是否适配 */
+  recordedMeta?: ClickerRecordMeta;
+}
+
+/** 录制时的屏幕信息（用于换算校验） */
+export interface ClickerRecordMeta {
+  width: number;
+  height: number;
+  density: number;
+  landscape: boolean;
+}
+
+/** 运行状态快照 */
+export interface ClickerStatus {
+  running: boolean;
+  /** 当前脚本 id */
+  scriptId?: string;
+  /** 当前是第几轮（从 1 开始） */
+  round: number;
+  /** 当前执行到第几步（索引，0 基） */
+  index: number;
+  /** 总步数 */
+  total: number;
+  /** 已完成的步骤总数（跨轮累计，用于算进度） */
+  done: number;
+  startedAt: number;
+  /** 最近一条执行说明（如「点击 (540, 1200)」） */
+  note: string;
+  /** 出错信息（若有） */
+  error?: string;
+}
+
+/** 回放引擎推送给界面的进度 */
+export interface ClickerProgress {
+  scriptId: string;
+  round: number;
+  index: number;
+  total: number;
+  done: number;
+  /** 当前步骤的中文描述，直接显示 */
+  label: string;
+  /** 是否为错误终止 */
+  failed?: boolean;
+  error?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* 屏幕录制采集端（v1.0.32）                                            */
+/* ------------------------------------------------------------------ */
+
+/** 采集端 App 的探活结果 */
+export interface RecorderInfo {
+  /** 采集端是否就绪（能连上它的控制端口） */
+  ready: boolean;
+  /** 设备上是否已安装采集端 */
+  installed: boolean;
+  /** 已装版本号（versionCode） */
+  versionCode: number | null;
+  /** 是否已获得录屏授权 */
+  authorized: boolean;
+  /** 是否正在录制 */
+  recording: boolean;
+  protocol: number;
+  model?: string;
+  note: string;
+}
+
+/** 采集端会话快照 */
+export interface RecorderStatus {
+  recording: boolean;
+  paused: boolean;
+  capturing: boolean;
+  elapsedMs: number;
+  meta: ClickerRecordMeta;
+  touchCount: number;
+  frameCount: number;
+  sysCount: number;
+  note: string;
+}
+
+/** 采集端录制的一条触摸事件（原始数据，尚未转成步骤） */
+export interface RecordedTouch {
+  type: 'down' | 'move' | 'up';
+  nx: number;
+  ny: number;
+  t: number;
+}
+
+/** 采集端录制的一条系统事件 */
+export interface RecordedSysEvent {
+  kind: string;
+  pkg: string;
+  t: number;
+  label: string;
+}
+
+/** 采集端录制的一张关键帧 */
+export interface RecordedFrame {
+  t: number;
+  id: number;
+  bytes: number;
+}
+
+/** 拉取到的完整录制数据 */
+export interface RecordedSession {
+  meta: ClickerRecordMeta;
+  touches: RecordedTouch[];
+  frames: RecordedFrame[];
+  sysEvents: RecordedSysEvent[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -937,6 +1131,37 @@ export const IPC = {
   WEAKNET_VPN_INSTALL: 'weaknet:vpnInstall',
   WEAKNET_VPN_PARAMS: 'weaknet:vpnParams',
 
+  /* 自动连点器（v1.0.32） */
+  CLICKER_LIST: 'clicker:list',
+  CLICKER_SAVE: 'clicker:save',
+  CLICKER_DELETE: 'clicker:delete',
+  CLICKER_RESET: 'clicker:reset',
+  /** 把录制数据转成脚本（不落盘，只回给界面预览） */
+  CLICKER_FROM_RECORD: 'clicker:fromRecord',
+  /** 回放 */
+  CLICKER_RUN: 'clicker:run',
+  CLICKER_STOP: 'clicker:stop',
+  CLICKER_STATUS: 'clicker:status',
+  /** 立即执行单步（调试用：验证一个步骤写对了没） */
+  CLICKER_RUN_STEP: 'clicker:runStep',
+  /** 可用的 Android keycode 列表 */
+  CLICKER_KEYCODES: 'clicker:keycodes',
+
+  /* 屏幕录制采集端（v1.0.32） */
+  RECORDER_INFO: 'recorder:info',
+  RECORDER_INSTALL: 'recorder:install',
+  RECORDER_AUTHORIZE: 'recorder:authorize',
+  RECORDER_START: 'recorder:start',
+  RECORDER_PAUSE: 'recorder:pause',
+  RECORDER_STOP: 'recorder:stop',
+  RECORDER_RESET: 'recorder:reset',
+  RECORDER_STATUS: 'recorder:status',
+  RECORDER_PULL: 'recorder:pull',
+  /** 取某张关键帧的 JPEG（base64，供界面显示缩略图） */
+  RECORDER_FRAME: 'recorder:frame',
+  /** 打开采集端界面（让用户在手机上看画布） */
+  RECORDER_OPEN_UI: 'recorder:openUi',
+
   /* 日志 */
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
@@ -975,6 +1200,10 @@ export const IPC = {
   PUSH_AAB_DOWNLOAD: 'push:aabDownload',
   /** 在线更新包下载进度（v1.0.22） */
   PUSH_UPDATE_DOWNLOAD: 'push:updateDownload',
+  /** 连点器回放进度（v1.0.32） */
+  PUSH_CLICKER_PROGRESS: 'push:clickerProgress',
+  /** 采集端录制状态变化（v1.0.32） */
+  PUSH_RECORDER_STATUS: 'push:recorderStatus',
 } as const;
 
 /* ------------------------------------------------------------------ */
