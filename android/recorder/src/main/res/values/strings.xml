@@ -2,7 +2,9 @@
     <string name="app_name">屏幕录制</string>
     <string name="notify_channel">屏幕录制</string>
     <string name="notify_title">屏幕录制中</string>
-    <string name="notify_text">正在采集屏幕画面与触摸操作，电脑端可随时拉取</string>
+    <string name="notify_text">正在后台采集屏幕画面，电脑端可随时拉取</string>
+    <string name="notify_title_paused">屏幕录制 · 已暂停</string>
+    <string name="notify_text_paused">已暂停采集，电脑端可随时恢复</string>
     <string name="ctrl_channel">控制通道</string>
     <string name="ctrl_title">屏幕录制 · 控制通道待命</string>
     <string name="ctrl_text">等待电脑端连接（未在采集）</string>

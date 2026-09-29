@@ -2,9 +2,19 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { runAdb, ensureDevice, log, fileSize } from './adb';
 import { getSettings } from './settings';
+import {
+  startCapture,
+  stopCapture,
+  setPaused as setTouchPaused,
+  capturedTouches,
+  resetCapture,
+  prepare as prepareTouch,
+  type CapturedTouch,
+} from './touch-capture';
 import type {
   RecorderInfo,
   RecorderStatus,
+  RecorderPrepare,
   RecordedSession,
   RecordedTouch,
   RecordedFrame,
@@ -20,13 +30,25 @@ import type {
  * 在 127.0.0.1:18081 上开了个 HTTP 控制端口。本文件通过
  * `adb forward tcp:18081 tcp:18081` 把它映射到电脑，用普通 HTTP 调用。
  *
- * ## 为什么采集必须放在设备侧
+ * ## 数据来源的分工（v1.0.33 起的改造）
  *
- * Android 5.0 起，第三方 App **读不到自己以外的触摸事件**
- * （要 INJECT_EVENTS，只有系统签名或 root 有）。所以在电脑侧"看"用户
- * 在手机上的操作是不可能的。可行路径只有一个：让设备侧 App 自己
- * 用 MediaProjection 把屏幕画面采集到自己的窗口里，用户在这个窗口上操作 ——
- * 触摸事件落在它自己身上，天然就拿得到。
+ * | 数据       | 来源                          | 为什么                          |
+ * |------------|-------------------------------|---------------------------------|
+ * | 屏幕画面   | 设备侧 App（MediaProjection）  | 只有系统 API 能读画面            |
+ * | 前台 App   | 设备侧 App（UsageStats）       | 同上                            |
+ * | **触摸**   | **电脑侧 `adb getevent`**      | shell 在 input 组，能读全局触摸   |
+ *
+ * 为什么触摸要挪到电脑侧：第三方 App 读不到自己以外的触摸
+ * （见 `touch-capture.ts` 的详细说明）。原先只能在采集端画布上操作，
+ * 用户没法"一边用别的 App 一边录"。改由电脑读 `getevent` 后，
+ * 设备侧 App 退居后台，用户在**任意 App**上操作都会被采到。
+ *
+ * ## 编排：电脑是唯一的主控
+ *
+ * 「开始录制」= 电脑同时做两件事：
+ *   1. `POST /start` 让设备侧开始采集画面；
+ *   2. `startCapture()` 起 `getevent` 子进程采触摸。
+ * 任一失败都要回滚另一件，否则会出现「只有画面没触摸」这种半截状态。
  *
  * ## 方向：forward 不是 reverse
  *
@@ -321,13 +343,77 @@ export async function authorizeRecorder(serial?: string): Promise<boolean> {
   return true;
 }
 
-/** 只把界面拉到前台（不请求授权）—— 让用户能看到那块画布 */
+/**
+ * 只把界面拉到前台（不请求授权）。
+ *
+ * ⚠️ **不要再在「开始录制」里调它** —— 那正是「一点开始就跳回录制界面」
+ * 的根因。现在录制全程由电脑控制、设备侧退居后台，用户需要在**任意 App**
+ * 上操作，任何把采集端拉到前台的动作都会打断他。
+ *
+ * 保留只是为了：「采集端状态」里点一下看预览，或排查问题时手动打开。
+ */
 export async function openRecorderUi(serial?: string): Promise<boolean> {
   const s = await ensureDevice(serial);
   const res = await runAdb(['-s', s, 'shell', 'am', 'start', '-n', RECORDER_ACTIVITY], {
     source: '录制', silent: true, timeout: 12000,
   });
   return res.ok;
+}
+
+/**
+ * 把采集端界面**退回后台**。
+ *
+ * 用途：万一用户手动打开了采集端、又不想被它挡着，
+ * 电脑端可以主动把它推回去。用 `am start` 同一个 Activity 再配合
+ * HOME 键等效操作 —— 但直接按 HOME 最稳（不需要知道 Activity 名）。
+ *
+ * ⚠️ 按 HOME 会让用户回到桌面而不是他原来的 App。真正正确的做法是
+ * 在设备侧 `moveTaskToBack`（授权后已经自动做了）。这里只作兜底，
+ * 调用前请确认用户能接受"回到桌面"。
+ */
+export async function backgroundRecorderUi(serial?: string): Promise<boolean> {
+  const s = await ensureDevice(serial);
+  const res = await runAdb(['-s', s, 'shell', 'input', 'keyevent', 'KEYCODE_HOME'], {
+    source: '录制', silent: true, timeout: 10000,
+  });
+  return res.ok;
+}
+
+/**
+ * 录制前置检查：报告「画面链路 + 触摸链路」各自是否可用。
+ *
+ * 界面在点「开始录制」之前调它 —— 把「这台设备读不到触摸」这类问题
+ * **提前**暴露出来，而不是录完了才发现触摸是空的。
+ */
+export async function prepareRecorder(serial?: string): Promise<RecorderPrepare> {
+  const s = await ensureDevice(serial);
+  const info = await recorderInfo(s);
+  if (!info.installed) {
+    return {
+      ok: false,
+      installed: false,
+      authorized: false,
+      touchOk: false,
+      touchNote: '',
+      note: '设备上还没装屏幕录制采集端',
+    };
+  }
+  const prep = await prepareTouch(s);
+  const ok = info.ready && prep.ok;
+  return {
+    ok,
+    installed: true,
+    authorized: info.authorized,
+    touchOk: prep.ok,
+    touchNote: prep.note,
+    note: !info.ready
+      ? info.note
+      : !info.authorized
+        ? '还没获得录屏授权 —— 点「授权录屏」后在手机上确认一次即可，之后不用再点'
+        : !prep.ok
+          ? `触摸采集不可用：${prep.note}`
+          : '画面与触摸两条链路都就绪，可以直接开始录制',
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -342,8 +428,27 @@ async function requireReady(serial?: string): Promise<string> {
   return s;
 }
 
+/**
+ * 开始录制 —— 电脑端一次性拉起**两路**采集。
+ *
+ * 两路都成了才算成功；后续那路失败要**回滚前面那路**，
+ * 否则会留下「画面在采、触摸没采」或反过来的半截状态，
+ * 拉回来的数据缺一半还看不出来。
+ *
+ * 顺序：先探触摸节点（纯读，失败代价最低）→ 再起设备侧 → 最后起 getevent。
+ * 这样最可能失败的（触摸节点探测）摆在最前面，不会白起设备侧。
+ */
 export async function startRecording(serial?: string): Promise<RecorderStatus> {
   const s = await requireReady(serial);
+
+  // 1) 先确认这台设备能读触摸 —— 读不到就没必要往下走
+  const prep = await prepareTouch(s);
+  if (!prep.ok) {
+    throw new Error(`无法采集触摸：${prep.note}`);
+  }
+  log('info', '录制', prep.note);
+
+  // 2) 设备侧开始采集画面
   const res = await httpPost('/start', {}, 10000);
   const j = parseJson<Record<string, unknown>>(res.body);
   if (!j.ok) {
@@ -353,26 +458,87 @@ export async function startRecording(serial?: string): Promise<RecorderStatus> {
     }
     throw new Error(String(j.error || '开始录制失败'));
   }
-  log('info', '录制', '已在设备侧开始录制');
+
+  // 3) 电脑侧开始采触摸。失败要回滚设备侧，不能留半截状态
+  try {
+    const status = await recorderStatus(s);
+    await startCapture(s, {
+      screenWidth: status.meta.width,
+      screenHeight: status.meta.height,
+    });
+  } catch (e) {
+    try {
+      await httpPost('/stop', {}, 8000);
+    } catch {
+      /* 回滚失败就把原始错误抛出去，别掩盖 */
+    }
+    throw new Error(`设备侧已开始但触摸采集起不来，已回滚：${(e as Error).message}`);
+  }
+
+  log('info', '录制', '已在设备侧与电脑侧同时开始采集（画面 + 触摸）');
   return recorderStatus(s);
 }
 
+/**
+ * 暂停 / 恢复 —— 两路同步。
+ *
+ * 顺序：**先停触摸再停画面**？不 —— 反了。正确顺序是
+ * **先让两边都进入暂停**，任何一路先停都会导致另一路多记一段。
+ * 由于两边都是"置标记"而非"断流"，实际差别只在毫秒级；
+ * 这里统一先设备侧后电脑侧，与 start 的顺序对称（先设备后电脑）。
+ */
 export async function pauseRecording(paused: boolean, serial?: string): Promise<RecorderStatus> {
   const s = await requireReady(serial);
   await httpPost('/pause', { paused }, 8000);
+  setTouchPaused(paused);
   return recorderStatus(s);
 }
 
+/**
+ * 停止录制 —— 两路一起收。
+ *
+ * 先停触摸：`getevent` 子进程要收干净（否则设备上留个 shell 挂着）。
+ * 再停设备侧：HTTP 断开就行，不会有残留进程。
+ */
 export async function stopRecording(serial?: string): Promise<RecorderStatus> {
   const s = await requireReady(serial);
+
+  const touchCount = (await stopCapture()).length;
   await httpPost('/stop', {}, 8000);
-  log('info', '录制', '已停止设备侧录制');
+
+  log('info', '录制', `已停止：电脑侧触摸 ${touchCount} 条 + 设备侧画面`);
   return recorderStatus(s);
 }
 
 export async function resetRecording(serial?: string): Promise<void> {
   const s = await requireReady(serial);
+  // 电脑侧如果还在采，先收干净再清
+  if (capturedTouches().length > 0) await stopCapture();
+  resetCapture();
   await httpPost('/reset', {}, 8000);
+}
+
+/**
+ * 彻底放弃本次录制（换设备、关页面时调）。
+ *
+ * 与 [stopRecording] 的区别：这个**不留数据**，纯粹是把资源收干净。
+ * 出错也要保证两条链路都断 —— 所以各自 try/catch，不让一个失败
+ * 把另一个漏掉（漏了就是设备上挂着一个 getevent 进程）。
+ */
+export async function cancelRecording(serial?: string): Promise<void> {
+  try {
+    await stopCapture();
+  } catch (e) {
+    log('warn', '录制', `停止触摸采集失败：${(e as Error).message}`);
+  }
+  resetCapture();
+  try {
+    const s = await ensureDevice(serial);
+    await httpPost('/stop', {}, 6000);
+    void s;
+  } catch {
+    /* 设备可能已经断了，忽略 */
+  }
 }
 
 export async function recorderStatus(serial?: string): Promise<RecorderStatus> {
@@ -381,6 +547,8 @@ export async function recorderStatus(serial?: string): Promise<RecorderStatus> {
   const res = await httpGet('/status', 6000);
   const j = parseJson<Record<string, unknown>>(res.body);
   const meta = (j.meta || {}) as Record<string, unknown>;
+  // 触摸计数以**电脑侧**为准：设备侧那块计数已经废了（它只看自己画布）
+  const touchCount = capturedTouches().length;
   return {
     recording: !!j.recording,
     paused: !!j.paused,
@@ -392,7 +560,7 @@ export async function recorderStatus(serial?: string): Promise<RecorderStatus> {
       density: Number(meta.density) || 0,
       landscape: !!meta.landscape,
     },
-    touchCount: Number(j.touchCount) || 0,
+    touchCount: touchCount > 0 ? touchCount : Number(j.touchCount) || 0,
     frameCount: Number(j.frameCount) || 0,
     sysCount: Number(j.sysCount) || 0,
     note: typeof j.note === 'string' ? j.note : '',
@@ -402,9 +570,15 @@ export async function recorderStatus(serial?: string): Promise<RecorderStatus> {
 /**
  * 拉取完整录制数据。
  *
- * 拉两个端点拼起来（/events 太重且 frame 只有元信息，/touches 轻）：
- * 其实 /events 已经包含全部，但它把帧的 id 也带上了，
- * 这里用 /touches + /events 各取所需反而更清晰 —— 不用在一个大数组里筛。
+ * 触摸来自**电脑侧**（`getevent`），画面与系统事件来自**设备侧**。
+ * 两路的时间基准要对齐：
+ *   · 设备侧 `t` = 相对它 `/start` 时刻的毫秒（暂停不累加）；
+ *   · 电脑侧 `t` = 相对 `getevent` 起来那一刻的毫秒。
+ *
+ * 两个起算点相差约 100~300ms（先发 HTTP 再起子进程）。这个偏差
+ * 对连点器回放的影响很小（脚本按步骤顺序执行，不是在绝对时刻插桩），
+ * 所以这里**只做日志提示，不强行平移** —— 强行平移要引入一个估算
+ * 常数，反而把事情搞复杂。
  */
 export async function pullRecording(serial?: string): Promise<RecordedSession> {
   const s = await requireReady(serial);
@@ -424,14 +598,29 @@ export async function pullRecording(serial?: string): Promise<RecordedSession> {
     landscape: !!metaRaw.landscape,
   };
 
-  const touches: RecordedTouch[] = Array.isArray(touchJson.touches)
-    ? (touchJson.touches as Record<string, unknown>[]).map((t) => ({
-        type: String(t.type) as RecordedTouch['type'],
-        nx: Number(t.nx) || 0,
-        ny: Number(t.ny) || 0,
-        t: Number(t.t) || 0,
-      }))
-    : [];
+  // 触摸优先用电脑侧采集的（覆盖全 App）；电脑侧为空才退回设备侧的老数据
+  const localTouches = capturedTouches();
+  let touches: RecordedTouch[];
+  if (localTouches.length > 0) {
+    touches = localTouches.map((t: CapturedTouch) => ({
+      type: t.type,
+      nx: t.nx,
+      ny: t.ny,
+      t: t.t,
+    }));
+  } else {
+    touches = Array.isArray(touchJson.touches)
+      ? (touchJson.touches as Record<string, unknown>[]).map((t) => ({
+          type: String(t.type) as RecordedTouch['type'],
+          nx: Number(t.nx) || 0,
+          ny: Number(t.ny) || 0,
+          t: Number(t.t) || 0,
+        }))
+      : [];
+    if (touches.length > 0) {
+      log('warn', '录制', '电脑侧触摸为空，回退到设备侧采集的触摸数据（可能只有采集端画布上的操作）');
+    }
+  }
 
   // 从合并时间线里挑出帧与系统事件
   const frames: RecordedFrame[] = [];
@@ -460,7 +649,8 @@ export async function pullRecording(serial?: string): Promise<RecordedSession> {
   log(
     'success',
     '录制',
-    `已拉取录制数据：触摸 ${touches.length} 条 / 帧 ${frames.length} 张 / 事件 ${sysEvents.length} 条`,
+    `已拉取录制数据：触摸 ${touches.length} 条（${localTouches.length > 0 ? '电脑侧' : '设备侧'}）/ ` +
+      `帧 ${frames.length} 张 / 事件 ${sysEvents.length} 条`,
   );
 
   return { meta, touches, frames, sysEvents };

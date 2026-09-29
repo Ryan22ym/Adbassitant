@@ -382,7 +382,11 @@ export default function AutoClickerPage() {
         silent: true,
       });
       if (ok) {
-        toast('info', '已在手机上打开采集端', '请在手机上点「授权录屏」并在系统弹窗里确认');
+        toast(
+          'info',
+          '已在手机上打开采集端',
+          '请在系统弹窗里点「立即开始」确认 —— 这是唯一需要在手机上操作的一步，确认后手机会自动退回',
+        );
         // 授权是手动的，轮询几次把结果收回来
         let n = 0;
         const id = window.setInterval(async () => {
@@ -398,6 +402,15 @@ export default function AutoClickerPage() {
     }
   };
 
+  /**
+   * 开始录制。
+   *
+   * ⚠️ **不要再调 `openRecorderUi()`** —— 那是「一点开始就跳回采集端界面」
+   * 的根因。现在录制全程由电脑端控制：
+   *   · 画面：设备侧 App 在**后台**用 MediaProjection 采；
+   *   · 触摸：电脑侧 `adb getevent` 采（所以能覆盖任意 App）。
+   * 点完之后手机停在原地即可，用户直接切到要操作的 App 就行。
+   */
   const startRec = async () => {
     setRecBusy(true);
     try {
@@ -406,8 +419,11 @@ export default function AutoClickerPage() {
       });
       if (st) setRecStatus(st);
       setSession(null);
-      toast('success', '开始录制', '现在请在手机上的采集端窗口里操作，操作会被完整记录');
-      void openRecorderUi();
+      toast(
+        'success',
+        '开始录制',
+        '现在直接切到手机上任意 App 操作即可 —— 采集在后台进行，不会再跳回采集端',
+      );
     } catch (e) {
       toast('error', '开始录制失败', (e as Error).message);
     } finally {
@@ -415,6 +431,7 @@ export default function AutoClickerPage() {
     }
   };
 
+  /** 只用于「看一眼采集端预览」或排障，正常录制流程不需要 */
   const openRecorderUi = async () => {
     await call<boolean>(() => window.adbApi.recorderOpenUi(current?.serial), { silent: true });
   };
@@ -1202,19 +1219,30 @@ interface RecordPanelProps {
 }
 
 /**
- * 采集端面板。
+ * 录制面板。
  *
- * ## 为什么需要设备侧 App
+ * ## 两条采集链路（v1.0.33 起的改造）
  *
- * Android 5.0 起第三方 App **读不到自己以外的触摸事件**（要 INJECT_EVENTS，
- * 只有系统签名或 Root 有）。所以「在电脑上看用户在手机上点了哪」这条路根本不通 ——
- * 唯一可行的是：设备侧 App 自己拿 MediaProjection 把屏幕内容采集到自己的窗口里，
- * 用户**在那个窗口上操作**，触摸事件落在它自己身上，天然就拿得到。
+ * | 数据       | 谁采                          | 为什么                          |
+ * |------------|-------------------------------|---------------------------------|
+ * | 屏幕画面   | 设备侧 App（MediaProjection）  | 只有系统 API 能读画面            |
+ * | 前台 App   | 设备侧 App（UsageStats）       | 同上                            |
+ * | **触摸**   | **电脑侧 `adb getevent`**      | shell 在 input 组，能读全局触摸   |
+ *
+ * 之所以触摸要挪到电脑侧：第三方 App 读不到自己以外的触摸
+ * （需 INJECT_EVENTS，仅系统签名/Root 有）。所以「在手机上用任意 App、
+ * 电脑这边把操作录下来」唯一可行的路径就是电脑执行 `adb shell getevent`。
+ *
+ * ## 对用户意味着什么
+ *
+ * 点「开始录制」之后**手机不会再跳回采集端** —— 设备侧 App 退到后台继续采画面，
+ * 用户直接切到要操作的 App 就行。开始 / 暂停 / 停止全部在电脑这边点。
  *
  * ## 三步式流程
  *
- * 装 → 授权 → 录。每一步都可能被卡住（没装 / 没授权 / 服务没起来），
- * 所以这里按状态**只显示当前该做的那一步**，而不是把三个按钮一起摆出来让用户猜。
+ * 装 → 授权 → 录。「授权」是唯一必须在手机上操作的一步（Android 的录屏
+ * 授权框只能由 Activity 请求用户确认，没有自动化余地），且**只需一次**。
+ * 按状态只显示当前该做的那一步，不把三个按钮一起摆出来让用户猜。
  */
 function RecordPanel({
   info,
@@ -1324,10 +1352,13 @@ function RecordPanel({
               <ol className="ck-rec-steps">
                 <li>点右上「授权录屏」——手机上会打开采集端并弹出系统授权框</li>
                 <li>在手机上点「立即开始」/「开始录制」确认（Android 要求录屏必须由用户亲自同意）</li>
-                <li>回到这里状态会变绿，然后就能开始录制了</li>
+                <li>
+                  确认后手机**会自动退回你原来在用的界面**，本工具状态变绿，之后就能开始录制了
+                </li>
               </ol>
               <Notice tone="accent">
-                授权只在<strong>第一次</strong>需要。之后只要不卸载采集端，start/stop 都可以直接从电脑发起。
+                授权只在<strong>第一次</strong>需要，且只有这一步要在手机上点。之后开始 / 暂停 /
+                停止全部由电脑控制，手机端无需任何交互。
               </Notice>
             </>
           )}
@@ -1362,8 +1393,10 @@ function RecordPanel({
 
           {recording && (
             <Notice tone="accent">
-              现在请<strong>在手机上的采集端窗口里操作</strong> —— 只有落在这个窗口上的触摸才会被记录。
-              切到别的 App 后的操作录不到（那是 Android 的硬限制，只有 Root 能破）。
+              现在直接在手机上<strong>切到你要操作的 App</strong> 操作即可 —— 触摸由电脑侧
+              <code>getevent</code> 采集，覆盖任何界面；画面在后台录制。不会再跳回采集端。
+              <br />
+              录完后回到这里点「停止录制」。
             </Notice>
           )}
 
@@ -1371,7 +1404,7 @@ function RecordPanel({
           {!recording && (status?.touchCount ?? 0) > 0 && (
             <div className="ck-rec-pull">
               <span className="text-dim">
-                设备上现有 <strong>{status?.touchCount}</strong> 条触摸、
+                已采到 <strong>{status?.touchCount}</strong> 条触摸、
                 <strong>{status?.frameCount}</strong> 张关键帧待取。
               </span>
               <Button variant="primary" onClick={onPull} loading={busy}>

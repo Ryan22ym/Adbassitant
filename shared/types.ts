@@ -1009,6 +1009,28 @@ export interface RecordedSession {
   sysEvents: RecordedSysEvent[];
 }
 
+/**
+ * 录制前置检查结果（v1.0.33）。
+ *
+ * 触屏采集改到电脑侧（`adb getevent`）之后，「装了没 / 授权没 / 读得到触摸没」
+ * 成了三个**互相独立**的前提，任何一个不满足都录不出可用脚本。
+ * 这个结构让界面能一次把三条链路的状态都摆出来。
+ */
+export interface RecorderPrepare {
+  /** 三条链路都 OK */
+  ok: boolean;
+  /** 采集端装了没 */
+  installed: boolean;
+  /** 录屏授权拿到没（首次需在手机上点一次，之后免） */
+  authorized: boolean;
+  /** 电脑侧能否读到触摸节点（`getevent`） */
+  touchOk: boolean;
+  /** 触摸链路的说明（节点名 / 量程 / 不可用原因） */
+  touchNote: string;
+  /** 面向用户的一句话总结 */
+  note: string;
+}
+
 /* ------------------------------------------------------------------ */
 /* IPC 通道名（统一常量，避免拼写错误）                                 */
 /* ------------------------------------------------------------------ */
@@ -1147,7 +1169,7 @@ export const IPC = {
   /** 可用的 Android keycode 列表 */
   CLICKER_KEYCODES: 'clicker:keycodes',
 
-  /* 屏幕录制采集端（v1.0.32） */
+  /* 屏幕录制采集端（v1.0.32；v1.0.33 起改为电脑端全程控制） */
   RECORDER_INFO: 'recorder:info',
   RECORDER_INSTALL: 'recorder:install',
   RECORDER_AUTHORIZE: 'recorder:authorize',
@@ -1159,8 +1181,14 @@ export const IPC = {
   RECORDER_PULL: 'recorder:pull',
   /** 取某张关键帧的 JPEG（base64，供界面显示缩略图） */
   RECORDER_FRAME: 'recorder:frame',
-  /** 打开采集端界面（让用户在手机上看画布） */
+  /** 打开采集端界面（只用于看预览 / 排障，**不在录制流程里调**） */
   RECORDER_OPEN_UI: 'recorder:openUi',
+  /** 把采集端界面退回后台（兜底用，注意会让用户回到桌面） */
+  RECORDER_BACKGROUND_UI: 'recorder:backgroundUi',
+  /** 录制前置检查：画面链路 + 触摸链路各自是否可用 */
+  RECORDER_PREPARE: 'recorder:prepare',
+  /** 放弃本次录制（收干净资源、不留数据） */
+  RECORDER_CANCEL: 'recorder:cancel',
 
   /* 日志 */
   LOG_EXPORT: 'log:export',

@@ -216,10 +216,21 @@ class ControlServer(
                     if (body.isNotBlank()) JSONObject(body).optBoolean("paused", true) else true
                 } catch (_: Exception) { true }
                 RecordingStore.setPaused(p)
+                // 文案用**请求的意图**（p），状态用**实际生效值**（isPaused）。
+                // 未在录制时 setPaused 会被忽略，两者会不一致 —— 这时别硬说
+                // "已暂停"，直接说明现在没在录，免得电脑侧显示的状态自相矛盾。
+                val active = RecordingStore.isRecording()
                 json(200, JSONObject().apply {
                     put("ok", true)
                     put("paused", RecordingStore.isPaused())
-                    put("message", if (p) "已暂停" else "已恢复")
+                    put(
+                        "message",
+                        when {
+                            !active -> "当前没有在录制，暂停请求已忽略"
+                            p -> "已暂停"
+                            else -> "已恢复"
+                        },
+                    )
                 })
             }
 

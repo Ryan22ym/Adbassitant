@@ -117,7 +117,7 @@ const IPC = {
   CLICKER_RUN_STEP: 'clicker:runStep',
   CLICKER_KEYCODES: 'clicker:keycodes',
 
-  /* 屏幕录制采集端（v1.0.32） */
+  /* 屏幕录制采集端（v1.0.32；v1.0.33 起改为电脑端全程控制） */
   RECORDER_INFO: 'recorder:info',
   RECORDER_INSTALL: 'recorder:install',
   RECORDER_AUTHORIZE: 'recorder:authorize',
@@ -129,6 +129,9 @@ const IPC = {
   RECORDER_PULL: 'recorder:pull',
   RECORDER_FRAME: 'recorder:frame',
   RECORDER_OPEN_UI: 'recorder:openUi',
+  RECORDER_BACKGROUND_UI: 'recorder:backgroundUi',
+  RECORDER_PREPARE: 'recorder:prepare',
+  RECORDER_CANCEL: 'recorder:cancel',
 
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
@@ -401,16 +404,22 @@ const api = {
   clickerRunStep: (step: any, serial?: string) => invoke(IPC.CLICKER_RUN_STEP, step, serial),
   clickerKeycodes: () => invoke(IPC.CLICKER_KEYCODES),
 
-  /* 屏幕录制采集端（v1.0.32）：设备侧 App 采集 → adb forward → 本机拉取 */
+  /*
+   * 屏幕录制采集端：画面由设备侧 App 采（MediaProjection），
+   * 触摸由电脑侧 `adb getevent` 采 —— 两条链路都由电脑端编排。
+   */
   recorderInfo: (serial?: string) => invoke(IPC.RECORDER_INFO, serial),
   recorderInstall: (serial?: string) => invoke(IPC.RECORDER_INSTALL, serial),
   recorderAuthorize: (serial?: string) => invoke(IPC.RECORDER_AUTHORIZE, serial),
   recorderOpenUi: (serial?: string) => invoke(IPC.RECORDER_OPEN_UI, serial),
+  recorderBackgroundUi: (serial?: string) => invoke(IPC.RECORDER_BACKGROUND_UI, serial),
+  recorderPrepare: (serial?: string) => invoke(IPC.RECORDER_PREPARE, serial),
   recorderStart: (serial?: string) => invoke(IPC.RECORDER_START, serial),
   recorderPause: (paused: boolean, serial?: string) =>
     invoke(IPC.RECORDER_PAUSE, paused, serial),
   recorderStop: (serial?: string) => invoke(IPC.RECORDER_STOP, serial),
   recorderReset: (serial?: string) => invoke(IPC.RECORDER_RESET, serial),
+  recorderCancel: (serial?: string) => invoke(IPC.RECORDER_CANCEL, serial),
   recorderStatus: (serial?: string) => invoke(IPC.RECORDER_STATUS, serial),
   recorderPull: (serial?: string) => invoke(IPC.RECORDER_PULL, serial),
   recorderFrame: (frameId: number, serial?: string) =>

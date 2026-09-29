@@ -21,7 +21,10 @@
         android:supportsRtl="false"
         android:theme="@style/Theme.ScreenRecorder">
 
-        <!-- 主界面：内嵌画布（一块 SurfaceView 显示本机屏幕）+ 录制控制 -->
+        <!-- 授权与状态页（**不再是录制画布**）：
+             只负责首次弹 MediaProjection 授权框，拿到结果后立刻 moveTaskToBack
+             退回后台，让用户回到他原来在用的 App。
+             开始/暂停/停止全部由电脑端经 HTTP 控制端口下发，这里不参与。 -->
         <activity
             android:name=".RecorderActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|density"

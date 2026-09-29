@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.0.32",
+  "version": "1.0.33",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -56,6 +56,8 @@
     "check:install-modes": "python scripts/run-electron.py scripts/check-install-modes.cjs --watch ui-shots/_installmodes.log --until \"INSTALL MODES CHECK DONE\" --timeout 600",
     "check:quick-actions": "python scripts/run-electron.py scripts/check-quick-actions.cjs --watch ui-shots/_quickactions.log --until \"QUICK ACTION CHECK DONE\" --timeout 600",
     "check:clicker": "python scripts/run-electron.py scripts/check-clicker.cjs --watch ui-shots/_clicker.log --until \"失败\" --timeout 300",
+    "check:touch-capture": "node scripts/check-touch-capture.cjs",
+    "check:touch-capture:device": "python scripts/run-electron.py scripts/check-touch-capture-device.cjs --watch ui-shots/_touchcap.log --until \"TOUCH CAP CHECK DONE\" --timeout 240",
     "check:logcat-export": "python scripts/run-electron.py scripts/check-logcat-export.cjs --watch ui-shots/_logcat-export.log --until \"LOGCAT EXPORT CHECK DONE\" --timeout 600"
   },
   "devDependencies": {

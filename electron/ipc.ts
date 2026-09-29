@@ -149,10 +149,13 @@ import {
   installRecorder,
   authorizeRecorder,
   openRecorderUi,
+  backgroundRecorderUi,
+  prepareRecorder,
   startRecording,
   pauseRecording,
   stopRecording,
   resetRecording,
+  cancelRecording,
   recorderStatus,
   pullRecording,
   fetchFrame,
@@ -1089,6 +1092,10 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.RECORDER_OPEN_UI, wrap((_e, serial?: string) => openRecorderUi(serial)));
 
+  ipcMain.handle(IPC.RECORDER_BACKGROUND_UI, wrap((_e, serial?: string) => backgroundRecorderUi(serial)));
+
+  ipcMain.handle(IPC.RECORDER_PREPARE, wrap((_e, serial?: string) => prepareRecorder(serial)));
+
   ipcMain.handle(IPC.RECORDER_START, wrap((_e, serial?: string) => startRecording(serial)));
 
   ipcMain.handle(
@@ -1099,6 +1106,8 @@ export function registerIpc() {
   ipcMain.handle(IPC.RECORDER_STOP, wrap((_e, serial?: string) => stopRecording(serial)));
 
   ipcMain.handle(IPC.RECORDER_RESET, wrap((_e, serial?: string) => resetRecording(serial)));
+
+  ipcMain.handle(IPC.RECORDER_CANCEL, wrap((_e, serial?: string) => cancelRecording(serial)));
 
   ipcMain.handle(IPC.RECORDER_STATUS, wrap((_e, serial?: string) => recorderStatus(serial)));
 

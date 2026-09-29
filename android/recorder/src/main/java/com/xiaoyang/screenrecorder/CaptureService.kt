@@ -63,6 +63,11 @@ class CaptureService : Service() {
 
         const val ACTION_START = "com.xiaoyang.screenrecorder.START"
         const val ACTION_STOP = "com.xiaoyang.screenrecorder.STOP"
+        /** 只发一次通知（把服务转成前台），不建/不重建投影 —— 供"先起服务、后建投影"两段式用 */
+        const val ACTION_FOREGROUND = "com.xiaoyang.screenrecorder.FOREGROUND"
+        /** 把前台通知文案切到"已暂停"（暂停由 HTTP /pause 触发，但通知要对得上） */
+        const val ACTION_NOTIFY_PAUSED = "com.xiaoyang.screenrecorder.NOTIFY_PAUSED"
+        const val ACTION_NOTIFY_RECORDING = "com.xiaoyang.screenrecorder.NOTIFY_RECORDING"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
 
@@ -145,6 +150,13 @@ class CaptureService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_FOREGROUND -> {
+                // 只把服务提成前台（必须有通知），不碰投影。
+                // 用户可能还没授权就调用，这里必须能安全返回。
+                startForegroundQuietly()
+            }
+            ACTION_NOTIFY_PAUSED -> updateNotification(paused = true)
+            ACTION_NOTIFY_RECORDING -> updateNotification(paused = false)
             ACTION_START -> {
                 startForegroundQuietly()
                 val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
@@ -423,6 +435,10 @@ class CaptureService : Service() {
      * Android 14 起 mediaProjection 类型的前台服务**必须先有投影授权**
      * 才能 startForeground，否则抛 SecurityException。所以这个函数
      * 只在拿到授权结果之后的 ACTION_START 分支里调 —— 不要在 onCreate 里调。
+     *
+     * ⚠️ 但 ACTION_FOREGROUND 分支也会调它：那是「服务先转前台、稍后才建投影」
+     * 的两段式路径，此时还没有授权。为了不抛异常，这里对 API 34 的调用做了兜底
+     * （见下面 catch）。真正建投影时还会再调一次，那次一定合法。
      */
     private fun startForegroundQuietly() {
         try {
@@ -457,7 +473,44 @@ class CaptureService : Service() {
                 startForeground(NOTIFY_ID, n)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "前台通知失败：${e.message}")
+            // API 34 上「没有投影授权就 startForeground(mediaProjection)」会抛
+            // SecurityException —— 两段式路径下这是**预期**的，不是错误。
+            // 退一步用无类型的 startForeground 保住服务存活，等真授权后再补类型。
+            try {
+                val fallback = Notification.Builder(this).apply {
+                    setContentTitle(getString(R.string.notify_title))
+                    setContentText(getString(R.string.notify_text))
+                    setSmallIcon(android.R.drawable.presence_video_online)
+                    setOngoing(true)
+                }.build()
+                @Suppress("DEPRECATION")
+                startForeground(NOTIFY_ID, fallback)
+                Log.i(TAG, "已用无类型前台通知保活（尚未拿到投影授权）")
+            } catch (e2: Exception) {
+                Log.w(TAG, "前台通知失败：${e2.message}")
+            }
+        }
+    }
+
+    /** 切换通知文案（录制中 / 已暂停）。失败无所谓，只是提示。 */
+    private fun updateNotification(paused: Boolean) {
+        try {
+            val nm = getSystemService(NotificationManager::class.java) ?: return
+            val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(this, CH_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this)
+            }
+            val n: Notification = b
+                .setContentTitle(getString(if (paused) R.string.notify_title_paused else R.string.notify_title))
+                .setContentText(getString(if (paused) R.string.notify_text_paused else R.string.notify_text))
+                .setSmallIcon(android.R.drawable.presence_video_online)
+                .setOngoing(true)
+                .build()
+            nm.notify(NOTIFY_ID, n)
+        } catch (e: Exception) {
+            Log.d(TAG, "更新通知失败：${e.message}")
         }
     }
 }
