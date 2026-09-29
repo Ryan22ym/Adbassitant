@@ -32,6 +32,7 @@ import {
   setSize,
   resetSize,
   captureScreen,
+  grabScreenFrame,
   startRecord,
   getRecord,
   timestamp,
@@ -113,7 +114,7 @@ import {
   runQuickAction,
   foregroundApp,
 } from './services/quick-actions';
-import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog } from './services/logger';
+import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
 import {
   applyUpdate,
@@ -769,6 +770,7 @@ export function registerIpc() {
   );
 
   ipcMain.handle(IPC.LOG_LIST_ALL, wrap(() => getLogs()));
+  ipcMain.handle(IPC.LOG_DIR, wrap(() => getLogDir()));
 
 /* ---------------- 应用管理（v1.0） ---------------- */
 
@@ -1081,6 +1083,23 @@ export function registerIpc() {
   ));
 
   ipcMain.handle(IPC.CLICKER_KEYCODES, wrap(() => CLICKER_KEYCODES));
+
+  /*
+   * 屏幕预览图：抓一帧回渲染层，用 data URL 直接喂 <img>。
+   * 故意走 screencap 而不是设备侧采集端的帧 —— 后者要先过一次录屏授权，
+   * 而「看一眼屏幕、点一下定位坐标」这件事不该有前置成本。
+   */
+  ipcMain.handle(
+    IPC.CLICKER_PREVIEW,
+    wrap(async (_e, serial?: string) => {
+      const { png, width, height } = await grabScreenFrame(serial);
+      return {
+        dataUrl: `data:image/png;base64,${png.toString('base64')}`,
+        width,
+        height,
+      };
+    }),
+  );
 
   /* ---------------- 屏幕录制采集端（v1.0.32） ---------------- */
 

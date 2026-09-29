@@ -1522,12 +1522,22 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 62vh;
+  /* 取视口与固定值的较小者：窗口高时不过分长，窗口矮时留出下方预览图的位置 */
+  max-height: min(58vh, 560px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-right: 2px;
 }
 
 .ck-step {
+  /*
+   * 🔴 不许被压缩。
+   * .ck-steps 是 flex column 容器，flex 子项默认 flex-shrink: 1 —— 一旦列表
+   * 撞上 max-height 天花板，块会被压扁到比自身内容还矮，而块内的输入框仍然
+   * 撑着自己的高度，表现出来就是「步骤一多，块就互相叠在一起、点不动」。
+   * 固定 0 0 auto 之后，超出的部分交给 .ck-steps 的滚动条。
+   */
+  flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--bg-surface-2);
@@ -1936,4 +1946,71 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---------------- 屏幕预览图（v1.1.0） ---------------- */
+
+.ck-pv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/*
+ * 舞台宽度交给图片自己撑（居中对齐），高度上限留出来 —— 预览图是「对坐标」用的，
+ * 不该把下面的内容顶出屏幕。
+ */
+.ck-pv-stage {
+  position: relative;
+  align-self: center;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  overflow: hidden;
+  cursor: crosshair;
+  line-height: 0;
+  transition: border-color var(--t-fast);
+}
+
+.ck-pv-stage:hover {
+  border-color: var(--accent-border);
+}
+
+.ck-pv-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 46vh;
+}
+
+.ck-pv-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 200px;
+  height: 280px;
+  line-height: normal;
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+}
+
+/* 悬停位置指示：小圆点 + 白描边，浅色画面上也看得清 */
+.ck-pv-mark {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75);
+  pointer-events: none;
+}
+
+.ck-pv-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 12px;
+  min-height: 18px;
 }

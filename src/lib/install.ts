@@ -211,12 +211,18 @@ export async function installApkFiles(
   // 1. 调用方指定了目标，且那台在线 → 直接装
   if (options.serial) {
     const picked = online.find((d) => d.serial === options.serial);
-    if (picked) return runInstall(files, mode, grantAll, picked, signing);
+    if (picked) {
+      await runInstall(files, mode, grantAll, picked, signing);
+      return;
+    }
     st.toast('warn', `指定的设备 ${options.serial} 不在线`, '请重新选择安装目标');
   }
 
   // 2. 只有一台在线设备 → 没有歧义，直接装
-  if (online.length === 1) return runInstall(files, mode, grantAll, online[0], signing);
+  if (online.length === 1) {
+    await runInstall(files, mode, grantAll, online[0], signing);
+    return;
+  }
 
   // 3. 多台在线 → 问用户，不猜
   st.setInstall(null);
@@ -248,15 +254,120 @@ export async function startInstallOn(serial: string): Promise<void> {
   await runInstall(pending.files, pending.mode, pending.grantAll, device, pending.signing);
 }
 
-/** 真正执行安装（目标设备已确定）。APK / AAB / APKS 在这里分流。 */
+/**
+ * 把同一批安装包一次装到多台设备上（「安装到全部设备 / 所选设备」）。
+ *
+ * 与逐台调 installApkFiles 的区别就两条：
+ *
+ * 1. **整批统一安装方式** —— 只允许覆盖 / 清洁。
+ *    多台设备各自选方式没有意义（同一批包、同一个用户意图），
+ *    而「全新安装」在不同设备上结果必然不一致（有的机器已装、有的没装），
+ *    最后变成一半成功一半报错，用户还得逐台排查 —— 所以从设计上收敛掉。
+ *
+ * 2. **最后只收口一条汇总** —— 中间每一台都会刷新进度弹窗（能看到在装第几台），
+ *    但全部跑完后用一条汇总覆盖掉它，不会出现「装第 3 台时第 1 台的弹窗还在」。
+ *
+ * 顺序执行而不是并发：adb 本身能并发，但 AAB 要跑 bundletool（CPU / IO 重），
+ * 且并发往同一台设备塞安装会互相打断 —— 稳比快重要。
+ */
+export async function installOnMany(serials: string[]): Promise<void> {
+  const st = useApp.getState();
+  const pending = st.pendingInstall;
+  if (!pending) return;
+
+  // 用设备列表复核一遍：弹窗打开期间设备可能已经掉了
+  const targets = serials
+    .map((s) => st.devices.find((d) => d.serial === s && d.state === 'device'))
+    .filter((d): d is DeviceInfo => d !== undefined);
+
+  st.setPendingInstall(null);
+
+  if (targets.length === 0) {
+    st.toast('warn', '所选设备都已掉线', '请重新连接后再试');
+    return;
+  }
+
+  // 批量场景只可能是覆盖 / 清洁 —— 调用方（选设备弹窗）已经禁掉了全新安装，
+  // 这里再做一次收敛，避免以后有人从别处调进来时把 fresh 带进来
+  const mode: InstallMode = pending.mode === 'clean' ? 'clean' : 'overwrite';
+
+  const files = pending.files;
+  const total = targets.length;
+  const firstName = files[0]?.name ?? '安装包';
+  const fileLabel = files.length > 1 ? `${firstName} 等 ${files.length} 个文件` : firstName;
+  const last = files[files.length - 1];
+
+  const failed: { label: string; reason: string }[] = [];
+
+  for (let i = 0; i < total; i += 1) {
+    const device = targets[i];
+    const r = await runInstall(files, mode, pending.grantAll, device, pending.signing, false);
+    if (!r.ok) failed.push({ label: `${deviceLabel(device)} · ${device.serial}`, reason: r.message });
+  }
+
+  const okCount = total - failed.length;
+  const base = {
+    fileName: fileLabel,
+    apkPath: last?.path ?? '',
+    kind: last?.kind ?? kindOf(last?.path ?? ''),
+    sizeBytes: last?.size,
+    modeLabel: INSTALL_MODE_LABEL[mode],
+    device: `共 ${total} 台设备`,
+    total,
+    index: total,
+    startedAt: Date.now(),
+    finishedAt: Date.now(),
+  };
+
+  if (failed.length === 0) {
+    st.setInstall({
+      ...base,
+      phase: 'success',
+      title: `已装到 ${total} 台设备`,
+      message: targets.map((d) => `· ${deviceLabel(d)} · ${d.serial}`).join('\n'),
+    });
+  } else {
+    // 部分失败按 error 处理：不自动关、要用户看到是哪几台挂了
+    st.setInstall({
+      ...base,
+      phase: 'error',
+      title: `${okCount}/${total} 台安装成功`,
+      message:
+        `${okCount} 台成功，${failed.length} 台失败：\n` +
+        failed.map((f) => `· ${f.label}\n  ${f.reason}`).join('\n'),
+    });
+  }
+}
+
+/**
+ * 单台设备上的一次安装结果。
+ *
+ * 存在的理由只有一个：批量安装要能分辨「哪台成了、哪台挂了」。
+ * 单台安装时这个返回值没人看（结果都在弹窗里），但批量汇总必须拿到它。
+ */
+export interface SingleInstallOutcome {
+  ok: boolean;
+  /** 失败原因（ok=false 时一定有）；成功时是安装成功的简述 */
+  message: string;
+}
+
+/**
+ * 真正执行安装（目标设备已确定）。APK / AAB / APKS 在这里分流。
+ *
+ * autoClose=false 供批量安装使用：批量时进度弹窗要一台接一台地刷新，
+ * 每台装完就自己关掉的话，用户会看到弹窗闪一下又消失，
+ * 而真正的汇总要等最后一台跑完才出。
+ */
 async function runInstall(
   files: InstallFile[],
   mode: InstallMode,
   grantAll: boolean,
   device: DeviceInfo,
   signing?: InstallSigningOverride,
-): Promise<void> {
+  autoClose = true,
+): Promise<SingleInstallOutcome> {
   const total = files.length;
+  if (total === 0) return { ok: false, message: '没有要安装的文件' };
 
   /* 目标设备要在弹窗里露出来 —— 多台设备在线时装错机器，光看「安装成功」是发现不了的 */
   const target = `${deviceLabel(device)} · ${device.serial}`;
@@ -318,18 +429,23 @@ async function runInstall(
           finishedAt: Date.now(),
         };
         useApp.getState().setInstall(done);
-        scheduleAutoClose(done.startedAt);
+        if (autoClose) scheduleAutoClose(done.startedAt);
+        return { ok: true, message: done.message ?? 'Success' };
       }
     } catch (e) {
+      const failMsg = (e as Error).message || '安装失败';
       useApp.getState().setInstall({
         ...task,
         phase: 'error',
-        message: (e as Error).message || '安装失败',
+        message: failMsg,
         finishedAt: Date.now(),
       });
-      return;
+      return { ok: false, message: failMsg };
     }
   }
+
+  // total > 0 时循环内部必然已 return；走到这里只可能是极端异常，保底不崩
+  return { ok: false, message: '安装未执行' };
 }
 
 /** 成功详情：把「装到哪台、哪个包、有没有复核过」都写出来 */

@@ -40,19 +40,39 @@ const OUT = outIdx >= 0 && argv[outIdx + 1] ? argv[outIdx + 1] : null;
  * 被检查的是 dist-electron 里的编译产物 —— 过期产物 = 拿旧代码验收。
  * 先自己编一遍（与 check-update-online.cjs 同一套理由）。
  */
+/**
+ * 起一个子进程并把它的 stdout/stderr 收进临时文件。
+ *
+ * ⚠️ 不要用默认的 `stdio: 'pipe'`。某些受管环境（WorkBuddy 宿主里跑的 node）
+ * 创建子进程管道会直接 `EBUSY`，表现为「明明手跑是 0，这里却报失败且输出全空」。
+ * 走文件描述符不新建管道，普通环境和受限环境行为一致。
+ * 返回 { status, error, log }。
+ */
+function runWithLog(exe, args, opts = {}) {
+  const logFile = path.join(os.tmpdir(), 'adb-assistant-xver-' + path.basename(exe) + '.log');
+  const fd = fs.openSync(logFile, 'w');
+  let r;
+  try {
+    r = spawnSync(exe, args, { ...opts, stdio: ['ignore', fd, fd] });
+  } finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+  }
+  let log = '';
+  try { log = fs.readFileSync(logFile, 'utf8'); } catch { /* ignore */ }
+  return { status: r.status, error: r.error, log };
+}
+
 function ensureBuilt() {
   const tsc = path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
   if (!fs.existsSync(tsc)) {
     console.log('找不到 typescript（' + tsc + '），先 npm install 再跑。');
     process.exit(2);
   }
-  const r = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.electron.json'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-  });
+  const r = runWithLog(process.execPath, [tsc, '-p', 'tsconfig.electron.json'], { cwd: ROOT });
   if (r.status !== 0) {
     console.log('主进程编译失败，验收无意义（先修 tsc）：');
-    console.log((r.stdout || '') + (r.stderr || ''));
+    console.log('退出码 ' + r.status + (r.error ? ' / ' + r.error.code : ''));
+    console.log(r.log);
     process.exit(2);
   }
 }
@@ -91,6 +111,52 @@ function fingerprint(binDir) {
     .sort((a, b) => (a.rel < b.rel ? -1 : 1))
     .map((f) => `${f.rel}|${fs.statSync(f.p).size}|${sha256(fs.readFileSync(f.p))}`);
   return sha256(Buffer.from(lines.join('\n'), 'utf8'));
+}
+
+/* ------------------------------------------------------------------ */
+/* 真实旧版本安装树的反查                                              */
+/* ------------------------------------------------------------------ */
+
+function cmpVersion(a, b) {
+  const pa = String(a).split('.').map(Number);
+  const pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+/**
+ * 把本机 `out-v<版本>` 目录里还能用的安装树枚举出来（有 runtime-*.json、且有
+ * `win-unpacked/resources/bin`），按版本从新到旧返回 [{ dir, res, hash, version }]。
+ *
+ * 🔴 为什么要这么绕：这个脚本以前是拿**本版**的 resources 当「上一版机器」用，
+ * 只在 bin 完全没变时才成立。v1.1.0 换了应用图标（bin/icon.png 变了），
+ * 本版指纹就不再等于上一版指纹，于是「主小包基准 == 上一版机器」那条断言
+ * 变成必然的假失败 —— 而包本身是对的。所以改成按 runtimeHash 反查真身。
+ */
+function listTrees() {
+  const out = [];
+  for (const name of fs.readdirSync(ROOT)) {
+    if (!/^out-v\d+\.\d+\.\d+/.test(name)) continue;
+    const upd = path.join(ROOT, name, 'update');
+    const res = path.join(ROOT, name, 'win-unpacked', 'resources');
+    if (!fs.existsSync(upd) || !fs.existsSync(path.join(res, 'bin'))) continue;
+    for (const f of fs.readdirSync(upd)) {
+      if (!/^runtime-v.*\.json$/.test(f)) continue;
+      let j;
+      try { j = JSON.parse(fs.readFileSync(path.join(upd, f), 'utf8')); } catch { continue; }
+      if (!j.runtimeHash || !j.version) continue;
+      out.push({ dir: name, res, hash: j.runtimeHash, version: j.version });
+      break;
+    }
+  }
+  // 同版本多个产物目录时只留一个（内容一样，指纹一样）
+  const seen = new Set();
+  return out
+    .sort((a, b) => cmpVersion(b.version, a.version))
+    .filter((t) => (seen.has(t.hash) ? false : seen.add(t.hash)));
 }
 
 /* ------------------------------------------------------------------ */
@@ -198,22 +264,54 @@ function copyTree(src, dest) {
   const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'adba-xver-'));
   /** 与上一版一致的机器（= 主小包能直接装的那批） */
   const NEW_RES = path.join(TMP, 'new', 'resources');
-  /** 1.0.28 那批机器：bin 里还没有随包弱网 APK */
+  /** 落后一版 / 若干版的机器（= 某份变体小包正好服务的那批） */
   const OLD_RES = path.join(TMP, 'old', 'resources');
-  /** 更老的机器：连 bundletool 子目录都没有（用来验证助手会先建目录） */
+  /** 更老的机器：一份都对不上，只能走完整资源包 */
   const SUB_RES = path.join(TMP, 'sub', 'resources');
 
   console.log('== B. 造三棵假安装树 ==');
-  for (const [res, drop] of [
-    [NEW_RES, []],
-    [OLD_RES, [NEW_RESOURCE]],
-    [SUB_RES, [NEW_RESOURCE, NEW_SUBDIR]],
+  const trees = listTrees();
+  const treeFor = (hash) => (hash ? trees.find((t) => t.hash === hash) : null) || null;
+
+  const prevTree = treeFor(packs.asar.baseRuntimeHash);
+  // 变体里挑一份「基准能在这台机器上找到真身」的，用它当落后机器
+  const oldRef = variantZips.find(
+    (v) => v.ref.baseRuntimeHash
+      && v.ref.baseRuntimeHash !== packs.asar.baseRuntimeHash
+      && treeFor(v.ref.baseRuntimeHash),
+  );
+  const oldTree = oldRef ? treeFor(oldRef.ref.baseRuntimeHash) : null;
+
+  // 谁都不服务的那棵：从没被任何包当基准的树里取最旧的一棵
+  const usedHashes = new Set(
+    [packs.asar.baseRuntimeHash, ...variants.map((v) => v.baseRuntimeHash)].filter(Boolean),
+  );
+  const ancientTree = trees.filter((t) => !usedHashes.has(t.hash)).pop() || null;
+
+  rec(!!prevTree, '能在本机产物里找到「主小包基准」对应的真实安装树',
+    prevTree ? `${prevTree.dir}（v${prevTree.version}）` : String(packs.asar.baseRuntimeHash || '').slice(0, 12) + '…(找不到)');
+  if (!prevTree) {
+    console.log('\n找不到主小包基准对应的旧版本产物目录，无法验证跨版本 —— 中止。');
+    console.log(`RESULT pass=${pass} fail=${fail + 1}`);
+    process.exit(1);
+  }
+
+  for (const [res, src] of [
+    [NEW_RES, prevTree.res],
+    [OLD_RES, (oldTree || prevTree).res],
+    [SUB_RES, (ancientTree || prevTree).res],
   ]) {
     fs.mkdirSync(res, { recursive: true });
-    copyTree(path.join(SRC_RES, 'bin'), path.join(res, 'bin'));
-    fs.copyFileSync(path.join(SRC_RES, 'app.asar'), path.join(res, 'app.asar'));
-    for (const d of drop) fs.rmSync(path.join(res, 'bin', d), { recursive: true, force: true });
+    copyTree(path.join(src, 'bin'), path.join(res, 'bin'));
+    fs.copyFileSync(path.join(src, 'app.asar'), path.join(res, 'app.asar'));
   }
+  // 「更老的机器」还要真的比它更老：去掉随包弱网 APK 与 bundletool 目录。
+  // 这两样正好对应两种旧树形态 ——「本机没有的新增资源」和「本机连目录都没有」，
+  // 也就是 E 段那两条断言要覆盖的真实场景。
+  for (const d of [NEW_RESOURCE, NEW_SUBDIR]) {
+    fs.rmSync(path.join(SUB_RES, 'bin', d), { recursive: true, force: true });
+  }
+  // binCount 必须按**本版**（刚打出来的产物）来数 —— 完整资源包里带的就是本版全部 bin
   const binCount = fs.readdirSync(path.join(SRC_RES, 'bin'), { recursive: true })
     .filter((f) => fs.statSync(path.join(SRC_RES, 'bin', f)).isFile()).length;
   const hashNew = fingerprint(path.join(NEW_RES, 'bin'));
@@ -221,11 +319,14 @@ function copyTree(src, dest) {
   const hashSub = fingerprint(path.join(SUB_RES, 'bin'));
   rec(hashNew !== hashOld && hashOld !== hashSub, '三棵树的运行库指纹互不相同（真造出了「落后版本」）',
     `${hashNew.slice(0, 8)}… / ${hashOld.slice(0, 8)}… / ${hashSub.slice(0, 8)}…`);
-  rec(packs.asar.baseRuntimeHash === hashNew,
-    '主小包的 baseRuntimeHash 正好等于「上一版机器」的指纹（装得上）', String(packs.asar.baseRuntimeHash || '').slice(0, 12) + '…');
-  const oldVariant = variantZips.find((v) => v.ref.baseRuntimeHash === hashOld);
-  rec(!!oldVariant, '存在一份基准正好等于「1.0.28 那批机器」的小包变体',
-    oldVariant ? `${oldVariant.ref.url}（bin 差量 ${fs.statSync(oldVariant.file).size} B）` : '(没有 --also-from 对应的基线)');
+  rec(hashNew === packs.asar.baseRuntimeHash,
+    '主小包的 baseRuntimeHash 正好等于「上一版机器」的指纹（装得上）',
+    `base=${String(packs.asar.baseRuntimeHash || '').slice(0, 12)}… tree=${hashNew.slice(0, 12)}…`);
+  const oldVariant = oldRef;
+  rec(!!oldVariant, '存在一份基准正好等于「落后一版机器」的小包变体',
+    oldVariant
+      ? `${oldVariant.ref.url} ← v${oldTree.version}（bin 差量 ${fs.statSync(oldVariant.file).size} B）`
+      : '(变体基准在本机产物里找不到对应安装树，或没传 --also-from)');
 
   console.log('== C. prepareUpdate：谁该过、谁该被拒 ==');
   const oldTmp = path.join(TMP, 'old-userdata');
@@ -233,7 +334,10 @@ function copyTree(src, dest) {
   fs.mkdirSync(oldTmp, { recursive: true });
   fs.mkdirSync(newTmp, { recursive: true });
 
-  const updOld = loadService('update.js', '1.0.28', OLD_RES, oldTmp);
+  /** 落后机器的自我认知版本（用真实版本号，别写死 —— 写死了跨版本判断会失真） */
+  const oldVer = oldTree ? oldTree.version : '1.0.28';
+  const newVer = prevTree.version;
+  const updOld = loadService('update.js', oldVer, OLD_RES, oldTmp);
   const r1 = await updOld.prepareUpdate(primaryZip);
   rec(r1.ok === false && /运行库不一致/.test(String(r1.reason || '')),
     '老机器 + 主小包 → 如实拒绝（这就是「漏更几版就更新不了」的现场）',
@@ -251,7 +355,7 @@ function copyTree(src, dest) {
   rec(Array.isArray(r3.runtimeFiles) && r3.runtimeFiles.length === binCount,
     '完整资源包带回全部运行库文件（不是差量）', `${r3.runtimeFiles && r3.runtimeFiles.length} / ${binCount}`);
 
-  const updNew = loadService('update.js', '1.0.30', NEW_RES, newTmp);
+  const updNew = loadService('update.js', newVer, NEW_RES, newTmp);
   const r4 = await updNew.prepareUpdate(primaryZip);
   rec(r4.ok === true, '最新机器 + 主小包 → 通过（没有把好路堵死）',
     `ok=${r4.ok} 文件数=${r4.fileCount} ${(fs.statSync(primaryZip).size / 1024).toFixed(0)} KB`);
@@ -259,7 +363,7 @@ function copyTree(src, dest) {
   rec(r5.ok === true, '最新机器 + 完整资源包 → 也通过（兜底路径对谁都成立）', `ok=${r5.ok}`);
 
   console.log('== D. 挑包（本地 http 服务 + 真实 httpSource） ==');
-  const srcMod = loadService('update-source.js', '1.0.28', OLD_RES, oldTmp);
+  const srcMod = loadService('update-source.js', oldVer, OLD_RES, oldTmp);
   const server = http.createServer((req, res) => {
     const name = decodeURIComponent(new URL(req.url, 'http://x').pathname.replace(/^\/+/, ''));
     const p = name ? path.join(UPD, name) : null;
@@ -279,18 +383,20 @@ function copyTree(src, dest) {
     return s.check();
   };
 
-  const iNew = await pick('1.0.30', hashNew);
+  const iNew = await pick(newVer, hashNew);
   rec(iNew.form === 'asar' && /patch\.zip$/.test(iNew.pkg.url) && !iNew.note,
     '最新机器 → 挑中主小包（最小那份，无额外提示）', iNew.pkg && iNew.pkg.url);
 
-  const iOld = await pick('1.0.28', hashOld);
+  const iOld = await pick(oldVer, hashOld);
   const oldWanted = oldVariant ? path.basename(oldVariant.ref.url) : '';
   // 注意 URL 里的中文/空格是百分号编码的，不能直接 endsWith 原始文件名
   const iOldName = decodeURIComponent(String(iOld.pkg ? iOld.pkg.url : '').split('/').pop() || '');
   rec(iOld.form === 'asar' && !!oldWanted && iOldName === oldWanted,
     '老机器 → 挑中适配它自己的那份小包，而不是几十 MB 的完整包', iOldName || '(空)');
 
-  const iAncient = await pick('1.0.2', 'a'.repeat(64));
+  // 「更老的机器」用真实存在、且没有任何包把它当基准的那棵树
+  const ancientVer = ancientTree ? ancientTree.version : '1.0.2';
+  const iAncient = await pick(ancientVer, hashSub);
   rec(iAncient.form === 'full' && /full\.zip$/.test(iAncient.pkg.url),
     '更老的机器（一份都对不上）→ 自动改走完整资源包', iAncient.pkg && iAncient.pkg.url);
   rec(/完整资源包/.test(String(iAncient.note || '')), '并提前说明会用完整资源包', String(iAncient.note || '').slice(0, 40));
@@ -306,7 +412,7 @@ function copyTree(src, dest) {
   coreMod.extractToStage(fullZip, stage);
 
   const snapshotOld = {
-    version: '1.0.2', kind: 'asar', packaged: true, electronVersion: ELECTRON_VER,
+    version: ancientVer, kind: 'asar', packaged: true, electronVersion: ELECTRON_VER,
     runtimeHash: hashSub, resourcesDir: SUB_RES, binDir: path.join(SUB_RES, 'bin'),
     targetPath: path.join(SUB_RES, 'app.asar'),
   };
@@ -337,15 +443,16 @@ function copyTree(src, dest) {
   fs.writeFileSync(helperPath, '\ufeff' + helper.split('__STAGING__').join(stage), 'utf8');
 
   const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const pr = spawnSync(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helperPath],
-    { encoding: 'utf8', timeout: 180000 });
+  // 同样走文件描述符而不是管道（受限环境里建管道会 EBUSY，见 runWithLog）
+  const pr = runWithLog(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helperPath],
+    { timeout: 180000 });
   const helperLog = fs.existsSync(path.join(stage, 'helper.log'))
     ? fs.readFileSync(path.join(stage, 'helper.log'), 'utf8') : '';
   let result = null;
   try { result = JSON.parse(fs.readFileSync(path.join(stage, 'result.json'), 'utf8')); } catch { /* 没落盘 */ }
 
   rec(!!result && result.ok === true, '助手把这一轮更新判成成功',
-    result ? JSON.stringify(result).slice(0, 80) : (pr.stdout || '') + (pr.stderr || ''));
+    result ? JSON.stringify(result).slice(0, 80) : (pr.log || ''));
   rec(/mkdir /.test(helperLog), '助手在替换前建出了缺失的目录（新增资源能落地）',
     (helperLog.match(/mkdir .*/) || ['(没建目录)'])[0].slice(0, 70));
 

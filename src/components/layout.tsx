@@ -18,7 +18,6 @@ const NAV = [
   { to: '/weaknet', label: '弱网模拟', icon: Icon.weaknet },
   { to: '/clicker', label: '自动连点器', icon: Icon.clicker },
   { to: '/command', label: '命令终端', icon: Icon.terminal },
-  { to: '/logs', label: '运行日志', icon: Icon.log },
   { to: '/settings', label: '设置', icon: Icon.settings },
 ];
 

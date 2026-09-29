@@ -15,6 +15,13 @@ const electronMain = require('electron');
 if (typeof electronMain !== 'object' || !electronMain.app) process.exit(2);
 const { app, BrowserWindow } = electronMain;
 
+/**
+ * [路由, 页头标题, 侧边栏是否有对应项（可选，默认 true）]
+ *
+ * v1.1.0 起「运行日志」从侧边栏收起（用户要求「收起来，不显示」），
+ * 页面本身还在，只是入口挪到了「设置 → 运行日志」卡片里。
+ * 所以那一项只断言页头标题，不要求有导航高亮。
+ */
 const CASES = [
   ['#/', '设备'],
   ['#/mirror', '投屏'],
@@ -24,7 +31,7 @@ const CASES = [
   ['#/weaknet', '弱网模拟'],
   ['#/clicker', '自动连点器'],
   ['#/command', '命令终端'],
-  ['#/logs', '运行日志'],
+  ['#/logs', '运行日志', false],
   ['#/settings', '设置'],
 ];
 
@@ -52,7 +59,7 @@ app.whenReady().then(async () => {
   const rows = [];
   const file = path.join(ROOT, 'dist', 'index.html');
 
-  for (const [hash, expect] of CASES) {
+  for (const [hash, expect, hasNav = true] of CASES) {
     await win.loadFile(file, { hash: hash.replace('#', '') });
     await new Promise((r) => setTimeout(r, 900));
 
@@ -66,8 +73,13 @@ app.whenReady().then(async () => {
       })()
     `);
 
-    const ok = info.title === expect && info.active.length === 1 && info.active[0] === expect;
-    rows.push(`${ok ? 'PASS' : 'FAIL'}  ${hash.padEnd(11)} 标题="${info.title}" 高亮=${JSON.stringify(info.active)}`);
+    // 侧边栏没有这一项时，要求「一个高亮都没有」—— 而不是随便高亮到别人身上
+    const ok = hasNav
+      ? info.title === expect && info.active.length === 1 && info.active[0] === expect
+      : info.title === expect && info.active.length === 0;
+    rows.push(
+      `${ok ? 'PASS' : 'FAIL'}  ${hash.padEnd(11)} 标题="${info.title}" 高亮=${JSON.stringify(info.active)}`,
+    );
   }
 
   log('=== NAV CHECK ===');

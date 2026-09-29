@@ -41,6 +41,14 @@ export interface InstallTask {
   sizeBytes?: number;
   /** 成功时为 adb 输出，失败时为失败原因 */
   message?: string;
+  /**
+   * 弹窗标题覆盖。
+   *
+   * 单台安装时标题就是「安装成功 / 安装失败」，由 phase 推出来即可；
+   * 但「一次装到 N 台」是汇总语义 —— 可能是「3/4 台安装成功」这种
+   * 既不算全成功也不算全失败的中间态，光靠 phase 表达不了。
+   */
+  title?: string;
   /** 安装方式的中文标签（覆盖 / 清洁 / 全新）—— 让用户知道数据会不会被清 */
   modeLabel?: string;
   /**

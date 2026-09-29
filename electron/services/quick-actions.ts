@@ -297,9 +297,36 @@ async function sh(s: string, cmd: string, timeout = 30000) {
 
 /** pm clear 的输出必须以 Success 开头才算真的清掉 */
 async function clearData(s: string, pkg: string) {
+  /*
+   * 先停再清。Android 10+ 对「正在前台 / 持有前台服务」的应用有进程保护，
+   * 边跑边清经常是「返回了但没清干净」；先把进程停掉还能顺带规避一部分占用。
+   * 停不掉不算错（有些应用本来就拉不起来），所以这里吞掉异常。
+   */
+  await forceStop(s, pkg).catch(() => {});
+
   const res = await sh(s, `pm clear ${pkg}`, 40000);
   const text = (res.stdout + ' ' + res.stderr).trim();
-  if (!/Success/i.test(text)) throw new Error(text || '清除数据失败');
+  if (/Success/i.test(text)) return;
+
+  /*
+   * 国产 ROM（实测 OPPO / ColorOS + Android 13，一加 / realme 同类）会把调试账号
+   * (uid 2000 shell) 的 CLEAR_APP_USER_DATA 权限收走：
+   *   java.lang.SecurityException: PID xxxx does not have permission
+   *   android.permission.CLEAR_APP_USER_DATA to clear data of package ...
+   * 这是设备侧策略，**没有免 root 的通用绕过**（cmd package clear / pm clear --user 0
+   * 走的是同一条权限检查，实测同样失败；同一台机器上换包名也一样报，所以不是某个应用的问题）。
+   * 唯一可行的解法是用户在开发者选项里放开权限监控 —— 直接把这句话给用户，
+   * 别把一坨 Java 堆栈原样抛到界面上让他猜。
+   */
+  if (/CLEAR_APP_USER_DATA/i.test(text)) {
+    throw new Error(
+      '这台手机的系统策略禁止了调试账号清除应用数据（常见于 OPPO / 一加 / realme）。' +
+        '手机进入「设置 → 关于手机」，连点「版本号」7 次打开开发者模式，' +
+        '再到「开发者选项」中打开「禁止权限监控」，然后回来重试即可。',
+    );
+  }
+
+  throw new Error(text || '清除数据失败');
 }
 
 async function forceStop(s: string, pkg: string) {

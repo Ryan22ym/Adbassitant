@@ -116,6 +116,7 @@ const IPC = {
   CLICKER_STATUS: 'clicker:status',
   CLICKER_RUN_STEP: 'clicker:runStep',
   CLICKER_KEYCODES: 'clicker:keycodes',
+  CLICKER_PREVIEW: 'clicker:preview',
 
   /* 屏幕录制采集端（v1.0.32；v1.0.33 起改为电脑端全程控制） */
   RECORDER_INFO: 'recorder:info',
@@ -136,6 +137,7 @@ const IPC = {
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
   LOG_LIST_ALL: 'log:listAll',
+  LOG_DIR: 'log:dir',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
 
@@ -402,6 +404,7 @@ const api = {
   clickerStop: () => invoke(IPC.CLICKER_STOP),
   clickerStatus: () => invoke(IPC.CLICKER_STATUS),
   clickerRunStep: (step: any, serial?: string) => invoke(IPC.CLICKER_RUN_STEP, step, serial),
+  clickerPreview: (serial?: string) => invoke(IPC.CLICKER_PREVIEW, serial),
   clickerKeycodes: () => invoke(IPC.CLICKER_KEYCODES),
 
   /*
@@ -427,6 +430,7 @@ const api = {
 
   /* 日志 */
   getAllLogs: () => invoke(IPC.LOG_LIST_ALL),
+  logDir: () => invoke(IPC.LOG_DIR),
   clearLogs: () => invoke(IPC.LOG_CLEAR),
   exportLogs: () => invoke(IPC.LOG_EXPORT),
 

@@ -70,6 +70,15 @@ import type {
 const RECORDER_PKG = 'com.xiaoyang.screenrecorder';
 const RECORDER_ACTIVITY = `${RECORDER_PKG}/.RecorderActivity`;
 
+/**
+ * 「停止录制」那一刻从电脑侧采集器接住的触摸数据。
+ *
+ * 存在的理由：采集器内部的缓冲在 stopCapture() 时会被清空，
+ * 而「停止」和「拉取并转成脚本」是界面上**两个分开的点击** ——
+ * 中间这段时间数据只能放在这里，否则第二次点击时已经什么都读不到了。
+ */
+let stoppedTouches: CapturedTouch[] = [];
+
 /** 随包 APK 位置（bun 根下，理由见 build-weaknet-apk.mjs 的注释） */
 function bundledApk(): string {
   // 打包后 resources/bin/screen-recorder.apk；开发时 bin/screen-recorder.apk
@@ -441,6 +450,9 @@ async function requireReady(serial?: string): Promise<string> {
 export async function startRecording(serial?: string): Promise<RecorderStatus> {
   const s = await requireReady(serial);
 
+  // 新一次录制开始：丢掉上一次停止时接住的快照，免得拉取到上一轮的旧数据
+  stoppedTouches = [];
+
   // 1) 先确认这台设备能读触摸 —— 读不到就没必要往下走
   const prep = await prepareTouch(s);
   if (!prep.ok) {
@@ -503,10 +515,15 @@ export async function pauseRecording(paused: boolean, serial?: string): Promise<
 export async function stopRecording(serial?: string): Promise<RecorderStatus> {
   const s = await requireReady(serial);
 
-  const touchCount = (await stopCapture()).length;
+  /*
+   * 🔴 `stopCapture()` 会把模块内的触摸缓冲**交出来并清空** —— 这里必须接住它，
+   * 不能只取 `.length` 就丢掉。否则用户点完「停止录制」再点「拉取并转成脚本」时，
+   * `capturedTouches()` 已经是空数组，转不出任何步骤，表现就是「录了半天没有脚本」。
+   */
+  stoppedTouches = await stopCapture();
   await httpPost('/stop', {}, 8000);
 
-  log('info', '录制', `已停止：电脑侧触摸 ${touchCount} 条 + 设备侧画面`);
+  log('info', '录制', `已停止：电脑侧触摸 ${stoppedTouches.length} 条 + 设备侧画面`);
   return recorderStatus(s);
 }
 
@@ -515,6 +532,7 @@ export async function resetRecording(serial?: string): Promise<void> {
   // 电脑侧如果还在采，先收干净再清
   if (capturedTouches().length > 0) await stopCapture();
   resetCapture();
+  stoppedTouches = [];
   await httpPost('/reset', {}, 8000);
 }
 
@@ -598,8 +616,10 @@ export async function pullRecording(serial?: string): Promise<RecordedSession> {
     landscape: !!metaRaw.landscape,
   };
 
-  // 触摸优先用电脑侧采集的（覆盖全 App）；电脑侧为空才退回设备侧的老数据
-  const localTouches = capturedTouches();
+  // 触摸优先用电脑侧采集的（覆盖全 App）。
+  // 录制中读实时缓冲；已经「停止」过就读停止那一刻接住的快照（否则会是空数组）。
+  const live = capturedTouches();
+  const localTouches = live.length > 0 ? live : stoppedTouches;
   let touches: RecordedTouch[];
   if (localTouches.length > 0) {
     touches = localTouches.map((t: CapturedTouch) => ({

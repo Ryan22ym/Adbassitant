@@ -34,6 +34,8 @@ const os = require('os');
 const http = require('http');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+// ⚠️ 起 powershell 跑更新助手走 runCapture（本机环境 spawn 建管道会 EBUSY）
+const { runCapture } = require('./_spawn-capture.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'ui-shots');
@@ -341,12 +343,14 @@ function runHelper(staging, timeoutMs = 90_000) {
   if (!text.includes('__STAGING__')) throw new Error('helper 脚本缺少 __STAGING__ 占位符');
   const script = text.split('__STAGING__').join(staging);
   const b64 = Buffer.from(script, 'utf16le').toString('base64');
-  const r = spawnSync(
+  // ⚠️ 不要用 spawnSync 的默认管道：本机环境下建管道会 EBUSY，
+  // 表现为「B 段 17 项全 FAIL、stderr 还是空的」——看着像脚本回归，其实是环境。
+  const cap = runCapture(
     fs.existsSync(PS) ? PS : 'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', b64],
-    { timeout: timeoutMs, encoding: 'utf8' },
+    { timeout: timeoutMs },
   );
-  return { status: r.status, stderr: r.stderr || '', error: r.error ? String(r.error.message) : '' };
+  return { status: cap.status, stderr: cap.output, error: cap.error ? String(cap.error.message) : '' };
 }
 
 /** 造一套沙箱：假安装目录 + 假启动器 + job.json */

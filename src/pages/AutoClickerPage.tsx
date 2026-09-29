@@ -15,7 +15,7 @@ import {
 } from '@/components/ui';
 import { Icon, StepIcon } from '@/components/icons';
 import { useApp, useCurrentDevice } from '@/store/app';
-import { call } from '@/lib/ipc';
+import { call, tryCall } from '@/lib/ipc';
 import type {
   ClickerScript,
   ClickerStatus,
@@ -156,17 +156,25 @@ export default function AutoClickerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.serial]);
 
+  /*
+   * 录制状态轮询。
+   *
+   * 🔴 开关条件是「停在录制 tab」，不是「当前正在录制」。
+   * 之前拿 `recStatus?.recording` 当开关：一旦某一刻两边状态没对上（设备侧其实在录、
+   * 电脑侧却以为没在录），轮询就停了、再也没有机会纠正回来 —— 界面永远停在
+   * 「开始录制」，用户怎么点都关不掉。常驻轮询让它自己纠回来。
+   */
   useEffect(() => {
-    if (tab !== 'record' || !recStatus?.recording) return;
+    if (tab !== 'record' || !current?.serial) return;
     const id = window.setInterval(async () => {
       const st = await call<RecorderStatus>(() => window.adbApi.recorderStatus(current?.serial), {
         silent: true,
       });
       if (st) setRecStatus(st);
-    }, 1000);
+    }, 1200);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, recStatus?.recording, current?.serial]);
+  }, [tab, current?.serial]);
 
   const refreshRecInfo = useCallback(async () => {
     if (!current?.serial) {
@@ -249,6 +257,17 @@ export default function AutoClickerPage() {
       steps.splice(idx, 0, newStep(kind));
       return { ...d, steps };
     });
+    setDirty(true);
+  };
+
+  /**
+   * 在屏幕预览图上点一下 → 追加一个点击步骤。
+   *
+   * 用「追加」而不是「改上一步」：预览图的用法是照着屏幕往下摆步骤，
+   * 每点一下多一步最符合直觉；想改已有步骤照样能在列表里改。
+   */
+  const pickPreviewPoint = (nx: number, ny: number) => {
+    setDraft((d) => ({ ...d, steps: [...d.steps, { kind: 'tap', nx, ny, count: 1 }] }));
     setDirty(true);
   };
 
@@ -418,6 +437,8 @@ export default function AutoClickerPage() {
         silent: true,
       });
       if (st) setRecStatus(st);
+      // 顺手刷新采集端 info：授权与录制是两套判据，别让界面停在「授权录屏」那个分支上
+      await refreshRecInfo();
       setSession(null);
       toast(
         'success',
@@ -457,6 +478,7 @@ export default function AutoClickerPage() {
         silent: true,
       });
       if (st) setRecStatus(st);
+      await refreshRecInfo();
       toast('success', '录制已停止', '接下来点「拉取并转成脚本」');
     } catch (e) {
       toast('error', '停止失败', (e as Error).message);
@@ -487,7 +509,12 @@ export default function AutoClickerPage() {
         { silent: true },
       );
       if (!conv || conv.steps.length === 0) {
-        toast('warn', '没转出可用的步骤', '录制里可能只有触摸点而没有完整手势，试试在采集端窗口里点击一次');
+        toast(
+          'warn',
+          '没转出可用的步骤',
+          `这次只采到 ${sess.touches.length} 个触点。触摸是电脑侧从调试通道读的，录制期间请直接在手机上操作；` +
+            '如果手机屏幕上没有任何触摸，自然也就没有步骤。',
+        );
         return;
       }
 
@@ -749,6 +776,8 @@ export default function AutoClickerPage() {
                   )}
                 </div>
               </Card>
+
+              <ScreenPreview serial={current?.serial} onPick={pickPreviewPoint} />
             </div>
 
             {/* ---------------- 右：参数 / 脚本库 ---------------- */}
@@ -1300,7 +1329,12 @@ function RecordPanel({
                 <Button variant="primary" onClick={onRefresh} loading={busy} disabled={!hasDevice}>
                   重新检测
                 </Button>
-              ) : !info.authorized ? (
+              ) : !info.authorized && !recording ? (
+                /*
+                 * 🔴 这里必须带上 `&& !recording`。
+                 * 只看 authorized 的话，会出现「明明在录、界面却只显示『授权录屏』」——
+                 * 没有停止按钮，用户就只能干看着录不停。只要在录，就必须能停。
+                 */
                 <Button variant="primary" onClick={onAuthorize} loading={busy} disabled={!hasDevice}>
                   授权录屏
                 </Button>
@@ -1487,4 +1521,149 @@ function formatMs(ms: number): string {
   return m > 0
     ? `${m}:${String(r).padStart(2, '0')}.${cs}`
     : `${r}.${cs}s`;
+}
+
+/* ------------------------------------------------------------------ */
+/* 屏幕预览图                                                          */
+/* ------------------------------------------------------------------ */
+
+interface PreviewFrame {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
+interface ScreenPreviewProps {
+  serial?: string;
+  onPick: (nx: number, ny: number) => void;
+}
+
+const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/**
+ * 屏幕预览图。
+ *
+ * 目的只有一个：**把手机屏幕上的位置换算成比例坐标**。手机屏幕小、手指粗，
+ * 盲填 0~1 的比例很容易偏到隔壁按钮上；看着画面点一下就直接拿到准值。
+ * 点一下 = 追加一个点击步骤。往后「在预览图上直接录制」也接在同一个回调上。
+ *
+ * 画面走 adb screencap（约 1 秒一帧），**不占用设备侧的录屏授权** ——
+ * 插上设备就能看，不需要先走一遍「装采集端 + 手机上确认授权」。
+ * 代价是帧率低、点完要等画面跟上，所以它定位是「对坐标」而不是「看视频」，
+ * 真要实时看画面请用投屏页。
+ */
+function ScreenPreview({ serial, onPick }: ScreenPreviewProps) {
+  const [frame, setFrame] = useState<PreviewFrame | null>(null);
+  const [auto, setAuto] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [hover, setHover] = useState<{ nx: number; ny: number } | null>(null);
+  const [lastPick, setLastPick] = useState<{ nx: number; ny: number } | null>(null);
+  const inFlight = useRef(false);
+
+  const grab = useCallback(async () => {
+    if (!serial || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    try {
+      const r = await tryCall<PreviewFrame>(() => window.adbApi.clickerPreview(serial));
+      if (r) {
+        setFrame(r);
+        setErr('');
+      } else {
+        setErr('取画面失败，设备可能已断开或正在息屏');
+      }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }, [serial]);
+
+  /* 换设备立刻清空并重取，别把上一台的画面留在屏幕上 */
+  useEffect(() => {
+    setFrame(null);
+    setLastPick(null);
+    setErr('');
+    if (serial) void grab();
+  }, [serial, grab]);
+
+  useEffect(() => {
+    if (!auto || !serial) return;
+    const t = window.setInterval(() => void grab(), 1200);
+    return () => window.clearInterval(t);
+  }, [auto, serial, grab]);
+
+  const ratioAt = (el: HTMLElement, clientX: number, clientY: number) => {
+    const rect = el.getBoundingClientRect();
+    const nx = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+    const ny = rect.height > 0 ? (clientY - rect.top) / rect.height : 0;
+    return { nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)) };
+  };
+
+  return (
+    <Card
+      title="屏幕预览图"
+      subtitle="点画面任意位置 = 追加一个点击步骤（坐标按比例存，换分辨率也能用）"
+      extra={
+        <div className="row" style={{ gap: 6 }}>
+          <Button size="sm" variant={auto ? 'primary' : 'default'} onClick={() => setAuto((v) => !v)}>
+            {auto ? '自动刷新' : '已暂停'}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => void grab()} loading={busy} disabled={!serial}>
+            刷新
+          </Button>
+        </div>
+      }
+    >
+      {!serial ? (
+        <Empty title="没有在线设备" desc="连上设备后，这里会显示它的屏幕" />
+      ) : (
+        <div className="ck-pv">
+          <div
+            className="ck-pv-stage"
+            onMouseMove={(e) => setHover(ratioAt(e.currentTarget, e.clientX, e.clientY))}
+            onMouseLeave={() => setHover(null)}
+            onClick={(e) => {
+              const p = ratioAt(e.currentTarget, e.clientX, e.clientY);
+              onPick(Number(p.nx.toFixed(4)), Number(p.ny.toFixed(4)));
+              setLastPick(p);
+            }}
+          >
+            {frame ? (
+              <img src={frame.dataUrl} alt="设备屏幕预览" draggable={false} />
+            ) : (
+              <div className="ck-pv-placeholder">
+                {err ? <span className="text-dim">{err}</span> : <Spinner size={16} />}
+              </div>
+            )}
+            {hover && frame && (
+              <span
+                className="ck-pv-mark"
+                style={{ left: `${hover.nx * 100}%`, top: `${hover.ny * 100}%` }}
+              />
+            )}
+          </div>
+
+          <div className="ck-pv-foot text-dim">
+            {frame ? (
+              <>
+                <span className="mono">
+                  {frame.width}×{frame.height}
+                </span>
+                {hover && (
+                  <span className="mono">
+                    　指针 {pct(hover.nx)} / {pct(hover.ny)} · {Math.round(hover.nx * frame.width)},
+                    {Math.round(hover.ny * frame.height)} px
+                  </span>
+                )}
+                {lastPick && <span>　·　已追加 {pct(lastPick.nx)} / {pct(lastPick.ny)}</span>}
+              </>
+            ) : (
+              <span>{err || '正在取画面…'}</span>
+            )}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
 }

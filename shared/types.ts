@@ -1168,6 +1168,8 @@ export const IPC = {
   CLICKER_RUN_STEP: 'clicker:runStep',
   /** 可用的 Android keycode 列表 */
   CLICKER_KEYCODES: 'clicker:keycodes',
+  /** 屏幕预览图：抓一帧当前屏幕（含像素宽高），供在预览画面上点选坐标 */
+  CLICKER_PREVIEW: 'clicker:preview',
 
   /* 屏幕录制采集端（v1.0.32；v1.0.33 起改为电脑端全程控制） */
   RECORDER_INFO: 'recorder:info',
@@ -1194,6 +1196,8 @@ export const IPC = {
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
   LOG_LIST_ALL: 'log:listAll',
+  /** 运行日志的本地目录（按日期分文件存放，只保留 24 小时） */
+  LOG_DIR: 'log:dir',
 
   /* 设置 */
   SETTINGS_GET: 'settings:get',

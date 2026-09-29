@@ -126,11 +126,51 @@
   text-align: left;
 }
 
+/*
+ * 一行 = 「勾选框 + 设备行」。
+ *
+ * 为什么拆成两个控件而不是一个：点设备行是「就装这台」（最高频），
+ * 点勾选框是「加进批量」。合成一个的话，最常见的单台安装反而要多点一步。
+ */
+.install-device-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.install-device-check {
+  flex: none;
+  width: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  color: var(--accent);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast);
+}
+
+.install-device-check:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.install-device-row[data-checked] .install-device-check,
+.install-device-row[data-checked] .install-device {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
 .install-device {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  /* 与左侧勾选框同处一个 flex 行：宽度由剩余空间决定，不能写 width:100% */
+  flex: 1;
+  min-width: 0;
   padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -280,6 +320,7 @@
 .install-actions {
   margin-top: 16px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 10px;
 }

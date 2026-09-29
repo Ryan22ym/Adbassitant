@@ -6,6 +6,7 @@ import {
   collectApks,
   dismissInstall,
   installApkFiles,
+  installOnMany,
   isBusy,
   kindOf,
   selectableDevices,
@@ -28,6 +29,18 @@ const PICK_MODE_HINT: Record<InstallMode, string> = {
   overwrite: '点某台设备即开始安装 · 保留应用数据，直接覆盖升级',
   clean: '点某台设备即开始安装 · ⚠️ 会先卸载旧版本，应用数据一起清除',
   fresh: '点某台设备即开始安装 · 设备上已有该应用时直接报错，不动旧数据',
+};
+
+/**
+ * 勾选了多台设备（批量安装）时的安装方式说明。
+ *
+ * 批量只提供覆盖 / 清洁两种。「全新安装」在多台机器上必然结果不一致
+ * （有的装过、有的没装过），跑完变成一半成功一半报错，用户还得逐台排查 ——
+ * 与其提供了再让他踩，不如从一开始就不提供。
+ */
+const PICK_MODE_HINT_BATCH: Record<'overwrite' | 'clean', string> = {
+  overwrite: '批量安装 · 所有设备都保留应用数据，直接覆盖升级',
+  clean: '批量安装 · ⚠️ 所有设备都会先卸载旧版本，应用数据一起清除',
 };
 
 /**
@@ -178,12 +191,36 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
   const currentSerial = useApp((s) => s.currentSerial);
   const devices = selectableDevices();
 
+  /**
+   * 勾选的设备（只用于批量安装）。
+   *
+   * 交互刻意分成两个区域、两种意图：
+   *   · 点设备行     → 「就装这台」，立刻开装（与以前完全一致，最高频用法）；
+   *   · 点左侧勾选框 → 「把它加进批量」，不触发安装。
+   * 把两者合成一个控件（点一下既选中又开装）会让「只装一台」变成两步操作。
+   */
+  const [checked, setChecked] = useState<string[]>([]);
+  // 设备掉线后 checked 里可能留着死序列号 —— 每次渲染与在线列表求交，天然自愈
+  const picked = checked.filter((s) => devices.some((d) => d.serial === s));
+  /** 选中 ≥2 台才算批量；只勾一台没有意义，仍然走「点哪台装哪台」 */
+  const batch = picked.length >= 2;
+
   const firstName = pending.files[0]?.name ?? '安装包';
   const label =
     pending.files.length > 1 ? `${firstName} 等 ${pending.files.length} 个文件` : firstName;
   const hasAab = pending.files.some((f) => (f.kind ?? kindOf(f.path)) === 'aab');
   const hasApks = pending.files.some((f) => (f.kind ?? kindOf(f.path)) === 'apks');
   const updatePendingInstall = useApp((s) => s.updatePendingInstall);
+
+  /**
+   * 勾成批量后把「全新安装」收掉，并顺手把当前值拨回覆盖安装。
+   *
+   * 必须一起改值 —— 否则批量的两选项 Segmented 里一项都不是 active，
+   * 用户看到的是「一个都没选」的空档。
+   */
+  useEffect(() => {
+    if (batch && pending.mode === 'fresh') updatePendingInstall({ mode: 'overwrite' });
+  }, [batch, pending.mode, updatePendingInstall]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -192,6 +229,26 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  /** 批量态下即使 store 里还留着 fresh，渲染时也按覆盖安装显示 */
+  const mode: InstallMode = batch && pending.mode === 'fresh' ? 'overwrite' : pending.mode;
+
+  const toggle = (serial: string) =>
+    setChecked((prev) =>
+      prev.includes(serial) ? prev.filter((s) => s !== serial) : [...prev, serial],
+    );
+
+  /** 批量态只给覆盖 / 清洁两项（全新安装在多台设备上必然结果不一致） */
+  const modeOptions: { value: InstallMode; label: string }[] = batch
+    ? [
+        { value: 'overwrite', label: '覆盖安装' },
+        { value: 'clean', label: '清洁安装' },
+      ]
+    : [
+        { value: 'overwrite', label: '覆盖安装' },
+        { value: 'clean', label: '清洁安装' },
+        { value: 'fresh', label: '全新安装' },
+      ];
 
   return (
     <div className="install-mask" role="dialog" aria-modal="true" aria-label="选择安装目标">
@@ -205,53 +262,80 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
 
         {/* 安装方式在这里是可改的 —— 拖放走的是页面上选的默认值，
             用户点到这一屏才想起「这次要清洁装」时，不必退出去改一遍。
-            只作用于这一次安装，不写回全局默认。 */}
+            只作用于这一次安装，不写回全局默认。
+            勾了多台设备（批量）时只剩覆盖 / 清洁两项，见 PICK_MODE_HINT_BATCH。 */}
         <div className="install-mode">
-          <div data-pick-mode={pending.mode}>
+          <div data-pick-mode={mode}>
             <Segmented<InstallMode>
-              value={pending.mode}
+              value={mode}
               onChange={(m) => updatePendingInstall({ mode: m })}
-              options={[
-                { value: 'overwrite', label: '覆盖安装' },
-                { value: 'clean', label: '清洁安装' },
-                { value: 'fresh', label: '全新安装' },
-              ]}
+              options={modeOptions}
             />
           </div>
-          <p className="install-mode-hint">{PICK_MODE_HINT[pending.mode]}</p>
+          <p className="install-mode-hint">
+            {batch
+              ? PICK_MODE_HINT_BATCH[mode === 'clean' ? 'clean' : 'overwrite']
+              : PICK_MODE_HINT[mode]}
+          </p>
         </div>
 
         <div className="install-meta">
           <span className="install-chip ghost">{devices.length} 台设备在线</span>
+          {batch && <span className="install-chip">已选 {picked.length} 台</span>}
         </div>
 
         <div className="install-devices">
-          {devices.map((d) => (
-            <button
-              key={d.serial}
-              type="button"
-              className="install-device"
-              data-install-device={d.serial}
-              onClick={() => void startInstallOn(d.serial)}
-            >
-              <span className={`install-device-kind ${d.isEmulator ? 'emu' : 'phone'}`}>
-                {d.isEmulator ? '模拟器' : '手机'}
-              </span>
-              <span className="install-device-name">{deviceLabel(d)}</span>
-              <span className="install-device-serial">
-                {d.serial}
-                {d.serial === currentSerial ? ' · 当前' : ''}
-              </span>
-            </button>
-          ))}
+          {devices.map((d) => {
+            const on = picked.includes(d.serial);
+            return (
+              <div className="install-device-row" key={d.serial} data-checked={on ? '1' : undefined}>
+                <button
+                  type="button"
+                  className="install-device-check"
+                  data-pick-select={d.serial}
+                  role="checkbox"
+                  aria-checked={on}
+                  title={on ? '取消勾选' : '勾选后可一次装到多台设备'}
+                  onClick={() => toggle(d.serial)}
+                >
+                  {on ? '✓' : ''}
+                </button>
+                <button
+                  type="button"
+                  className="install-device"
+                  data-install-device={d.serial}
+                  onClick={() => void startInstallOn(d.serial)}
+                >
+                  <span className={`install-device-kind ${d.isEmulator ? 'emu' : 'phone'}`}>
+                    {d.isEmulator ? '模拟器' : '手机'}
+                  </span>
+                  <span className="install-device-name">{deviceLabel(d)}</span>
+                  <span className="install-device-serial">
+                    {d.serial}
+                    {d.serial === currentSerial ? ' · 当前' : ''}
+                  </span>
+                </button>
+              </div>
+            );
+          })}
         </div>
 
         <p className="install-note">
-          多台设备同时在线时不会替你挑一台 —— 点哪台就装到哪台
+          {batch ? (
+            <>
+              会把这一批包依次装到勾选的 {picked.length} 台设备上，
+              整批只用一种安装方式（不能逐台各自选）
+            </>
+          ) : (
+            <>
+              多台设备同时在线时不会替你挑一台 —— 点哪台就装到哪台；
+              左侧勾选框可多选，一次装到多台
+            </>
+          )}
           {hasAab && (
             <>
               <br />
-              AAB 要先按所选设备的配置拆包，比 APK 慢一些
+              AAB 要先按所选设备的配置拆包，比 APK 慢一些；装到多台时逐台拆
             </>
           )}
           {hasApks && !hasAab && (
@@ -264,6 +348,20 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
         </p>
 
         <div className="install-actions">
+          {devices.length >= 2 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void installOnMany(devices.map((d) => d.serial))}
+            >
+              安装到全部设备（{devices.length} 台）
+            </Button>
+          )}
+          {batch && (
+            <Button variant="primary" size="sm" onClick={() => void installOnMany(picked)}>
+              安装到所选 {picked.length} 台
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={cancelPendingInstall}>
             取消
           </Button>
@@ -318,15 +416,19 @@ function InstallDialog({ task }: { task: InstallTask }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [installing]);
 
-  const title = installing
-    ? isAab
-      ? '正在安装 AAB…'
-      : isApks
-        ? '正在安装 APKS…'
-        : '正在安装中…'
-    : isSuccess
-      ? '安装成功'
-      : '安装失败';
+  /* 批量安装是汇总语义（「3/4 台安装成功」这种中间态 phase 表达不了），
+     所以任务自带 title 时以它为准 */
+  const title =
+    task.title ??
+    (installing
+      ? isAab
+        ? '正在安装 AAB…'
+        : isApks
+          ? '正在安装 APKS…'
+          : '正在安装中…'
+      : isSuccess
+        ? '安装成功'
+        : '安装失败');
 
   return (
     <div className="install-mask" role="dialog" aria-modal="true" aria-label={title}>

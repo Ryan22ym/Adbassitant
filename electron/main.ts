@@ -2,6 +2,7 @@ import { app, BrowserWindow, nativeTheme, shell, Menu } from 'electron';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { registerIpc } from './ipc';
+import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
 import { IPC } from '../shared/types';
@@ -67,6 +68,19 @@ function createWindow() {
 app.whenReady().then(() => {
   // 移除默认菜单（保持界面简洁）
   Menu.setApplicationMenu(null);
+
+  /*
+   * 运行日志只保留 24 小时：启动时清一次（删掉过期文件 + 裁掉文件内的过期行）。
+   * 放在 registerIpc 之前，这样界面拿到的第一份日志里就带着清理记录。
+   */
+  try {
+    const { removed } = cleanupLogs();
+    if (removed.length) {
+      log('info', '日志', `已清理 ${removed.length} 个超过 24 小时的日志文件`);
+    }
+  } catch {
+    /* 清理失败不影响启动 */
+  }
 
   registerIpc();
   createWindow();

@@ -128,10 +128,29 @@ def extract_notes(version):
         j += 1
     if j >= len(body) or body[j] != "'":
         die('VERSION_NOTES 里 %s 的值不是单引号字符串' % version)
+
+    # ⚠️ 说明几乎都是多行拼接（'新增：…\n' + '· …\n' + '修复：…'），
+    # 只读第一个字面量会把后面的「修复」整段吞掉 —— 真上线过一份只有
+    # 一行「新增：」的更新说明。所以遇到 `+` 就继续接下去，直到不是字符串。
+    parts = []
     try:
-        notes, _ = read_ts_string(body, j)
+        while True:
+            text, j = read_ts_string(body, j)
+            parts.append(text)
+            k = j
+            while k < len(body) and body[k] in ' \t\r\n':
+                k += 1
+            if k >= len(body) or body[k] != '+':
+                break
+            k += 1
+            while k < len(body) and body[k] in ' \t\r\n':
+                k += 1
+            if k >= len(body) or body[k] != "'":
+                break
+            j = k
     except ValueError as e:
         die('VERSION_NOTES 里 %s 的说明解析失败：%s' % (version, e))
+    notes = ''.join(parts)
     if not notes.strip():
         die('VERSION_NOTES 里 %s 的说明是空的' % version)
     return notes

@@ -176,6 +176,34 @@ export async function captureScreenFallback(
 }
 
 /**
+ * 从 PNG 的 IHDR 直接读像素宽高。
+ *
+ * 不引图像库：PNG 头是固定布局 —— 0..7 签名、8..11 块长度、12..15 'IHDR'、
+ * 16..19 宽、20..23 高，都是大端 32 位。
+ */
+function pngSize(buf: Buffer): { width: number; height: number } {
+  if (buf.length < 24 || buf[12] !== 0x49 || buf[13] !== 0x48) {
+    return { width: 0, height: 0 };
+  }
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+/**
+ * 抓一帧屏幕（不落盘）。
+ *
+ * 连点器的「屏幕预览图」用它做轮询：既然要的是「能点一下换算坐标」，
+ * 走 screencap 就够了，不需要占用采集端的录屏授权 —— 插上设备就能看。
+ */
+export async function grabScreenFrame(
+  serial: string | undefined,
+): Promise<{ png: Buffer; width: number; height: number }> {
+  const s = await ensureDevice(serial);
+  const png = await execOutBinary(s, ['exec-out', 'screencap', '-p']);
+  if (!png || png.length === 0) throw new Error('画面为空，设备可能正在息屏');
+  return { png, ...pngSize(png) };
+}
+
+/**
  * exec-out 获取二进制流
  */
 function execOutBinary(serial: string, args: string[]): Promise<Buffer> {

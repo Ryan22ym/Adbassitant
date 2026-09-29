@@ -20,6 +20,8 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFileSync } = require('child_process');
+// ⚠️ adb 一律走 execCapture：本机环境下 spawn 建管道会 EBUSY（见该模块注释）
+const { execCapture } = require('./_spawn-capture.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'ui-shots');
@@ -54,7 +56,7 @@ const safe = (s) =>
     .replace(/failure/g, 'f*ilure');
 
 const adb = (args, opts = {}) =>
-  execFileSync(ADB, ['-s', SERIAL, ...args], { encoding: 'utf8', timeout: 180000, ...opts });
+  execCapture(ADB, ['-s', SERIAL, ...args], { timeout: 180000, ...opts });
 
 /** 设备上是否真有这个包 */
 function onDevice(pkg) {

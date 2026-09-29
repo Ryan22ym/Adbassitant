@@ -48,13 +48,30 @@ function ensureBuilt() {
     console.log('找不到 typescript（' + tsc + '），先 npm install 再跑。');
     process.exit(2);
   }
-  const r = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.electron.json'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-  });
+  /**
+   * ⚠️ 不要用默认的 `stdio: 'pipe'` 收 tsc 输出。
+   *
+   * 某些受管环境（WorkBuddy 宿主里跑的 node）创建子进程管道会直接
+   * `spawnSync ... EBUSY` —— 明明 `-p tsconfig.electron.json` 手跑是 0，
+   * 这里却报「主进程编译失败」且 stdout/stderr 全空，非常误导。
+   * 改成把输出重定向到临时文件（走已有的文件描述符，不新建管道），
+   * 在受限环境和普通环境里行为一致。
+   */
+  const logFile = path.join(os.tmpdir(), 'adb-assistant-tsc-electron.log');
+  const fd = fs.openSync(logFile, 'w');
+  let r;
+  try {
+    r = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.electron.json'], {
+      cwd: ROOT,
+      stdio: ['ignore', fd, fd],
+    });
+  } finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+  }
   if (r.status !== 0) {
     console.log('主进程编译失败，验收无意义（先修 tsc）：');
-    console.log((r.stdout || '') + (r.stderr || ''));
+    console.log('退出码 ' + r.status + (r.error ? ' / ' + r.error.code : ''));
+    try { console.log(fs.readFileSync(logFile, 'utf8')); } catch { /* ignore */ }
     process.exit(2);
   }
 }

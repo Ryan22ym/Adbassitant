@@ -41,6 +41,8 @@ const fs = require('fs');
 const os = require('os');
 const http = require('http');
 const { execFileSync, spawn } = require('child_process');
+// ⚠️ adb 调用一律走 execCapture：本机环境下 spawn 建管道会 EBUSY（见该模块注释）
+const { execCapture } = require('./_spawn-capture.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'ui-shots');
@@ -846,7 +848,7 @@ async function dropAndWait(page, rounds, autoPick = SERIAL) {
  */
 function firstPhysicalSerial() {
   try {
-    const out = execFileSync(ADB, ['devices'], { encoding: 'utf8', timeout: 20000 });
+    const out = execCapture(ADB, ['devices'], { timeout: 20000 });
     const serials = out
       .split(/\r?\n/)
       .slice(1)
@@ -930,7 +932,7 @@ function ensureFixtures() {
 
   if (fs.existsSync(REAL_APK) && fs.statSync(REAL_APK).size > 0) return true;
 
-  const adb = (args) => execFileSync(ADB, args, { encoding: 'utf8', timeout: 180000 });
+  const adb = (args) => execCapture(ADB, args, { timeout: 180000 });
 
   let remote = '';
   try {
