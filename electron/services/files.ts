@@ -227,6 +227,108 @@ async function deviceHasPackage(s: string, pkg: string): Promise<boolean> {
 }
 
 /**
+ * 等设备端**真的**查不到这个包。
+ *
+ * `adb uninstall` 返回 Success 只代表设备接受了卸载指令，包在设备侧真正消失
+ * 还有一段窗口期。清洁安装是在卸载完的下一行立刻发 install，会直接撞上这个窗口 ——
+ * 实测 OPPO / ColorOS（CPH1931，Android 10）上表现为 adb 在 1.7s 内失败，且
+ * **不返回任何失败原因**（`adb: failed to install xxx.apk:` 冒号后为空）。
+ * 同一台机器改用覆盖安装、或隔一会儿再装都能成功，说明包与参数都没问题。
+ *
+ * 超时不当作错误：包真没卸掉时后面的 install 会给出正常的失败原因，
+ * 这里只负责削掉那段竞态窗口。
+ */
+async function waitPackageGone(s: string, pkg: string, timeoutMs = 6000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await deviceHasPackage(s, pkg))) return;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  log('warn', '安装', `卸载后 ${pkg} 仍能被 pm 查到（已等 ${timeoutMs}ms），继续安装`);
+}
+
+/** 设备端安装失败码 → 人话。表里没有的码原样保留，至少让用户能拿去搜。 */
+const INSTALL_FAILURE_HINTS: Record<string, string> = {
+  INSTALL_FAILED_ALREADY_EXISTS:
+    '设备上已存在同包名的应用 —— 用「覆盖安装」升级，或先卸载再装',
+  INSTALL_FAILED_UPDATE_INCOMPATIBLE:
+    '与设备上已装版本的签名不一致 —— 必须卸载旧版本（会清数据）后再装',
+  INSTALL_FAILED_VERSION_DOWNGRADE: '版本号低于设备上已装的版本 —— 系统不允许降级安装',
+  INSTALL_FAILED_INSUFFICIENT_STORAGE: '设备存储空间不足 —— 清理空间后重试',
+  INSTALL_FAILED_NO_MATCHING_ABIS:
+    '安装包里没有该设备 CPU 架构的原生库 —— 需要 arm64-v8a / armeabi-v7a 的包',
+  INSTALL_FAILED_OLDER_SDK: '安装包要求的最低系统版本高于这台设备 —— 设备太旧，装不了',
+  INSTALL_FAILED_NEWER_SDK: '设备系统版本高于安装包允许的上限',
+  INSTALL_FAILED_USER_RESTRICTED:
+    '设备系统（多为厂商安全策略）阻止了本次安装 —— 到系统设置里放开「USB 安装 / 外部来源应用」',
+  INSTALL_FAILED_TEST_ONLY: '安装包带 testOnly 标记（Android Studio 直接 Run 出来的包）—— 需正式签名出包',
+  INSTALL_FAILED_INVALID_APK: '安装包结构不合法 —— 多半是传输或下载过程中损坏了',
+  INSTALL_FAILED_DUPLICATE_PERMISSION: '与设备上其他应用声明了同名自定义权限 —— 先卸载冲突的那个应用',
+  INSTALL_FAILED_MISSING_SHARED_LIBRARY: '缺少安装包依赖的共享库（通常是厂商定制库）—— 该机型装不了这个包',
+  INSTALL_PARSE_FAILED_NO_CERTIFICATES: '安装包没有签名 —— 必须签名后才能安装',
+  INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES: '包内各部分签名不一致 —— 需要重新打包',
+  INSTALL_PARSE_FAILED_NOT_APK: '这不是一个有效的 APK —— 文件损坏，或根本不是安装包',
+  INSTALL_PARSE_FAILED_UNEXPECTED_EXCEPTION: '设备解析安装包时异常 —— 包损坏，或与系统版本不兼容',
+  INSTALL_PARSE_FAILED_MANIFEST_MALFORMED: '安装包的 AndroidManifest.xml 不合法 —— 包本身有问题',
+};
+
+/** adb 输出里是否带设备返回的失败码（`Failure [XXX]`），有码说明设备明确拒绝了 */
+function hasInstallFailureCode(output: string): boolean {
+  return /Failure\s*\[/i.test(output);
+}
+
+/** adb 的进度/成功噪音行，对排障没有信息量，展示时剔掉 */
+const ADB_INSTALL_NOISE = /^(Performing Streamed Install|Success)$/i;
+
+/**
+ * 把 adb 的安装失败输出整理成用户能直接看懂的一段话。
+ *
+ * 为什么不能把 adb 原文直接丢出去：
+ *  · adb 会把进度和错误混在同一段文本里（先 `Performing Streamed Install`，
+ *    再 `adb: failed to install xxx.apk: Failure [XXXX]`），照抄等于让用户自己去挑；
+ *  · 设备侧有时只回一个「失败」而**不带失败码** —— 实测 OPPO/ColorOS 上
+ *    「卸载后立刻安装」就会给出 `adb: failed to install xxx.apk:`（冒号后为空）。
+ *    这种输出原文照抄等于什么都没说，必须补上可执行的下一步。
+ */
+function describeInstallFailure(output: string, serial: string, pkg?: string): string {
+  const code = /Failure\s*\[([^\]]+)\]/i.exec(output)?.[1]?.trim();
+  /* 失败码后面常跟着一段英文详情（signatures do not match 之类），
+     取码本身去查表，详情仍留在正文里 */
+  const head = code?.split(':')[0]?.trim();
+
+  const body = output
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !ADB_INSTALL_NOISE.test(l))
+    .map((l) => l.replace(/^adb:\s*/i, ''))
+    .join('\n')
+    .trim();
+
+  const lines: string[] = [];
+  if (body) lines.push(body);
+
+  const hint = head ? INSTALL_FAILURE_HINTS[head] : undefined;
+  if (hint) {
+    lines.push(`⚠ ${hint}`);
+  } else if (!hasInstallFailureCode(output)) {
+    lines.push(
+      '⚠ 设备没有返回失败原因，adb 只收到一个「失败」。这类空原因失败通常是设备侧的瞬时状态：',
+      '· 刚卸载完旧版本，设备的安装服务还在收尾 —— 隔几秒重装（本工具已自动重试过一次）',
+      '· 厂商安全策略临时拦截 USB 安装 —— 到系统设置里放开「USB 安装 / 外部来源应用」',
+      '· 仍不行就重启设备，或把安装方式换成「覆盖安装」再试',
+    );
+  }
+
+  lines.push(`· 目标设备 ${serial}${pkg ? `（${pkg}）` : ''}`);
+  return lines.join('\n');
+}
+
+/** 「没拿到失败码就秒退」的判定阈值：低于它的失败几乎必然是瞬时状态，值得重试 */
+const INSTALL_RETRY_MAX_MS = 8000;
+/** 自动重试前的等待，给设备侧的服务收尾留时间 */
+const INSTALL_RETRY_DELAY_MS = 2000;
+
+/**
  * APK 安装
  *
  * 三种模式见 shared/types.ts 的 InstallMode。
@@ -293,6 +395,8 @@ export async function installApk(
           );
         }
         uninstalled = true;
+        // 卸载返回 Success ≠ 设备端已经清理完 —— 立刻 install 会撞上竞态窗口
+        await waitPackageGone(s, pkg);
       } else {
         log('info', '安装', `清洁安装：设备上没有 ${pkg}，直接全新安装`);
       }
@@ -315,11 +419,37 @@ export async function installApk(
     if (grantAll) args.push('-g');
     args.push(toPosixPath(apkPath));
 
-    const res = await runAdb(args, { source: '安装', timeout: 5 * 60 * 1000 });
-    const output = (res.stdout + '\n' + res.stderr).trim();
+    let res = await runAdb(args, { source: '安装', timeout: 5 * 60 * 1000 });
+    let output = (res.stdout + '\n' + res.stderr).trim();
+
+    /*
+     * 「没有失败码 + 秒退」＝ 设备侧瞬时状态，自动重试一次。
+     *
+     * 实测（OPPO / ColorOS，清洁安装 177 MB 的包）：卸载刚结束就 install，
+     * adb 会在 1.7s 内退出，只打印 `failed to install xxx.apk:`（冒号后为空），
+     * 同机改用覆盖安装、或隔几秒再装都能成 —— 与包、与参数都无关。
+     * 这种情况下隔两秒重来一次几乎必然成功，比把失败直接甩给用户划算。
+     *
+     * 只在「没有 Failure[码] 且耗时很短」时重试：带失败码说明设备明确拒绝了
+     * （签名冲突、空间不足……），重试只是白等；耗时长说明真的推过包，同理。
+     */
+    if (
+      (!res.ok || /Failure|Error/i.test(output)) &&
+      !hasInstallFailureCode(output) &&
+      res.duration < INSTALL_RETRY_MAX_MS
+    ) {
+      log(
+        'warn',
+        '安装',
+        `未拿到失败原因且仅用时 ${res.duration}ms，判定为设备侧瞬时失败，${INSTALL_RETRY_DELAY_MS}ms 后自动重试一次`,
+      );
+      await new Promise((r) => setTimeout(r, INSTALL_RETRY_DELAY_MS));
+      res = await runAdb(args, { source: '安装', timeout: 5 * 60 * 1000 });
+      output = (res.stdout + '\n' + res.stderr).trim();
+    }
+
     if (/Failure|Error/i.test(output) || !res.ok) {
-      const reason = output.replace(/^.*?Failure\s*/i, '').trim();
-      throw new Error(reason || output || '安装失败');
+      throw new Error(describeInstallFailure(output, s, pkg));
     }
 
     /* ---- 装后复核 ---- */
