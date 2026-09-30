@@ -43,6 +43,7 @@
     "make:update": "python scripts/make-update.py --out out-v1.1.0",
     "make:manifest": "python scripts/make-manifest.py",
     "check:manifest": "python scripts/make-manifest.py --check",
+    "release:github": "python scripts/publish-release.py",
     "check:apk-parse": "node scripts/check-apk-parse.cjs",
     "check:aab-install": "node scripts/check-aab-install.cjs",
     "check:aab-universal": "node scripts/check-aab-universal.cjs",
