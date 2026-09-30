@@ -60,7 +60,8 @@
     "check:install-all": "python scripts/run-electron.py scripts/check-install-all-devices.cjs --watch ui-shots/_installall.log --until \"INSTALL ALL CHECK DONE\" --timeout 900",
     "check:touch-capture": "node scripts/check-touch-capture.cjs",
     "check:touch-capture:device": "python scripts/run-electron.py scripts/check-touch-capture-device.cjs --watch ui-shots/_touchcap.log --until \"TOUCH CAP CHECK DONE\" --timeout 240",
-    "check:logcat-export": "python scripts/run-electron.py scripts/check-logcat-export.cjs --watch ui-shots/_logcat-export.log --until \"LOGCAT EXPORT CHECK DONE\" --timeout 600"
+    "check:logcat-export": "python scripts/run-electron.py scripts/check-logcat-export.cjs --watch ui-shots/_logcat-export.log --until \"LOGCAT EXPORT CHECK DONE\" --timeout 600",
+    "check:icon": "python scripts/run-electron.py scripts/check-app-icon.cjs --watch ui-shots/_icon.log --until \"ICON CHECK DONE\" --timeout 180"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

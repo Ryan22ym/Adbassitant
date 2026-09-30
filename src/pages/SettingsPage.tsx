@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import type { CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -16,12 +17,41 @@ import { useApp } from '@/store/app';
 import { call } from '@/lib/ipc';
 import { IPC } from '@shared/types';
 import type {
+  AccentId,
   EnvCheckResult,
   UpdateCheckResult,
   UpdateContext,
   UpdateDownloadProgress,
   UpdateInfo,
 } from '@shared/types';
+
+/**
+ * 主题色清单。
+ *
+ * ⚠️ 三处必须同步：这里（名称 + 色块取色）、`shared/types.ts` 的 `AccentId`、
+ *    `src/styles/global.css` 里 `[data-accent]` 那两块变量（**浅色一条、深色一条**，
+ *    只写浅色的话深色模式下会串色）。
+ *
+ * 每项给两个色：
+ *   bar = 左侧功能栏底色（--bg-sidebar）
+ *   app = 右侧大色块底色（--bg-app，内容区 + 顶栏）
+ * 这两色是**同色系、深浅差一点点**的一对 —— 界面的通透感就来自这个差，
+ * 所以色块必须把两个色都画出来（一条窄的左栏 + 一块大的右区），
+ * 画成纯色的话看不出版别，选完才发现整片糊在一起。
+ * 数组顺序 = 界面上的排列顺序，默认项（苍穹）刻意放在正中。
+ */
+const ACCENTS: {
+  id: AccentId;
+  name: string;
+  light: [bar: string, app: string];
+  dark: [bar: string, app: string];
+}[] = [
+  { id: 'cloud', name: '云灰', light: ['#e6e8ec', '#f8f9fa'], dark: ['#101216', '#1a1d22'] },
+  { id: 'mist', name: '雾青', light: ['#cfe2ee', '#f2f8fb'], dark: ['#0a141a', '#142029'] },
+  { id: 'cangqiong', name: '苍穹', light: ['#ccdaf9', '#f5f8fe'], dark: ['#0e1220', '#161b28'] },
+  { id: 'ocean', name: '远山', light: ['#b3cbf1', '#eff5fd'], dark: ['#070e1c', '#0e1728'] },
+  { id: 'ink', name: '墨玉', light: ['#c3cbd9', '#f4f6f9'], dark: ['#0f1217', '#1a1e25'] },
+];
 
 /**
  * 每个版本的一句话更新说明，key 为 package.json 的完整版本号。
@@ -81,6 +111,8 @@ export default function SettingsPage() {
   }, []);
   const theme = useApp((s) => s.theme);
   const applyTheme = useApp((s) => s.applyTheme);
+  const accent = useApp((s) => s.accent);
+  const applyAccent = useApp((s) => s.applyAccent);
   const toast = useApp((s) => s.toast);
 
   const [env, setEnv] = useState<EnvCheckResult | null>(null);
@@ -117,6 +149,12 @@ export default function SettingsPage() {
     update({ theme: t });
   };
 
+  const changeAccent = (a: AccentId) => {
+    // 先落 DOM 再落盘：画面上立刻变，主进程那份最终由 setSettings 回来的结果校准
+    applyAccent(a);
+    update({ accent: a });
+  };
+
   const pickDir = async (key: 'screenshotDir' | 'recordDir' | 'pullDir') => {
     const dir = await call<string | null>(() => window.adbApi.pickDir(), { silent: true });
     if (dir) update({ [key]: dir });
@@ -133,7 +171,7 @@ export default function SettingsPage() {
   return (
     <>
       <Card title="外观">
-        <Field label="主题模式" hint="影响整个界面的配色">
+        <Field label="主题模式" hint="浅色 / 深色，决定整个界面的明暗">
           <Segmented
             value={theme}
             onChange={(v) => changeTheme(v as 'light' | 'dark')}
@@ -144,6 +182,43 @@ export default function SettingsPage() {
           />
         </Field>
 
+        {/*
+          主题色：色块画成「左窄条 + 右大块」两块颜色，直观对应左侧功能栏与右侧内容区。
+          故意不用 <Field>（它渲染的是 <label>）—— 里面放 <button> 会让点击被 label
+          再触发一次，所以这里手写同样的 .field / .field-label 结构。
+        */}
+        <div className="field accent-field">
+          <span className="field-label">
+            主题色
+            <em className="field-hint">决定主色与整体底色；色块左半是左侧功能栏、右半是右侧内容区</em>
+          </span>
+          <div className="accent-picker">
+            {ACCENTS.map((a) => {
+              const [bar, app] = theme === 'dark' ? a.dark : a.light;
+              const active = accent === a.id;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  className={`accent-chip${active ? ' active' : ''}`}
+                  data-accent-id={a.id}
+                  aria-pressed={active}
+                  title={a.name}
+                  onClick={() => changeAccent(a.id)}
+                >
+                  <span
+                    className="accent-swatch"
+                    style={{ '--swatch-bar': bar, '--swatch-app': app } as CSSProperties}
+                  >
+                    <i className="accent-swatch-bar" />
+                    <i className="accent-swatch-app" />
+                  </span>
+                  <span className="accent-name">{a.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </Card>
 
       <Card title="关于">

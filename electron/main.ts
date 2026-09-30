@@ -1,14 +1,40 @@
-import { app, BrowserWindow, nativeTheme, shell, Menu } from 'electron';
+import { app, BrowserWindow, nativeTheme, shell, Menu, nativeImage } from 'electron';
+import type { NativeImage } from 'electron';
 import { join } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { registerIpc } from './ipc';
 import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
+import { refreshShortcutIcons } from './services/shortcuts';
 import { IPC } from '../shared/types';
 
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
+
+/** 与 electron-builder.json 的 appId 一致；任务栏分组与通知归属都靠它 */
+const APP_USER_MODEL_ID = 'com.xiaoyang.adbassistant';
+
+/**
+ * 窗口 / 任务栏图标：**运行期从文件读**，不用 exe 内嵌的那份。
+ *
+ * 因为在线更新只替换 app.asar 与 resources/bin、从不替换 exe ——
+ * 靠 exe 的话，老用户更新上来图标永远还是旧的。
+ * 这个 png 在 asar 里（electron/assets/app-icon.png，由 scripts/make-icon.py 生成），
+ * 每次更新都会跟着换。桌面快捷方式的图标另见 services/shortcuts.ts。
+ */
+let cachedIcon: NativeImage | null | undefined;
+function appIcon(): NativeImage | undefined {
+  if (cachedIcon !== undefined) return cachedIcon ?? undefined;
+  try {
+    // 走 createFromBuffer 而不是 createFromPath：asar 内的路径没必要赌绑定层认不认
+    const png = join(__dirname, '..', 'assets', 'app-icon.png');
+    cachedIcon = existsSync(png) ? nativeImage.createFromBuffer(readFileSync(png)) : null;
+  } catch {
+    cachedIcon = null;
+  }
+  return cachedIcon ?? undefined;
+}
 
 /* 单实例锁 */
 const gotLock = app.requestSingleInstanceLock();
@@ -30,6 +56,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     title: 'ADB 桌面助手',
+    icon: appIcon(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#16181d' : '#f6f7f9',
     show: false,
     autoHideMenuBar: true,
@@ -68,6 +95,23 @@ function createWindow() {
 app.whenReady().then(() => {
   // 移除默认菜单（保持界面简洁）
   Menu.setApplicationMenu(null);
+
+  /*
+   * 任务栏图标 / 分组依赖 AppUserModelID，且必须在建窗口之前设好，
+   * 否则 Windows 会把窗口归到 electron 默认的组里，任务栏图标也不受我们控制。
+   */
+  app.setAppUserModelId(APP_USER_MODEL_ID);
+
+  /*
+   * 刷新桌面 / 开始菜单 / 任务栏固定项的图标。
+   * 同步执行、耗时只有几次文件读；放在建窗口前，避免窗口先出现时任务栏还挂着旧图标。
+   * 内部已吞掉所有异常，不会影响启动。
+   */
+  try {
+    refreshShortcutIcons(__dirname);
+  } catch {
+    /* 兜底：这个函数自己已经 try/catch 过，这里只是不让它有任何机会拖垮启动 */
+  }
 
   /*
    * 运行日志只保留 24 小时：启动时清一次（删掉过期文件 + 裁掉文件内的过期行）。

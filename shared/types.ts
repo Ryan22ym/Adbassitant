@@ -810,8 +810,23 @@ export interface WeakNetStatus {
 /* 会话设置                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 主题色 id。
+ *
+ * 每个 id 在 src/styles/global.css 里都对应一对变量块（浅色 + 深色），
+ * 在 src/pages/SettingsPage.tsx 的 ACCENTS 里对应一个名称与两个色值（用于画色块）。
+ * ⚠️ 三处必须同步；新增主题时别忘了 global.css 里的**深色那条** ——
+ * 只写浅色的话，深色模式下会串成浅色配色（原因见 global.css 文件头）。
+ *
+ * 'cangqiong'（苍穹）是默认值，也是 global.css 里 :root 那一份 —— 所以它不写
+ * [data-accent] 块，启动瞬间没闪烁。
+ */
+export type AccentId = 'cangqiong' | 'cloud' | 'mist' | 'ocean' | 'ink';
+
 export interface AppSettings {
   theme: 'light' | 'dark' | 'system';
+  /** 主题色（v1.1.2）。决定 --accent 及整套界面底色，见 AccentId */
+  accent: AccentId;
   /** 截图默认保存目录 */
   screenshotDir: string;
   /** 录屏默认保存目录 */

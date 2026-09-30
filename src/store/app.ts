@@ -8,6 +8,7 @@ import type {
   InstallMode,
   InstallKind,
   SigningMode,
+  AccentId,
 } from '@shared/types';
 
 /* ------------------------------------------------------------------ */
@@ -139,6 +140,10 @@ interface AppState {
   theme: 'light' | 'dark';
   applyTheme: (t: 'light' | 'dark') => void;
 
+  /* 主题色（决定 --accent 与整套界面底色，见 shared/types.ts 的 AccentId） */
+  accent: AccentId;
+  applyAccent: (a: AccentId) => void;
+
   /* Toast */
   toasts: ToastItem[];
   toast: (tone: ToastItem['tone'], message: string, detail?: string) => void;
@@ -252,6 +257,14 @@ export const useApp = create<AppState>((set, get) => ({
       document.documentElement.setAttribute('data-theme', t);
       set({ theme: t });
     }
+    /*
+     * 主题色同理：主进程持久化的那份才是真值。
+     * 必须在这里同步，不能只在设置页挂载时读 —— 别处（比如顶栏切主题）会绕过设置页，
+     * 那样换完主题回来主题色就丢了。老 settings.json 没有这个字段，回落默认值。
+     */
+    const a: AccentId = settings.accent || 'cangqiong';
+    document.documentElement.setAttribute('data-accent', a);
+    if (get().accent !== a) set({ accent: a });
   },
 
   /* ---------------- 主题 ---------------- */
@@ -260,6 +273,14 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().theme === theme) return;
     document.documentElement.setAttribute('data-theme', theme);
     set({ theme });
+  },
+
+  /* ---------------- 主题色 ---------------- */
+  accent: 'cangqiong',
+  applyAccent: (accent) => {
+    if (get().accent === accent) return;
+    document.documentElement.setAttribute('data-accent', accent);
+    set({ accent });
   },
 
   /* ---------------- Toast ---------------- */

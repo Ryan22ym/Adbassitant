@@ -1,32 +1,51 @@
 /* ==================================================================
    设计系统 —— 全局变量与基础样式
    原则：浅色为默认，深色通过 [data-theme="dark"] 覆盖
+   配色由「主题色」决定：<html data-accent="...">，见下方「主题色」一节
+
+   ⚠️ 底线规则（改配色前先读）：
+   1) 下面 :root 这一份**就是「苍穹」浅色**，[data-theme="dark"] 就是**苍穹深色** ——
+      苍穹不另外写 [data-accent] 块，避免启动瞬间（settings 还没读回来）底色闪一下。
+      所以**不要单独改这里的色值**，要改先想清楚是不是只改了一个主题。
+   2) 其它主题用 :root[data-accent='x']（浅色）与
+      :root[data-accent='x'][data-theme='dark']（深色）两两成对给出。
+      :root 是伪类，优先级高于单独的 [data-theme='dark']，
+      所以**浅色块会盖住深色块**，深色必须靠「两个属性一起选」的那条（优先级更高）拿回来 ——
+      这就是为什么每个主题都非得写两条不可，少一条深色模式下就是浅色配色。
+   3) 一组配色里最关键的是这对「双色」：
+        --bg-sidebar  左侧功能栏
+        --bg-app      右侧大色块（内容区 + 顶栏）
+      两者同色系、深浅差一点点 —— 这是整个界面通透感的来源，别让它们相等。
+      --bg-surface 是卡片，比 --bg-app 再抬一层。
    ================================================================== */
 
 :root {
-  /* 中性色 */
-  --bg-app: #f5f6f8;
+  /* ---- 中性色（= 苍穹 · 浅色）---- */
+  --bg-app: #f5f8fe;
+  --bg-sidebar: #ccdaf9;
+  --bg-sidebar-hover: #becff7;
+  --bg-sidebar-active: #abc2f3;
   --bg-surface: #ffffff;
-  --bg-surface-2: #fafbfc;
-  --bg-hover: #f0f2f5;
-  --bg-active: #e8ecf2;
-  --bg-inset: #f7f8fa;
+  --bg-surface-2: #f9fbff;
+  --bg-hover: #e9eefb;
+  --bg-active: #dbe3f8;
+  --bg-inset: #f5f8fe;
 
   /* 边框 */
-  --border: #e4e7ec;
-  --border-strong: #d0d5dd;
+  --border: #dfe4f4;
+  --border-strong: #c2cce8;
 
   /* 文本 */
-  --text-primary: #1a1d21;
-  --text-secondary: #5b6470;
-  --text-tertiary: #8b95a3;
+  --text-primary: #1a1d29;
+  --text-secondary: #5a6275;
+  --text-tertiary: #8a92a6;
   --text-inverse: #ffffff;
 
   /* 主色 */
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-soft: #eff4ff;
-  --accent-border: #c7d7fe;
+  --accent: #3b6ae1;
+  --accent-hover: #2a55c9;
+  --accent-soft: #e7ecfc;
+  --accent-border: #c6d3fa;
 
   /* 语义色 */
   --success: #16a34a;
@@ -65,26 +84,30 @@
   --font-mono: 'Cascadia Code', 'JetBrains Mono', Consolas, 'Courier New', monospace;
 }
 
+/* ---- 深色（= 苍穹 · 深色）---- */
 [data-theme='dark'] {
-  --bg-app: #131519;
-  --bg-surface: #1a1d23;
-  --bg-surface-2: #20242b;
-  --bg-hover: #252a32;
-  --bg-active: #2c323b;
-  --bg-inset: #16191e;
+  --bg-app: #161b28;
+  --bg-sidebar: #0e1220;
+  --bg-sidebar-hover: #1a2038;
+  --bg-sidebar-active: #232b48;
+  --bg-surface: #1d2332;
+  --bg-surface-2: #222939;
+  --bg-hover: #262e42;
+  --bg-active: #2e374d;
+  --bg-inset: #12161f;
 
-  --border: #2a2f38;
-  --border-strong: #3a414c;
+  --border: #29303f;
+  --border-strong: #3c4558;
 
-  --text-primary: #e8ebf0;
-  --text-secondary: #9aa4b2;
-  --text-tertiary: #6b7686;
+  --text-primary: #e8ebf4;
+  --text-secondary: #98a2b8;
+  --text-tertiary: #6b7793;
   --text-inverse: #16181d;
 
-  --accent: #4d84f5;
-  --accent-hover: #6b98f7;
-  --accent-soft: #1c2740;
-  --accent-border: #2f4370;
+  --accent: #6b8cf0;
+  --accent-hover: #86a2f5;
+  --accent-soft: #1b2440;
+  --accent-border: #33406b;
 
   --success: #34d058;
   --success-soft: #14281a;
@@ -99,6 +122,188 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ==================================================================
+   主题色（data-accent）
+   每个主题各写浅色 / 深色两条；顺序无关，靠优先级区分（理由见文件头）。
+   id 与 shared/types.ts 的 AccentId、SettingsPage 的 ACCENTS 一一对应。
+   ================================================================== */
+
+/* ---- 云灰：中性冷灰，最素 ---- */
+:root[data-accent='cloud'] {
+  --bg-app: #f8f9fa;
+  --bg-sidebar: #e6e8ec;
+  --bg-sidebar-hover: #dce0e6;
+  --bg-sidebar-active: #cfd5dd;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #fafbfc;
+  --bg-hover: #eef0f3;
+  --bg-active: #e3e7eb;
+  --bg-inset: #f8f9fa;
+  --border: #e3e6ea;
+  --border-strong: #cbd0d7;
+  --text-primary: #1a1d21;
+  --text-secondary: #5b6470;
+  --text-tertiary: #8b95a3;
+  --accent: #4b5563;
+  --accent-hover: #3c4553;
+  --accent-soft: #eceef1;
+  --accent-border: #d2d7de;
+}
+
+:root[data-accent='cloud'][data-theme='dark'] {
+  --bg-app: #1a1d22;
+  --bg-sidebar: #101216;
+  --bg-sidebar-hover: #1b1f26;
+  --bg-sidebar-active: #242932;
+  --bg-surface: #1f2329;
+  --bg-surface-2: #24282f;
+  --bg-hover: #282d35;
+  --bg-active: #30363f;
+  --bg-inset: #14171b;
+  --border: #2a2f37;
+  --border-strong: #3d444e;
+  --text-primary: #e8ebf0;
+  --text-secondary: #9aa4b2;
+  --text-tertiary: #6b7686;
+  --text-inverse: #16181d;
+  --accent: #a3aebb;
+  --accent-hover: #bcc6d2;
+  --accent-soft: #242932;
+  --accent-border: #3d4553;
+}
+
+/* ---- 雾青：青灰，偏冷静 ---- */
+:root[data-accent='mist'] {
+  --bg-app: #f2f8fb;
+  --bg-sidebar: #cfe2ee;
+  --bg-sidebar-hover: #c2d9e8;
+  --bg-sidebar-active: #b2cee1;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f8fcfd;
+  --bg-hover: #e8f1f6;
+  --bg-active: #daeaf2;
+  --bg-inset: #f2f8fb;
+  --border: #dce8ef;
+  --border-strong: #bcd2de;
+  --text-primary: #16232b;
+  --text-secondary: #4e6270;
+  --text-tertiary: #7e93a1;
+  --accent: #2e7c9c;
+  --accent-hover: #226784;
+  --accent-soft: #e3f1f7;
+  --accent-border: #b8d9e7;
+}
+
+:root[data-accent='mist'][data-theme='dark'] {
+  --bg-app: #142029;
+  --bg-sidebar: #0a141a;
+  --bg-sidebar-hover: #14222c;
+  --bg-sidebar-active: #1d2e39;
+  --bg-surface: #19262f;
+  --bg-surface-2: #1e2c36;
+  --bg-hover: #23323c;
+  --bg-active: #2a3b47;
+  --bg-inset: #101a21;
+  --border: #24333d;
+  --border-strong: #36474f;
+  --text-primary: #e6eef4;
+  --text-secondary: #93a6b4;
+  --text-tertiary: #65798a;
+  --text-inverse: #141a20;
+  --accent: #6fb0cf;
+  --accent-hover: #8cc3dd;
+  --accent-soft: #15262f;
+  --accent-border: #2c4b5c;
+}
+
+/* ---- 远山：饱和一点的蓝 ---- */
+:root[data-accent='ocean'] {
+  --bg-app: #eff5fd;
+  --bg-sidebar: #b3cbf1;
+  --bg-sidebar-hover: #a3beed;
+  --bg-sidebar-active: #8fabe7;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f7faff;
+  --bg-hover: #e2ecfb;
+  --bg-active: #cfe0f8;
+  --bg-inset: #eff5fd;
+  --border: #d5e2f6;
+  --border-strong: #b0c8ea;
+  --text-primary: #14203a;
+  --text-secondary: #405272;
+  --text-tertiary: #62759a;
+  --accent: #2a5cc4;
+  --accent-hover: #1e49a6;
+  --accent-soft: #e1ebfd;
+  --accent-border: #b4cbf7;
+}
+
+:root[data-accent='ocean'][data-theme='dark'] {
+  --bg-app: #0e1728;
+  --bg-sidebar: #070e1c;
+  --bg-sidebar-hover: #101a2d;
+  --bg-sidebar-active: #17233a;
+  --bg-surface: #162034;
+  --bg-surface-2: #1b263b;
+  --bg-hover: #202c44;
+  --bg-active: #26344f;
+  --bg-inset: #0b1322;
+  --border: #1f2c44;
+  --border-strong: #32425e;
+  --text-primary: #e6ecf8;
+  --text-secondary: #93a1bd;
+  --text-tertiary: #62718f;
+  --text-inverse: #101726;
+  --accent: #5b8bf0;
+  --accent-hover: #7ba3f5;
+  --accent-soft: #16264a;
+  --accent-border: #2d4274;
+}
+
+/* ---- 墨玉：石墨蓝灰，偏商务 ---- */
+:root[data-accent='ink'] {
+  --bg-app: #f4f6f9;
+  --bg-sidebar: #c3cbd9;
+  --bg-sidebar-hover: #b6c0d1;
+  --bg-sidebar-active: #a5b1c5;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f9fafc;
+  --bg-hover: #e7ebf1;
+  --bg-active: #dae1e9;
+  --bg-inset: #f4f6f9;
+  --border: #dee3ea;
+  --border-strong: #c0c9d5;
+  --text-primary: #171b22;
+  --text-secondary: #55606f;
+  --text-tertiary: #808c9d;
+  --accent: #46566f;
+  --accent-hover: #37455b;
+  --accent-soft: #e9edf3;
+  --accent-border: #c9d2df;
+}
+
+:root[data-accent='ink'][data-theme='dark'] {
+  --bg-app: #1a1e25;
+  --bg-sidebar: #0f1217;
+  --bg-sidebar-hover: #181c23;
+  --bg-sidebar-active: #21262f;
+  --bg-surface: #20242c;
+  --bg-surface-2: #252a32;
+  --bg-hover: #2a303a;
+  --bg-active: #323944;
+  --bg-inset: #14171c;
+  --border: #2b313a;
+  --border-strong: #3e4551;
+  --text-primary: #e9ecf1;
+  --text-secondary: #98a3b3;
+  --text-tertiary: #6d7889;
+  --text-inverse: #16181d;
+  --accent: #8fa3c4;
+  --accent-hover: #a9bad6;
+  --accent-soft: #212834;
+  --accent-border: #39455c;
 }
 
 /* ---------------- 重置 ---------------- */

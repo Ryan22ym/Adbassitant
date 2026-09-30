@@ -615,6 +615,40 @@ GUI 程序必须让它自己决定窗口可见性。
 > koffi 3.x 的 API 与 2.x 不兼容，且**回调内调 `koffi.decode` 会段错误**；
 > 若将来仍需 FFI，细节见 `docs/test-mirror-icon.txt`。
 
+### 🔴 应用图标：一份源图、六份产物、两处运行期
+
+图标只认 `scripts/make-icon.py <源图.png>`，**别手改任何一份产物**（改一处漏五处）。
+它一次生成：
+
+| 产物 | 谁在用 |
+|---|---|
+| `build/icon.png` | 图标源图（通用分支） |
+| `build/icon.ico` | electron-builder 打 **exe / 安装程序 / 卸载程序** |
+| `bin/icon.png` | 随包资源（⚠️ 也是 scrcpy portable 图标位的干扰源，见上一节） |
+| `electron/assets/app-icon.png` | **运行期窗口 / 任务栏图标** |
+| `electron/assets/app-icon.ico` | **桌面 / 开始菜单 / 任务栏固定项的图标** |
+| `src/assets/app-icon.png` | 侧栏品牌标记（Vite 内嵌，128px，别塞大图） |
+
+**为什么不直接靠 exe 里那份图标**：在线更新只替换 app.asar 与 `resources/bin`，
+**从不替换 exe**。靠 exe 的话，老用户一路在线更新上来，窗口和任务栏图标永远停在
+当初装 exe 时的版本 —— 这正是「每次重装都要手动改图标」的根因。
+
+所以运行期这一步是必需的：
+
+- `main.ts` 用 `nativeImage` 读 asar 里的 `app-icon.png` 当 `BrowserWindow.icon`，
+  并按 `appId` 设 `setAppUserModelId`（任务栏分组也靠它）；
+- `services/shortcuts.ts` 把 `app-icon.ico` 释放到 `<userData>\icons\app-<版本>.ico`
+  —— **文件名带版本号**，版本一变路径就变，绕开 Windows「按路径记图标」的缓存 ——
+  再用 `shell.writeShortcutLink(..., 'update', { icon })` 改桌面 / 开始菜单 /
+  `User Pinned\TaskBar` 里所有指向本程序的 lnk。只在真的需要时动手，且只传要改的字段
+  （用户自己加的启动参数不会被抹掉）。
+
+边界（Windows 的限制，不是漏做）：**exe 文件本身**在资源管理器里显示的图标改不了，
+只有重装安装包才会变。窗口、任务栏、开始菜单、桌面这几处都会跟着更新走。
+
+> 回归：`npm run check:icon`（27 项）。它在临时目录里造假的 lnk 来验刷新逻辑，
+> **不会动用户桌面上真实的快捷方式**；`--user-data-dir` 是临时目录，写进去的 ico 也不落地。
+
 ### ⚠️ 验收脚本的静默兜底会把「脚本坏了」伪装成「功能失败」
 
 `e2e-mirror-installed.cjs` 曾在 `catch { return [] }` 里调用一个**从未入库**的

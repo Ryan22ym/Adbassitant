@@ -5,6 +5,7 @@ import type { AppSettings } from '../../shared/types';
 
 const DEFAULTS: AppSettings = {
   theme: 'light',
+  accent: 'cangqiong',
   screenshotDir: '',
   recordDir: '',
   pullDir: '',
@@ -59,6 +60,7 @@ function defaultDirs(): AppSettings {
   const downloads = app.getPath('downloads');
   return {
     theme: 'light',
+    accent: 'cangqiong',
     screenshotDir: join(pictures, 'ADB助手'),
     recordDir: join(videos, 'ADB助手'),
     pullDir: join(downloads, 'ADB助手'),

@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useApp } from '@/store/app';
 import { Badge } from './ui';
 import { Icon } from './icons';
+import brandIcon from '@/assets/app-icon.png';
 import './layout.css';
 
 /* ------------------------------------------------------------------ */
@@ -30,7 +31,12 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <div className="brand-mark">A</div>
+        {/*
+          品牌标记直接用应用图标（src/assets/app-icon.png，由 scripts/make-icon.py 生成，
+          与 exe / 任务栏 / 快捷方式用的那份同源）—— 以前这里是个写死的字母 A，
+          换图标时永远漏掉它。
+        */}
+        <img className="brand-mark" src={brandIcon} alt="ADB 助手" draggable={false} />
         <div className="brand-text">
           <strong>ADB 助手</strong>
           <span>v{__APP_VERSION__}</span>

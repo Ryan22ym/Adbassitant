@@ -15,7 +15,12 @@
   flex: none;
   display: flex;
   flex-direction: column;
-  background: var(--bg-surface);
+  /*
+   * 侧栏用 --bg-sidebar，内容区用 --bg-app：两者是**同色系、深浅略有差别**的一对，
+   * 这是「左功能栏 / 右大色块」通透感的来源（主题色在 global.css 里按 data-accent 给）。
+   * 别把这里改回 --bg-surface —— 那样侧栏和内容卡片一个色，整块会糊在一起。
+   */
+  background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
 }
 
@@ -27,19 +32,15 @@
   height: var(--header-h);
 }
 
+/* 应用图标（图来自 src/assets/app-icon.png，别改回写死的字母） */
 .brand-mark {
   width: 30px;
   height: 30px;
   border-radius: var(--r-md);
-  background: linear-gradient(135deg, var(--accent), #7c3aed);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 15px;
   flex: none;
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 35%, transparent);
+  display: block;
+  object-fit: contain;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .brand-text {
@@ -83,13 +84,18 @@
   transition: background var(--t-fast), color var(--t-fast);
 }
 
+/*
+ * 悬停 / 选中底色用「侧栏专用」的变量，不用全局的 --bg-hover / --accent-soft。
+ * 原因：侧栏底色本身就是带色的一档，全局那两个值比它更浅或更艳，
+ * 铺上去要么看不见、要么像贴了块补丁。主题色在 global.css 里按 data-accent 定义。
+ */
 .nav-item:hover {
-  background: var(--bg-hover);
+  background: var(--bg-sidebar-hover);
   color: var(--text-primary);
 }
 
 .nav-item.active {
-  background: var(--accent-soft);
+  background: var(--bg-sidebar-active);
   color: var(--accent);
 }
 
@@ -177,7 +183,12 @@
   gap: 16px;
   padding: 0 22px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
+  /*
+   * 顶栏底色 = 内容区底色（不是 --bg-surface）。
+   * 以前用 surface，深色下顶栏比内容区亮一档，顶上像贴了一条色带；
+   * 统一成 app 底色后整块右区是一整片，只留一条发丝分隔线。
+   */
+  background: var(--bg-app);
 }
 
 .header-left {
