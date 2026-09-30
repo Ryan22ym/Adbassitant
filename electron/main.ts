@@ -7,7 +7,7 @@ import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
 import { refreshShortcutIcons } from './services/shortcuts';
-import { IPC } from '../shared/types';
+import { IPC, TITLEBAR_HEIGHT } from '../shared/types';
 
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
@@ -50,6 +50,23 @@ if (!gotLock) {
 }
 
 function createWindow() {
+  /*
+   * 标题栏改成自绘（v1.1.3）。
+   *
+   * 起因：Windows 原生标题栏那条只会跟着系统深浅色，**不跟主题色** ——
+   * 选了「雾青 / 远山」之后，顶上永远杵着一条灰色（或白色）带，和下面的界面断层。
+   *
+   * 做法：titleBarStyle:'hidden' + titleBarOverlay。系统标题栏让位，
+   * 窗口控制按钮（最小化/最大化/关闭）变成右上角的 overlay，
+   * 而顶部那一条由渲染层的 .titlebar 自己画（左半 --bg-sidebar、右半 --bg-app）。
+   * overlay 的底色**只能从主进程给**，所以渲染层读到 CSS 变量后通过
+   * IPC.WINDOW_SET_TITLEBAR 回传（见 ipc.ts 与 App.tsx 里的同步 effect）。
+   *
+   * ⚠️ height 必须和 CSS 的 --titlebar-h、以及 ipc 里更新时用的高度一致，
+   *    否则系统按钮会和自绘色带错位。
+   */
+  const dark = nativeTheme.shouldUseDarkColors;
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -57,7 +74,14 @@ function createWindow() {
     minHeight: 640,
     title: 'ADB 桌面助手',
     icon: appIcon(),
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#16181d' : '#f6f7f9',
+    // 首帧（页面还没画出来）的底色，尽量贴近默认主题色，避免闪一下别的颜色
+    backgroundColor: dark ? '#161b28' : '#f5f8fe',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: dark ? '#161b28' : '#f5f8fe',
+      symbolColor: dark ? '#e8ebf4' : '#1a1d29',
+      height: TITLEBAR_HEIGHT,
+    },
     show: false,
     autoHideMenuBar: true,
     webPreferences: {

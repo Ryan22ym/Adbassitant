@@ -2019,10 +2019,10 @@
 /* ==================================================================
    设置页 · 主题色选择器
    ------------------------------------------------------------------
-   色块刻意画成两块：左边一条窄的功能栏色，右边一大块内容区色。
-   这两色是同色系、深浅只差一点的一对，界面的通透感就来自这个差
-   （配色定义在 src/styles/global.css 的 [data-accent] 块里）。
-   做成纯色圆点的话选完才发现左右两栏糊在一起，等于没预览。
+   色块只画**一个主色**（= 该主题的 --accent，取色表在 SettingsPage.tsx 的 ACCENTS）。
+   以前画的是「左窄条 + 右大块」两块底色（--bg-sidebar + --bg-app），
+   想顺带预览那对底色，结果看着是两个色拼在一起，反而认不出主题。
+   配色定义在 src/styles/global.css 的 [data-accent] 块里。
    ================================================================== */
 
 .accent-field {
@@ -2064,28 +2064,11 @@
   width: 42px;
   height: 42px;
   border-radius: var(--r-full);
-  overflow: hidden;
-  display: flex;
+  background: var(--swatch);
+  display: block;
   flex: none;
   border: 1px solid var(--border-strong);
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
-}
-
-.accent-swatch-bar,
-.accent-swatch-app {
-  display: block;
-  height: 100%;
-}
-
-/* 左侧功能栏那一条：占比小，但也别太窄，否则看不出是两种颜色 */
-.accent-swatch-bar {
-  width: 38%;
-  background: var(--swatch-bar);
-}
-
-.accent-swatch-app {
-  flex: 1;
-  background: var(--swatch-app);
 }
 
 /*

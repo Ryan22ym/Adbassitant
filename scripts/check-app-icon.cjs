@@ -1,13 +1,14 @@
 /**
  * 应用图标链路回归自检（npm run check:icon）。
  *
- * 覆盖三件事：
+ * 覆盖四件事：
  *   1. 图标产物齐全且一致 —— make-icon.py 那几个输出少一个，某处的图标就会停在旧版
  *      （exe / 安装程序 / 窗口 / 快捷方式 / 侧栏分别吃不同的文件，缺哪个坏哪个）；
- *   2. 运行期窗口图标能从 asar 内那份读出来（这是「在线更新也能换图标」的前提）；
- *   3. 快捷方式图标刷新逻辑真的能改 lnk 的 IconLocation，并且幂等、不误伤别人的快捷方式。
+ *   2. 图标**四角是透明的** —— 源图的圆角底色没清掉时，任务栏里就是「四角白方块」；
+ *   3. 运行期窗口图标能从 asar 内那份读出来（这是「在线更新也能换图标」的前提）；
+ *   4. 快捷方式图标刷新逻辑真的能改 lnk 的 IconLocation，并且幂等、不误伤别人的快捷方式。
  *
- * ⚠️ 第 3 项刻意在**临时目录**里造假的 lnk、并只把临时目录传给 refreshShortcutIcons ——
+ * ⚠️ 第 4 项刻意在**临时目录**里造假的 lnk、并只把临时目录传给 refreshShortcutIcons ——
  *    绝不碰用户桌面上真实的快捷方式。userData 由 run-electron 指向临时目录，
  *    所以写入的 ico 也不会污染真实环境。
  *
@@ -78,6 +79,30 @@ app.whenReady().then(() => {
   // 16px 没有的话任务栏会糊；有 256 才能在大图标视图下清楚 —— 这条是 make-icon.py 的存在理由
   const brand = fs.statSync(path.join(ROOT, 'src', 'assets', 'app-icon.png'));
   check('侧栏图不超过 64KB（别把 1MB 大图打进 bundle）', brand.size < 64 * 1024, brand.size + ' B');
+
+  /*
+   * 四角必须透明。
+   * 源图是「带底色圆角方块」，四角那圈底色如果没被 punch_background 清掉，
+   * Windows 按方形边界渲染 —— 任务栏 / 桌面快捷方式 / 开始菜单里就是「四角白色的小方块」。
+   * 这条以前没人守，直到用户报上来才发现，所以固化成断言。
+   */
+  for (const rel of ['src/assets/app-icon.png', 'electron/assets/app-icon.png']) {
+    const im = nativeImage.createFromPath(path.join(ROOT, ...rel.split('/')));
+    const sz = im.getSize();
+    const bmp = im.isEmpty() ? null : im.toBitmap(); // BGRA，alpha 在 +3
+    const alphaAt = (x, y) => (bmp ? bmp[(y * sz.width + x) * 4 + 3] : 255);
+    const corners = [
+      alphaAt(0, 0),
+      alphaAt(sz.width - 1, 0),
+      alphaAt(0, sz.height - 1),
+      alphaAt(sz.width - 1, sz.height - 1),
+    ];
+    check(
+      `四角透明 ${rel}`,
+      !!bmp && corners.every((a) => a < 16),
+      `${sz.width}x${sz.height} 四角 alpha=${corners.join(',')}`,
+    );
+  }
 
   /* ---------- 2. 编译产物里的图标 ---------- */
   const distPng = path.join(ROOT, 'dist-electron', 'assets', 'app-icon.png');

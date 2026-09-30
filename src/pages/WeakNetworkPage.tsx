@@ -37,12 +37,18 @@ const EMPTY_DIR: WeakNetDirectionParams = {
   duplicatePercent: 0,
 };
 
+/*
+ * engine 固定 'vpn'。
+ * 代理 / tc / svc 三条实现路径已从界面撤下（实现方式选择器整个删掉了），
+ * 页面上只留设备侧 VPN 一条 —— 这里跟着一起固定，免得落盘过的旧值
+ * 让实际走的路径和界面显示的方案对不上。
+ */
 const DEFAULT_PARAMS: WeakNetParams = {
   up: { ...EMPTY_DIR },
   down: { ...EMPTY_DIR },
   durationSec: 60,
   blockNetwork: false,
-  engine: 'auto',
+  engine: 'vpn',
 };
 
 /**
@@ -57,7 +63,7 @@ const QUICK_PARAMS: WeakNetParams = {
   down: { ...EMPTY_DIR, bandwidthMbps: 1, delayMs: 300, jitterMs: 80, lossPercent: 1 },
   durationSec: 60,
   blockNetwork: false,
-  engine: 'auto',
+  engine: 'vpn',
 };
 
 interface ProbeResult {
@@ -261,9 +267,11 @@ export default function WeakNetworkPage() {
     if (!current) return toast('warn', '请先连接设备');
     // 没配置任何参数不再拦住用户：直接套用默认弱网档启动，
     // 避免出现「整个页面找不到启动键」的困惑
-    let p = params;
+    // 实现方式只剩设备侧 VPN，这里强制覆盖一遍 ——
+    // 老版本落盘过的 engine='proxy' / 'tc' 不能再让实际路径跑偏
+    let p: WeakNetParams = { ...params, engine: 'vpn' };
     if (!hasShaping) {
-      p = { ...QUICK_PARAMS, engine: params.engine };
+      p = { ...QUICK_PARAMS, engine: 'vpn' };
       setParams(p);
       toast(
         'info',
@@ -325,29 +333,12 @@ export default function WeakNetworkPage() {
     }
   };
 
-  /* ---------- 清理残留代理 ---------- */
-  const cleanupStale = async () => {
-    setBusy(true);
-    try {
-      const r = await call<{ before: string | null; cleaned: boolean; left?: string | null }>(
-        () => window.adbApi.weaknetCleanup(current?.serial),
-        { silent: true },
-      );
-      if (r?.cleaned) toast('success', '已清理残留代理设置', r.before || '');
-      else if (r?.left)
-        toast(
-          'warn',
-          '本机 ROM 不允许 adb 清除代理设置',
-          `请到「设置 → WLAN → 修改网络 → 高级 → 代理」把「${r.left}」改回「无」`,
-        );
-      else toast('info', '设备上没有残留的代理设置');
-      void probeDevice();
-    } catch (e) {
-      toast('error', '清理失败', (e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
+  /*
+   * 这里原本还有一个 cleanupStale（一键清理设备上残留的系统代理）。
+   * 那个入口已经跟着「代理方案」一起从界面撤掉了；主进程里的 weaknetCleanup
+   * 与启动时的自动清理都还在（老用户从代理版本升上来时仍然会被清干净），
+   * 只是页面不再提供手动按钮。
+   */
 
   /* ---------- 预设 ---------- */
   const applyPreset = (id: string) => {
@@ -413,38 +404,17 @@ export default function WeakNetworkPage() {
     return anyDir(params.up) || anyDir(params.down) || !!params.blockNetwork;
   }, [params]);
 
-  const engine = (params.engine || 'auto') as WeakNetEngine;
-  const canTc = !!(probe?.rooted && probe?.hasTc);
-
   /**
-   * 实际会走哪条路 —— 和主进程的选择逻辑保持一致，避免 UI 和实际不符。
+   * 实际会走哪条路。
    *
-   * 注意这里的优先级与 weaknet.ts 里**必须逐条对应**：VPN → tc → 代理 → svc。
-   * 两边不一致时用户会看到「说的和做的不一样」，比不显示更糟。
+   * 实现方式选择器已经撤掉，界面上只有设备侧 VPN 一条路；
+   * 「整体断网」是参数里的开关（blockNetwork），不在这里选。
+   * weaknet.ts 那边仍是多实现并存（proxy / tc / svc 的代码留着没删），
+   * 只是 start() 里会把 engine 强制写成 'vpn'，不让旧配置把路径带偏。
    */
-  const effectiveMode: WeakNetEngine = useMemo(() => {
-    if (params.blockNetwork) return 'svc';
-    if (engine === 'vpn') return 'vpn';
-    if (engine === 'proxy') return 'proxy';
-    if (engine === 'svc') return 'svc';
-    if (engine === 'tc') return canTc ? 'tc' : 'proxy';
-    return 'vpn'; // auto：VPN 是首选
-  }, [engine, canTc, params.blockNetwork]);
+  const effectiveMode: WeakNetEngine = params.blockNetwork ? 'svc' : 'vpn';
 
-  const engineLabel = useMemo(() => {
-    switch (effectiveMode) {
-      case 'vpn':
-        return 'VPN 全量整形（免 Root）';
-      case 'proxy':
-        return '本地代理（免 Root）';
-      case 'tc':
-        return 'tc/netem 内核级';
-      case 'svc':
-        return '整体断网';
-      default:
-        return '未选择';
-    }
-  }, [effectiveMode]);
+  const engineLabel = params.blockNetwork ? '整体断网' : '设备侧 VPN';
 
   const summaryText = useMemo(() => {
     const parts: string[] = [];
@@ -463,11 +433,11 @@ export default function WeakNetworkPage() {
     return parts.join(' · ') || '无限制';
   }, [params]);
 
-  /** 残留代理：设备上配着代理但我们并没有在跑 */
-  const staleProxy = !status.running && !!probe?.httpProxy;
-
-  /** 当前设备未 Root 且 ROM 禁止 adb 写系统设置 —— 代理只能手动配 */
-  const needManualProxy = !!probe && !probe.rooted && !probe.hasTc && !probe.canWriteSettings;
+  /*
+   * 这里原本还有两个 Notice：「检测到残留代理」和「本机 ROM 禁止 adb 写系统代理」。
+   * 两者都只跟代理方案有关 —— 代理路径已从界面撤下，留着它们只会在
+   * 设备上碰巧留着代理设置时冒出来，讲一件当前界面已经做不到的事，所以删掉。
+   */
 
   /** 正在跑的手动向导模式：服务就绪但用户还没把代理填好 */
   const awaitingManual =
@@ -483,27 +453,8 @@ export default function WeakNetworkPage() {
         </Notice>
       )}
 
-      {staleProxy && (
-        <Notice tone="warn">
-          检测到设备上残留的代理设置 <span className="mono">{probe?.httpProxy}</span> ——
-          通常是上次未正常退出留下的，可能导致设备无法上网。
-          <Button size="sm" variant="default" onClick={cleanupStale} loading={busy}>
-            一键清理
-          </Button>
-        </Notice>
-      )}
-
-      {needManualProxy && !status.running && (
-        <Notice tone="warn">
-          本机 ROM（{probe?.sdk ? `Android SDK ${probe.sdk}` : '定制 Android'}）禁止 adb 写系统代理设置 ——
-          自动代理不可用。启动后需要你在设备上手动填一次代理地址（界面会给出具体步骤），
-          填好后会自动开始注入。
-        </Notice>
-      )}
-
-      {/* ================= VPN 配套 App：装机 + 授权 ================= */}
       {/*
-        这一块只在「可能用 VPN」且还没就绪时出现，避免界面变吵。
+        这一块只在还没就绪时出现，避免界面变吵。
         为什么要把授权单独拎出来做卡片：Android 的 VPN 授权**无法绕过**，
         必须用户在手机的系统对话框里点「确定」。提前把这件事说清楚，
         用户第一次点开始时就不会被弹框吓到，也不会以为程序卡住了。
@@ -522,14 +473,18 @@ export default function WeakNetworkPage() {
                       : '待授权'}
                 </Badge>
               </div>
-              <p className="text-dim wn-vpn-desc">
-                {!probe.hasVpnApp
-                  ? '在设备上安装一个配套 App，由它在 IP 层接管全部流量（覆盖所有 App，不需要 Root）。'
-                  : probe.vpnAuthorized
-                    ? '已安装并授权，可以直接开始。全部 IPv4 流量会在设备侧被逐包整形。'
-                    : '配套 App 已装好，还差一次系统授权 —— VPN 会看到全部流量，所以 Android 要求你亲自在手机上点「确定」，' +
-                      '这步没法自动代劳。点下面的按钮会把它弹出来。'}
-              </p>
+              {/*
+                已就绪时**不再摆描述文字** —— 标题 +「已授权」徽章 +「重新检测」按钮
+                已经把状态说完了，再多一行「已安装并授权，可以直接开始…」纯属噪音。
+                只有真要用户动手（装 App / 去授权）时才给说明。
+              */}
+              {(!probe.hasVpnApp || !probe.vpnAuthorized) && (
+                <p className="text-dim wn-vpn-desc">
+                  {!probe.hasVpnApp
+                    ? '在设备上装一个配套 App，由它在 IP 层接管全部流量。'
+                    : '配套 App 已装好，还差一次系统授权 —— VPN 会看到全部流量，所以 Android 要求你亲自在手机上点「确定」，这步没法自动代劳。'}
+                </p>
+              )}
             </div>
             <div className="wn-vpn-actions">
               {!probe.hasVpnApp ? (
@@ -649,43 +604,10 @@ export default function WeakNetworkPage() {
           </div>
         )}
 
-        {!status.running && (
-          <div className="wn-engine-row">
-            <span className="field-label" style={{ minWidth: 'auto' }}>
-              实现方式
-            </span>
-            <Segmented
-              size="sm"
-              value={params.blockNetwork ? 'svc' : engine}
-              onChange={(v) => {
-                if (v === 'svc') setTop({ blockNetwork: true });
-                else setTop({ blockNetwork: false, engine: v as WeakNetEngine });
-              }}
-              options={[
-                { value: 'auto', label: '自动' },
-                { value: 'vpn', label: 'VPN' },
-                { value: 'proxy', label: '本地代理' },
-                { value: 'tc', label: 'tc/netem' },
-                { value: 'svc', label: '整体断网' },
-              ]}
-            />
-            <span className="text-dim wn-engine-hint">
-              {effectiveMode === 'vpn'
-                ? probe?.hasVpnApp
-                  ? probe.vpnAuthorized
-                    ? '免 Root：设备侧 App 建 tun，IP 层全量整形，覆盖所有 App（含不走代理的）'
-                    : '免 Root：配套 App 已装，只差一次系统授权（上面那张卡片可以触发）'
-                  : '免 Root：开始时自动安装配套 App，首次需要在手机上点一次「确定」授权'
-                : effectiveMode === 'proxy'
-                  ? needManualProxy
-                    ? '免 Root：通道自动建立，但需要你在设备 WLAN 里手动填一次代理地址'
-                    : '免 Root：设备流量经 USB 通道打到电脑代理，只覆盖走系统代理的 App'
-                  : effectiveMode === 'tc'
-                    ? '当前设备已 Root 且支持 tc，保真度最高'
-                    : '关闭设备全部网络，用于验证断网降级逻辑'}
-            </span>
-          </div>
-        )}
+        {/*
+          这里原本是「实现方式」选择行（自动 / VPN / 本地代理 / tc-netem / 整体断网）。
+          只保留设备侧 VPN 之后就整行撤掉了：没有可选项，也就不需要选。
+        */}
 
         {/* ---------- 运行中：实时统计（代理 / VPN 两种模式共用同一组指标） ---------- */}
         {status.running && status.stats && (status.mode === 'vpn' || (status.mode === 'proxy' && status.proxy?.active)) && (
@@ -903,12 +825,11 @@ export default function WeakNetworkPage() {
 
                 <Field
                   label="网络接口"
-                  hint={effectiveMode === 'proxy' ? '代理模式不需要' : probe ? `自动探测：${probe.iface}` : '自动探测'}
+                  hint={probe ? `自动探测：${probe.iface}` : '自动探测'}
                 >
                   <Select
                     value={params.iface || ''}
                     onChange={(e) => setTop({ iface: e.target.value || undefined })}
-                    disabled={effectiveMode === 'proxy'}
                     options={[
                       { value: '', label: probe ? `自动（${probe.iface}）` : '自动' },
                       ...(probe?.ifaces || []).map((i) => ({ value: i, label: i })),
@@ -982,7 +903,7 @@ export default function WeakNetworkPage() {
 
           <Card
             title="设备能力"
-            subtitle="决定使用哪条弱网实现路径"
+            subtitle="设备侧 VPN 的就绪情况"
             extra={
               <Button size="sm" variant="ghost" onClick={probeDevice} loading={probing} disabled={!current}>
                 重新探测
@@ -996,17 +917,15 @@ export default function WeakNetworkPage() {
               </div>
             ) : (
               <div className="col">
+                {/* 只列 VPN 这条路要用的两项；代理 / Root / tc / ifb 那些是已撤下的实现方式才关心的 */}
                 <div className="env-list">
-                  <CapRow name="本地代理（免 Root）" ok={probe.hasProxy} on="可用" off="不可用" />
+                  <CapRow name="VPN 配套 App" ok={probe.hasVpnApp} on="已安装" off="未安装" />
                   <CapRow
-                    name="adb 写系统设置"
-                    ok={probe.canWriteSettings}
-                    on="允许（可自动配代理）"
-                    off="被 ROM 屏蔽（需手动配代理）"
+                    name="VPN 系统授权"
+                    ok={!!probe.vpnAuthorized}
+                    on="已授权"
+                    off={probe.vpnAuthorized === null ? '未知（通道未通）' : '未授权'}
                   />
-                  <CapRow name="Root 权限" ok={probe.rooted} on="已获取" off="未获取" />
-                  <CapRow name="tc 命令" ok={probe.hasTc} on="可用" off="缺失" />
-                  <CapRow name="ifb 模块" ok={probe.hasIfb} on="已加载" off="不可用" />
                 </div>
 
                 <div className="divider" />
@@ -1016,12 +935,7 @@ export default function WeakNetworkPage() {
                   <span className="kv-value mono">{probe.iface}</span>
                 </div>
 
-                <div className="kv">
-                  <span className="kv-key">设备当前代理</span>
-                  <span className="kv-value mono">{probe.httpProxy || '未设置'}</span>
-                </div>
-
-                <Notice tone={probe.hasProxy ? 'accent' : 'warn'}>{probe.note}</Notice>
+                <Notice tone={probe.vpnAuthorized ? 'accent' : 'warn'}>{probe.note}</Notice>
               </div>
             )}
           </Card>
@@ -1033,30 +947,19 @@ export default function WeakNetworkPage() {
                 <strong>下行</strong>指设备收到的流量（下载、响应）。两者可独立设置，模拟真实网络的不对称特性。
               </p>
               <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                <strong>本地代理（免 Root，推荐）</strong>：通过{' '}
-                <span className="mono">adb reverse</span> 把设备流量经 USB 通道打到电脑上的代理，
-                再由代理注入弱网参数。延迟、抖动、带宽为精确实现；
-                丢包按「队头阻塞」等效、乱序按「附加抖动」等效、重复包按带宽占用折算 ——
-                应用层无法像内核那样逐包操作，这是免 Root 的固有限制。
-                <br />
-                注意：代理**只改变数据的到达节奏，绝不改动字节内容与顺序**
-                （TCP 交给应用层的就是有序字节流，真乱序等于篡改内容）——
-                唯一例外是「错报」，那是故意篡改，用来验证客户端容错。
+                <strong>设备侧 VPN</strong>：随包配套 App 在设备上建一条 tun 虚拟网卡，
+                把全部 IPv4 流量接进程序，在 IP 层逐包整形 ——
+                覆盖设备上<strong>所有 App</strong>（包括不走系统代理的原生 socket、QUIC/UDP 与游戏），
+                且<strong>不需要 Root</strong>。
+                丢包、乱序、错报都是真的在网络层发/丢/改包，不是应用层的等效近似。
               </p>
               <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                代理只覆盖<strong>遵循系统代理的应用</strong>（OkHttp / 浏览器等）。
-                不走系统代理的流量（原生 socket、QUIC/UDP、部分游戏）不受影响，
-                这类场景需要 <span className="mono">tc/netem</span>（需设备 Root）。
+                首次使用需要在手机上点一次系统授权：VPN 会看到设备全部流量，Android 强制要求用户亲自确认。
+                授权一次即可，之后直接启动。
               </p>
               <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                <strong>部分 ROM 会屏蔽 adb 写系统设置</strong>（ColorOS 等定制 Android 13 实测如此）。
-                这时代理服务和 USB 通道照常建立，只是需要你到 WLAN 设置里手动填一次地址 ——
-                页面会给出地址并每秒自动检测，填好即生效。
-                <strong>停止后请把该代理改回「无」</strong>，因为这类 ROM 同样不允许我们自动清除。
-              </p>
-              <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                设置持续时长后到点会自动恢复；停止时也会移除设备上的代理设置。
-                若程序异常退出，下次启动会按落盘的会话标记自动把设备恢复干净。
+                设置持续时长后到点会自动恢复；也可以随时点「立即恢复网络」，
+                或直接在设备通知栏里关掉这条 VPN。若程序异常退出，下次启动会按落盘的会话标记自动把设备恢复干净。
               </p>
             </div>
           </Card>

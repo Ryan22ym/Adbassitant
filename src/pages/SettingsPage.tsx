@@ -28,29 +28,28 @@ import type {
 /**
  * 主题色清单。
  *
- * ⚠️ 三处必须同步：这里（名称 + 色块取色）、`shared/types.ts` 的 `AccentId`、
+ * ⚠️ 三处必须同步：这里（名称 + 取色）、`shared/types.ts` 的 `AccentId`、
  *    `src/styles/global.css` 里 `[data-accent]` 那两块变量（**浅色一条、深色一条**，
  *    只写浅色的话深色模式下会串色）。
  *
- * 每项给两个色：
- *   bar = 左侧功能栏底色（--bg-sidebar）
- *   app = 右侧大色块底色（--bg-app，内容区 + 顶栏）
- * 这两色是**同色系、深浅差一点点**的一对 —— 界面的通透感就来自这个差，
- * 所以色块必须把两个色都画出来（一条窄的左栏 + 一块大的右区），
- * 画成纯色的话看不出版别，选完才发现整片糊在一起。
+ * 每项只给**一个主色**（= 该主题的 --accent）。以前画的是「左窄条 + 右大块」两块色
+ * （--bg-sidebar + --bg-app），想顺带预览侧栏/内容区那对底色；
+ * 但两个色拼在一起反而不好认，看起来也乱 —— 只留主色。
+ * 取的是 --accent 而不是底色：底色（侧栏灰 / 内容区近白）五个主题之间几乎看不出差别，
+ * 深色下更是一排黑点，等于没预览。
  * 数组顺序 = 界面上的排列顺序，默认项（苍穹）刻意放在正中。
  */
 const ACCENTS: {
   id: AccentId;
   name: string;
-  light: [bar: string, app: string];
-  dark: [bar: string, app: string];
+  light: string;
+  dark: string;
 }[] = [
-  { id: 'cloud', name: '云灰', light: ['#e6e8ec', '#f8f9fa'], dark: ['#101216', '#1a1d22'] },
-  { id: 'mist', name: '雾青', light: ['#cfe2ee', '#f2f8fb'], dark: ['#0a141a', '#142029'] },
-  { id: 'cangqiong', name: '苍穹', light: ['#ccdaf9', '#f5f8fe'], dark: ['#0e1220', '#161b28'] },
-  { id: 'ocean', name: '远山', light: ['#b3cbf1', '#eff5fd'], dark: ['#070e1c', '#0e1728'] },
-  { id: 'ink', name: '墨玉', light: ['#c3cbd9', '#f4f6f9'], dark: ['#0f1217', '#1a1e25'] },
+  { id: 'cloud', name: '云灰', light: '#4b5563', dark: '#a3aebb' },
+  { id: 'mist', name: '雾青', light: '#2e7c9c', dark: '#6fb0cf' },
+  { id: 'cangqiong', name: '苍穹', light: '#3b6ae1', dark: '#6b8cf0' },
+  { id: 'ocean', name: '远山', light: '#2a5cc4', dark: '#5b8bf0' },
+  { id: 'ink', name: '墨玉', light: '#46566f', dark: '#8fa3c4' },
 ];
 
 /**
@@ -63,6 +62,10 @@ const ACCENTS: {
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.4':
+    '顶部标题栏改为独立的一档配色，五个主题自动适配；侧栏底部分割线两端留空，视觉更柔和。',
+  '1.1.3':
+    '修复任务栏与快捷方式图标四角出现白底；窗口标题栏改为跟随主题色；精简弱网与连点器页面说明。',
   '1.1.2':
     '新增 5 套主题色，界面配色可整体切换；设置页重排、卡片可折叠；设备详情改为屏幕分辨率与 CPU / GPU 型号；应用图标随版本自动更新；界面说明文案精简。',
   '1.1.1': '修复清洁安装在 OPPO / 一加 / realme 上失败；安装失败原因改为中文提示。',
@@ -185,7 +188,7 @@ export default function SettingsPage() {
         </Field>
 
         {/*
-          主题色：色块画成「左窄条 + 右大块」两块颜色，直观对应左侧功能栏与右侧内容区。
+          主题色：色块就是该主题的主色（--accent）一个圆点。
           故意不用 <Field>（它渲染的是 <label>）—— 里面放 <button> 会让点击被 label
           再触发一次，所以这里手写同样的 .field / .field-label 结构。
         */}
@@ -193,7 +196,7 @@ export default function SettingsPage() {
           <span className="field-label">主题色</span>
           <div className="accent-picker">
             {ACCENTS.map((a) => {
-              const [bar, app] = theme === 'dark' ? a.dark : a.light;
+              const color = theme === 'dark' ? a.dark : a.light;
               const active = accent === a.id;
               return (
                 <button
@@ -207,11 +210,8 @@ export default function SettingsPage() {
                 >
                   <span
                     className="accent-swatch"
-                    style={{ '--swatch-bar': bar, '--swatch-app': app } as CSSProperties}
-                  >
-                    <i className="accent-swatch-bar" />
-                    <i className="accent-swatch-app" />
-                  </span>
+                    style={{ '--swatch': color } as CSSProperties}
+                  />
                   <span className="accent-name">{a.name}</span>
                 </button>
               );

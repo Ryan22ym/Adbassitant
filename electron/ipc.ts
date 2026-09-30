@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import {
   IPC,
+  TITLEBAR_HEIGHT,
   type MirrorOptions,
   type AppSettings,
   type CommandResult,
@@ -1115,6 +1116,45 @@ export function registerIpc() {
   ipcMain.handle(
     IPC.SETTINGS_SET,
     wrap((_e, patch: Partial<AppSettings>) => saveSettings(patch)),
+  );
+
+  /* ---------------- 自绘标题栏配色（v1.1.3） ---------------- */
+
+  /*
+   * 窗口是 titleBarStyle:'hidden' + titleBarOverlay（见 main.ts），
+   * 系统那部分标题栏的底色只能由主进程设置，而「当前是什么主题」只有渲染层知道。
+   * 所以颜色由渲染层从 CSS 变量里现读（--bg-app / --text-primary）再传过来 ——
+   * 主进程不另存一份色表，避免两处配色表长期跑偏（主题色的定义在 global.css 里）。
+   *
+   * 失败不抛给界面：非 Windows / 老系统不支持 overlay 时，自绘的那条色带照样在，
+   * 只是窗口按钮区颜色跟不上，不值得弹错误。
+   */
+  ipcMain.handle(
+    IPC.WINDOW_SET_TITLEBAR,
+    wrap((_e, opts: { color?: string; symbolColor?: string; height?: number }) => {
+      const color = typeof opts?.color === 'string' ? opts.color.trim() : '';
+      if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error(`无效的标题栏颜色：${color}`);
+      const symbolColor =
+        typeof opts?.symbolColor === 'string' && opts.symbolColor.trim()
+          ? opts.symbolColor.trim()
+          : color;
+
+      let applied = 0;
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.isDestroyed()) continue;
+        try {
+          w.setTitleBarOverlay({
+            color,
+            symbolColor,
+            height: opts.height ?? TITLEBAR_HEIGHT,
+          });
+          applied += 1;
+        } catch {
+          /* 不支持就跳过 */
+        }
+      }
+      return applied;
+    }),
   );
 
   /* ---------------- 增量更新（v1.0.7） ---------------- */

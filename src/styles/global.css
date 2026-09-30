@@ -14,9 +14,14 @@
       这就是为什么每个主题都非得写两条不可，少一条深色模式下就是浅色配色。
    3) 一组配色里最关键的是这对「双色」：
         --bg-sidebar  左侧功能栏
-        --bg-app      右侧大色块（内容区 + 顶栏）
+        --bg-app      右侧大色块（内容区 + 页头）
       两者同色系、深浅差一点点 —— 这是整个界面通透感的来源，别让它们相等。
       --bg-surface 是卡片，比 --bg-app 再抬一层。
+   4) --bg-titlebar 是**第三档**：最顶上那条自绘标题栏（.titlebar）。
+      由上面两色按比例混合而来 —— 只在这里写一次，各主题覆盖 --bg-sidebar /
+      --bg-app 之后它会自动重算，五个主题天然协调，不用逐主题再写一条。
+      （渲染层读它时会拿 .titlebar 的 computed backgroundColor，
+        浏览器已经替我们把 color-mix 算成了具体的 rgb。）
    ================================================================== */
 
 :root {
@@ -25,6 +30,13 @@
   --bg-sidebar: #ccdaf9;
   --bg-sidebar-hover: #becff7;
   --bg-sidebar-active: #abc2f3;
+  /*
+   * 顶部标题栏 = 侧栏色与内容区色的中间调（见文件头第 4 条）。
+   * 只在这里定义一次：mix 的两个输入本身是变量，各主题覆盖它们之后这张色
+   * 会自动重算，不用每个 [data-accent] 再写一遍。
+   * 深浅两档方向一致（浅色下比内容区深、深色下比内容区亮），都是「介于两者之间」。
+   */
+  --bg-titlebar: color-mix(in srgb, var(--bg-sidebar) 45%, var(--bg-app));
   --bg-surface: #ffffff;
   --bg-surface-2: #f9fbff;
   --bg-hover: #e9eefb;
@@ -73,6 +85,8 @@
   /* 尺寸 */
   --sidebar-w: 208px;
   --header-h: 56px;
+  /* 自绘标题栏高度：必须等于 shared/types.ts 的 TITLEBAR_HEIGHT，否则系统按钮会错位 */
+  --titlebar-h: 32px;
 
   /* 动效 */
   --t-fast: 0.12s ease;

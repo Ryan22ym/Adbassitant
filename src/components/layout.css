@@ -4,8 +4,53 @@
 
 .app-shell {
   display: flex;
+  /* 竖排：最上面一条自绘标题栏，下面才是「侧栏 + 内容区」 */
+  flex-direction: column;
   height: 100%;
   background: var(--bg-app);
+}
+
+/*
+ * 自绘标题栏（窗口是 titleBarStyle:'hidden' + titleBarOverlay，见 electron/main.ts）。
+ *
+ * 原生标题栏只跟系统深浅色、不跟主题色，选了雾青 / 远山之后顶上会留一条灰带；
+ * 改成自绘后这一条完全由主题色决定。
+ *
+ * 底色用 --bg-titlebar：**第三种颜色** —— 侧栏色与内容区色混出的中间调，
+ * 三色同色系、只差深浅（侧栏最深 / 标题栏居中 / 内容区最浅），互相压得住。
+ * 所以这一条是**整宽一整条**，不分左右两半：横贯窗口，和下面的 sidebar / header
+ * 用一条发丝线断开，像窗口自己的顶栏。
+ *
+ * 右上角那三个系统按钮是系统 overlay 画在窗口上的，颜色由主进程设置
+ * （ipc.ts 的 window:setTitlebar，色值同样取 --bg-titlebar），所以
+ * --titlebar-h 必须和 TITLEBAR_HEIGHT 一致。
+ */
+.titlebar {
+  height: var(--titlebar-h);
+  flex: none;
+  display: flex;
+  background: var(--bg-titlebar);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag; /* 拖窗口 / 双击最大化都靠它 */
+  user-select: none;
+}
+
+/* 左半段只负责把「侧栏分界线」往上延一段，让竖线从窗口顶一直通到底 */
+.titlebar-side {
+  width: var(--sidebar-w);
+  flex: none;
+  border-right: 1px solid var(--border);
+}
+
+.titlebar-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
 /* ---------------- Sidebar ---------------- */
@@ -141,14 +186,30 @@
   margin-left: 2px;
 }
 
+/*
+ * 侧栏底部状态条：底色与侧栏**完全一致**（颜色打通，不做成独立的一档），
+ * 只靠一条分割线分出来。
+ * 线**两端各留 16px**（= 左右内边距），不顶到侧栏边界 ——
+ * 顶到边像把侧栏「拦腰截断」，留空之后才是柔和的分段。
+ */
 .sidebar-foot {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
   font-size: 11.5px;
   color: var(--text-tertiary);
+}
+
+.sidebar-foot::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  background: var(--border);
 }
 
 .status-dot {

@@ -3,6 +3,7 @@ import { Routes, Route, useLocation } from 'react-router-dom';
 import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
+import { toHexColor } from './lib/color';
 import { IPC } from '@shared/types';
 import type { UpdateResult, UpdateCheckResult, AabSigningInfo } from '@shared/types';
 
@@ -24,10 +25,8 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/apps': { title: '应用管理', desc: '浏览应用列表，卸载、停止、清数据与提取 APK' },
   '/logcat': { title: '实时 Logcat', desc: '流式抓取设备日志，过滤与一键保存' },
   '/weaknet': { title: '弱网模拟', desc: '模拟带宽、延迟、抖动、丢包等真实网络状况' },
-  '/clicker': {
-    title: '自动连点器',
-    desc: '录制手机上的操作，编辑成脚本后倍速回放，支持随机偏移模拟真实点击',
-  },
+  // 连点器页的顶栏描述去掉了（用户反馈这句是废话）：标题「自动连点器」已经说清楚了
+  '/clicker': { title: '自动连点器', desc: '' },
   '/command': { title: '命令终端', desc: '直接执行任意 adb 命令' },
   '/logs': { title: '运行日志', desc: '实时查看操作记录并一键导出' },
   '/settings': { title: '设置', desc: '外观、默认目录与环境自检' },
@@ -41,6 +40,9 @@ export default function App() {
   const setSettings = useApp((s) => s.setSettings);
   const applyTheme = useApp((s) => s.applyTheme);
   const setLogs = useApp((s) => s.setLogs);
+  // 标题栏配色要跟着这两个走（见下面同步给主进程的 effect）
+  const theme = useApp((s) => s.theme);
+  const accent = useApp((s) => s.accent);
 
   /* 初始化：读取设置、订阅推送（仅执行一次） */
   useEffect(() => {
@@ -180,29 +182,62 @@ export default function App() {
 
   const meta = PAGE_META[location.pathname] || PAGE_META['/'];
 
+  /*
+   * 标题栏配色跟随主题。
+   *
+   * 窗口是 titleBarStyle:'hidden'（见 electron/main.ts）：顶部那条整宽色带由页面自己画
+   * （.titlebar，底色 = --bg-titlebar，侧栏色与内容区色混出的第三档），
+   * 但右上角那三个系统按钮所在区域只能由主进程设置，所以要把渲染色回传。
+   *
+   * 🔴 取的是 .titlebar 的 computed backgroundColor，**不是** --bg-titlebar 变量：
+   * 那个变量是 color-mix() 表达式，getPropertyValue 拿到的是没求值的式子；
+   * 而元素的 backgroundColor 是浏览器算完的色（可能长成 `color(srgb 0.9 …)`），
+   * 还要再经 toHexColor 归一成 #rrggbb —— 主进程只认这一种写法。
+   * 配色表的唯一来源仍然只有 src/styles/global.css。
+   */
+  useEffect(() => {
+    const bar = document.querySelector('.titlebar') as HTMLElement | null;
+    const cs = getComputedStyle(document.documentElement);
+    const color = toHexColor(bar ? getComputedStyle(bar).backgroundColor : '');
+    const symbolColor = cs.getPropertyValue('--text-primary').trim();
+    if (!/^#[0-9a-f]{6}$/.test(color)) return;
+    void window.adbApi.setTitlebar({ color, symbolColor });
+  }, [theme, accent]);
+
   return (
     <div className="app-shell">
-      <Sidebar />
-      <div className="main">
-        <Header
-          title={meta.title}
-          desc={meta.desc}
-          actions={location.pathname !== '/' ? <DevicePicker compact /> : undefined}
-        />
-        <div className="page">
-          <div className="page-inner">
-            <Routes>
-              <Route path="/" element={<DevicePage />} />
-              <Route path="/mirror" element={<MirrorPage />} />
-              <Route path="/tools" element={<ToolsPage />} />
-              <Route path="/apps" element={<AppsPage />} />
-              <Route path="/logcat" element={<LogcatPage />} />
-              <Route path="/weaknet" element={<WeakNetworkPage />} />
-              <Route path="/clicker" element={<AutoClickerPage />} />
-              <Route path="/command" element={<CommandPage />} />
-              <Route path="/logs" element={<LogsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Routes>
+      {/*
+        自绘标题栏。窗口已经没有系统标题栏了，这一条既提供底色（跟着主题色走），
+        也是拖窗口 / 双击最大化的地方（-webkit-app-region: drag 在 CSS 里）。
+      */}
+      <div className="titlebar">
+        <div className="titlebar-side" />
+        <div className="titlebar-main" />
+      </div>
+
+      <div className="app-body">
+        <Sidebar />
+        <div className="main">
+          <Header
+            title={meta.title}
+            desc={meta.desc}
+            actions={location.pathname !== '/' ? <DevicePicker compact /> : undefined}
+          />
+          <div className="page">
+            <div className="page-inner">
+              <Routes>
+                <Route path="/" element={<DevicePage />} />
+                <Route path="/mirror" element={<MirrorPage />} />
+                <Route path="/tools" element={<ToolsPage />} />
+                <Route path="/apps" element={<AppsPage />} />
+                <Route path="/logcat" element={<LogcatPage />} />
+                <Route path="/weaknet" element={<WeakNetworkPage />} />
+                <Route path="/clicker" element={<AutoClickerPage />} />
+                <Route path="/command" element={<CommandPage />} />
+                <Route path="/logs" element={<LogsPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Routes>
+            </div>
           </div>
         </div>
       </div>

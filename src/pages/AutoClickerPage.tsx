@@ -835,10 +835,6 @@ export default function AutoClickerPage() {
                         </button>
                       ))}
                     </div>
-                    <p className="text-dim ck-hint">
-                      每次点击在 ±{draft.jitterPx}px 内随机落点。用途是规避「每次都在同一像素」
-                      这种机械点击特征 —— 不少游戏与风控会据此识别脚本。
-                    </p>
                   </div>
 
                   <div className="divider" />
@@ -911,26 +907,10 @@ export default function AutoClickerPage() {
                 )}
               </Card>
 
-              <Card title="免 Root 实现说明">
-                <div className="col" style={{ gap: 8 }}>
-                  <p className="text-dim ck-hint">
-                    所有输入都通过 <span className="mono">adb shell input</span> 下发，<strong>不需要 Root</strong>，
-                    也不需要往设备上装任何东西。点击 = <span className="mono">input tap</span>、
-                    长按 = 原地 <span className="mono">input swipe</span>（免 Root 下唯一可靠的按住手段）、
-                    滑动 = <span className="mono">input swipe</span>。
-                  </p>
-                  <p className="text-dim ck-hint">
-                    <strong>坐标一律存比例</strong>：录制时的屏幕、回放时的设备、投屏窗口大小三者都可能不同，
-                    只有「占屏幕宽高的比例」是这三种场景都认的。回放开始时读一次
-                    <span className="mono"> wm size</span>，把比例换算成目标设备的真实像素。
-                  </p>
-                  <p className="text-dim ck-hint">
-                    <strong>倍速的语义</strong>是「操作之间等多久」，不是「动作多快」——
-                    把「长按 500ms」缩成 250ms 就不再是长按了（很多长按判定有阈值）。所以倍速只缩
-                    <span className="mono"> 等待</span> 步骤与步骤间隙。
-                  </p>
-                </div>
-              </Card>
+              {/*
+                这里原本有一张「免 Root 实现说明」卡片（adb shell input 下发、坐标存比例、
+                倍速只缩等待…）。都是实现细节，跟用户在这个页面要做的事没关系，整块删掉。
+              */}
             </div>
           </div>
         </>
@@ -1554,7 +1534,9 @@ const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
  */
 function ScreenPreview({ serial, onPick }: ScreenPreviewProps) {
   const [frame, setFrame] = useState<PreviewFrame | null>(null);
-  const [auto, setAuto] = useState(true);
+  // 默认**暂停**：进页面时不自动连抓屏幕（screencap 每秒一次会白占带宽，
+  // 而且画面自己动起来容易干扰「对着画面点坐标」这件事）。要实时看就点一下按钮。
+  const [auto, setAuto] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [hover, setHover] = useState<{ nx: number; ny: number } | null>(null);
@@ -1603,7 +1585,7 @@ function ScreenPreview({ serial, onPick }: ScreenPreviewProps) {
   return (
     <Card
       title="屏幕预览图"
-      subtitle="点画面任意位置 = 追加一个点击步骤（坐标按比例存，换分辨率也能用）"
+      subtitle="点画面任意位置 = 追加一个点击步骤"
       extra={
         <div className="row" style={{ gap: 6 }}>
           <Button size="sm" variant={auto ? 'primary' : 'default'} onClick={() => setAuto((v) => !v)}>

@@ -140,6 +140,8 @@ const IPC = {
   LOG_DIR: 'log:dir',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+  /* 窗口外观（v1.1.3）：自绘标题栏的底色 */
+  WINDOW_SET_TITLEBAR: 'window:setTitlebar',
 
   /* 增量更新（v1.0.7） */
   UPDATE_CONTEXT: 'update:context',
@@ -437,6 +439,10 @@ const api = {
   /* 设置 */
   getSettings: () => invoke(IPC.SETTINGS_GET),
   setSettings: (patch: any) => invoke(IPC.SETTINGS_SET, patch),
+
+  /* 自绘标题栏（v1.1.3）：把当前主题色下的顶栏底色交给主进程 */
+  setTitlebar: (opts: { color: string; symbolColor?: string; height?: number }) =>
+    invoke(IPC.WINDOW_SET_TITLEBAR, opts),
 
   /* 增量更新（v1.0.7） */
   updateContext: () => invoke(IPC.UPDATE_CONTEXT),

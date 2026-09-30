@@ -22,20 +22,35 @@
   把图标作为普通文件放进 asar，运行期用 nativeImage 读它当窗口图标，
   就能让「窗口 + 任务栏」的图标随在线更新一起变新（详见 electron/services/shortcuts.ts）。
 
+为什么要把圆角之外的底色打透明（punch_background）：
+  源图是「带底色的圆角方块」贴图 —— 图形四角是接近白的底色，且 alpha 是**不透明**的。
+  直接拿去当 ico / 窗口图标，Windows 只会按方形边界渲染：
+  任务栏、桌面快捷方式、开始菜单里就成了「四角白色的小方块」。
+  （侧栏 brand 那条 img 也一样，只是它压在浅色侧栏上看不出来。）
+  所以这里必须把圆角之外那圈底色清掉，让四角真的透明。
+
 用法：
-  python scripts/make-icon.py <源图.png> [--keep-corner]
+  python scripts/make-icon.py <源图.png> [--keep-corner] [--keep-bg]
   --keep-corner  不做右下角「水印残影」修补（源图本身干净时用）
+  --keep-bg      不做圆角之外的底色透明化（源图本身就是透明背景时用）
 """
 import argparse
 import os
 import sys
 
-from PIL import Image, ImageFilter
+from PIL import Image, ImageChops, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CANVAS = 1024
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+
+# 底色判定：又亮又灰（低饱和）的像素算「圆角外的那片底」。
+# 阈值给得宽一点：底色是**渐变**的，越往右下越偏青绿，卡太死会出现
+# 「一部分清了、一部分没清」的花脸（2026-09-30 实测：diff 卡 38 时右半边整片没清）。
+BG_MIN_CHANNEL = 168  # 最小通道亮度下限
+BG_MAX_DIFF = 72      # 通道最大差值（饱和度）上限
+BG_MIN_MAX = 195      # 最大通道亮度下限（把深色图形挡在外面）
 
 
 def clean_corner(img):
@@ -66,10 +81,79 @@ def clean_corner(img):
     return out
 
 
+def punch_background(img):
+    """
+    把圆角之外的底色打透明（四角变透明，见文件头说明）。
+
+    做法：从四条边的「底色像素」出发做四连通洪水填充，只清掉**与图像边缘连通**的那一片。
+    为什么不是简单地把所有浅色像素变透明：图形内部那块白色屏幕（手机图标）也是浅色，
+    直接按颜色筛会把屏幕一起挖空。而它被蓝色描边围着、与边缘不连通 —— 洪水填充天然避开。
+
+    清完之后给 alpha 做一次很小的模糊：抗锯齿边缘原本是「底色与图形的混色」，
+    硬切会留下锯齿，0.8px 羽化后在小尺寸（16/32px）下不会有毛边。
+    """
+    w, h = img.size
+    px = img.load()
+
+    def is_bg(x, y):
+        r, g, b, a = px[x, y]
+        if a < 8:
+            return True
+        mx, mn = max(r, g, b), min(r, g, b)
+        return mn > BG_MIN_CHANNEL and (mx - mn) < BG_MAX_DIFF and mx > BG_MIN_MAX
+
+    seen = bytearray(w * h)
+    stack = []
+
+    def push(x, y):
+        i = y * w + x
+        if not seen[i] and is_bg(x, y):
+            seen[i] = 1
+            stack.append((x, y))
+
+    for x in range(w):
+        push(x, 0)
+        push(x, h - 1)
+    for y in range(h):
+        push(0, y)
+        push(w - 1, y)
+
+    while stack:
+        x, y = stack.pop()
+        if x > 0:
+            push(x - 1, y)
+        if x < w - 1:
+            push(x + 1, y)
+        if y > 0:
+            push(x, y - 1)
+        if y < h - 1:
+            push(x, y + 1)
+
+    clear = Image.new('L', (w, h), 255)
+    cp = clear.load()
+    cleared = 0
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            if seen[row + x]:
+                cp[x, y] = 0
+                cleared += 1
+
+    # 一个像素都没清掉 → 要么源图本来就没有底色，要么阈值不适用，别硬改
+    if cleared == 0:
+        return img, 0
+
+    clear = clear.filter(ImageFilter.GaussianBlur(0.8))
+    out = img.copy()
+    out.putalpha(ImageChops.multiply(img.getchannel('A'), clear))
+    return out, cleared
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('src')
     ap.add_argument('--keep-corner', action='store_true')
+    ap.add_argument('--keep-bg', action='store_true')
     args = ap.parse_args()
 
     src = args.src
@@ -85,6 +169,10 @@ def main():
 
     if not args.keep_corner:
         img = clean_corner(img)
+
+    bg_cleared = 0
+    if not args.keep_bg:
+        img, bg_cleared = punch_background(img)
 
     png_path = os.path.join(ROOT, 'build', 'icon.png')
     ico_path = os.path.join(ROOT, 'build', 'icon.ico')
@@ -116,6 +204,11 @@ def main():
     # 复核：ico 里到底塞了几个尺寸，别只看文件生成成功
     with Image.open(ico_path) as ico:
         got = sorted(ico.info.get('sizes', set()))
+
+    # 复核：四角必须真的透明 —— 「任务栏里四角白方块」就是这么漏出去的
+    corners = [(0, 0), (CANVAS - 1, 0), (0, CANVAS - 1), (CANVAS - 1, CANVAS - 1)]
+    opaque = [p for p in corners if img.getpixel(p)[3] > 16]
+
     print('OK  build/icon.png            %d bytes' % os.path.getsize(png_path))
     print('OK  bin/icon.png              %d bytes' % os.path.getsize(bin_path))
     print('OK  build/icon.ico            %d bytes  sizes=%s'
@@ -124,6 +217,12 @@ def main():
     print('OK  electron/assets/app-icon.ico  %d bytes  sizes=%s'
           % (os.path.getsize(win_ico), ICO_SIZES))
     print('OK  src/assets/app-icon.png   %d bytes' % os.path.getsize(brand_png))
+    print('OK  圆角外底色               清掉 %d 像素（%.1f%%）'
+          % (bg_cleared, bg_cleared * 100.0 / (CANVAS * CANVAS)))
+
+    if opaque:
+        print('x 四角仍不透明: %s' % opaque)
+        return 1
 
     want = set(ICO_SIZES)
     have = set(s[0] for s in got)

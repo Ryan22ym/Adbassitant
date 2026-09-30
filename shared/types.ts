@@ -1242,6 +1242,9 @@ export const IPC = {
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
 
+  /* 窗口外观（v1.1.3）：标题栏是自绘的，底色要跟着主题色走 */
+  WINDOW_SET_TITLEBAR: 'window:setTitlebar',
+
   /* 增量更新（v1.0.7） */
   UPDATE_CONTEXT: 'update:context',
   UPDATE_PREPARE: 'update:prepare',
@@ -1276,6 +1279,15 @@ export const IPC = {
   /** 采集端录制状态变化（v1.0.32） */
   PUSH_RECORDER_STATUS: 'push:recorderStatus',
 } as const;
+
+/**
+ * 自绘标题栏的高度（DIP）。
+ *
+ * ⚠️ 三处必须一致，不一致系统按钮就会和自绘色带对不齐：
+ *   主进程建窗口时的 `titleBarOverlay.height`、更新配色时的 height、
+ *   渲染层 CSS 变量 `--titlebar-h`（src/styles/global.css）。
+ */
+export const TITLEBAR_HEIGHT = 32;
 
 /* ------------------------------------------------------------------ */
 /* 环境自检                                                            */
