@@ -141,6 +141,50 @@
   padding: 15px 18px 18px;
 }
 
+/* ---------------- 可折叠 Card ----------------
+ * body 只做视觉收起（keep DOM，脚本/状态都还在），所以用 !important 压住
+ * display 被其它规则覆盖的可能。
+ */
+.card-body-collapsed {
+  display: none !important;
+}
+
+.card-head-toggle {
+  cursor: pointer;
+  align-items: center;
+  user-select: none;
+}
+
+.card-head-toggle:hover .card-title {
+  color: var(--accent);
+}
+
+.card-head-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 收起时下方没有内容，补上底部内边距，卡片才是个完整的方块 */
+.card.is-collapsed > .card-head {
+  padding-bottom: 15px;
+}
+
+.card-collapsible .card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.card-toggle-icon {
+  display: inline-flex;
+  color: var(--text-tertiary);
+}
+
+.card-toggle-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* ---------------- Field ---------------- */
 
 .field {

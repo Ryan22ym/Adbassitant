@@ -30,6 +30,30 @@ export interface DeviceInfo {
   isEmulator?: boolean;
 }
 
+/**
+ * 设备详情（「设备详情」卡片展示用）。
+ *
+ * 只放「一眼想看、且换台设备就有差别」的硬指标：屏幕 / CPU / GPU / 内存。
+ * 电量、系统版本号、设备代号已移除 —— 它们要么会随时变化（电量）、
+ * 要么对日常使用没有意义（buildId / 代号）。
+ */
+export interface DeviceDetail {
+  brand?: string;
+  model?: string;
+  androidVersion?: string;
+  sdk?: number;
+  serialno?: string;
+  product?: string;
+  /** 屏幕分辨率，如 "720x1600"；被临时改过时形如 "1080x1600（物理 720x1600）" */
+  resolution?: string;
+  /** CPU 型号，如 "Qualcomm SDM665" */
+  cpu?: string;
+  /** GPU 型号，如 "Adreno (TM) 610" */
+  gpu?: string;
+  memTotalKB?: number;
+  memAvailKB?: number;
+}
+
 /* ------------------------------------------------------------------ */
 /* 日志                                                                */
 /* ------------------------------------------------------------------ */

@@ -883,7 +883,9 @@ async function partD(page) {
     (() => {
       const p = document.querySelector('[data-update-panel]');
       if (!p) return { found: false };
-      const txt = p.innerText || '';
+      // ⚠️ 用 textContent 而不是 innerText：软件更新卡片默认收起，
+      //    收起区是 display:none，innerText 会漏掉里面所有说明文字。
+      const txt = p.textContent || '';
       const btns = Array.from(p.querySelectorAll('button')).map((b) => b.textContent.trim());
       const kv = {};
       p.querySelectorAll('.kv').forEach((r) => {

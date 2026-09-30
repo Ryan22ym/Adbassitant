@@ -24,75 +24,46 @@ import type {
 } from '@shared/types';
 
 /**
- * 每个版本的一句话亮点，key 为 package.json 的完整版本号。
+ * 每个版本的一句话更新说明，key 为 package.json 的完整版本号。
+ *
+ * 写法约定（2026-09-30 定）：**一句话说清改了什么**就行 ——
+ * 「修复 xx」「新增 xx 模块 / 功能」。不写背景、不解释为什么、不对比旧方案，
+ * 那些留在 commit message 里。界面上的更新说明只是给用户扫一眼的。
+ *
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
-  '1.1.1':
-    '修复：\n' +
-    '· 批量安装到多台设备时，「清洁安装」在部分机型（OPPO / 一加 / realme）上会刚卸完旧版本就失败、且不给原因 —— 现在会等设备把旧版本清理干净再装，失败时自动重试一次。\n' +
-    '· 安装失败不再直接抛一段 adb 原文，改为翻译成中文原因（签名不一致 / 版本降级 / 空间不足等），并附上目标设备。',
-  '1.1.0':
-    '新增：\n' +
-    '· 连点器增加「屏幕预览图」：设备画面直接显示在页面上，点预览图任意位置即可把该点坐标填进步骤（为后续在预览图上录制操作打底）。\n' +
-    '· 拖拽安装包支持「安装到全部设备」：可多选设备一次装完，安装方式整体选择（清洁或覆盖，不支持逐台各选）。\n' +
-    '· 运行日志改为按日期保存到本地文件，只保留最近 24 小时。\n' +
-    '· 应用图标换成更扁平简约的新样式。\n' +
-    '修复：\n' +
-    '· 部分手机（OPPO / 一加 / realme）点「清数据」报权限错误 —— 现在会直接告诉你到「开发者选项 → 禁止权限监控」里打开开关。\n' +
-    '· 连点器步骤较多时列表会互相堆叠、点不动，现已改为正常滚动。\n' +
-    '· 手机端录制点开始后无法停止、录完也拿不到脚本。\n' +
-    '调整：\n' +
-    '· 设置页去掉「更新源」入口（改为随程序配置维护）；侧边导航去掉「运行日志」，入口移入设置页。',
-  '1.0.33':
-    '新增：手机端录制改为电脑全程控制 —— 开始、暂停、结束都在电脑上操作，手机上不需要再点任何东西，录的时候可以随时切到其它应用。\n' +
-    '修复：录制出来的坐标整体偏移（只剩正确位置的四成）；录制时间轴全部变成 0；采集端控制端口起不来导致连不上。',
-  '1.0.32':
-    '新增：自动连点器 —— 录下手机上的操作、编辑成脚本后按倍速回放，支持每步随机偏移以模拟真实点击；同时提供配套的手机端屏幕录制采集 App，随程序内置、需要时自动安装。',
-  '1.0.31':
-    '新增：在线更新支持跨版本 —— 中间漏更了几版也能用小包升上来，实在对不上基准时会自动改走完整资源包。\n' +
-    '修复：新版本需要新增资源文件时，旧版本会把「目录不存在」误判成不可写，从而拒收整个更新包。',
-  '1.0.30':
-    '修复：点了「启动弱网模拟」没反应（设备侧 VPN 通道刚建好就被误判成已停止并关掉，表现为没开出来或一闪即逝）；弱网正在生效时误报「尚未授权 VPN」。',
-  '1.0.29':
-    '新增：弱网模拟改用设备侧 VPN 实现，在 IP 层接管全部流量，不理会系统代理的游戏与自研网络库同样被覆盖，也不再修改系统设置。\n' +
-    '修复：从更早版本升级时会拒收更新包（新增资源文件落在旧版本不存在的目录里）。',
-  '1.0.28':
-    '新增：拖入安装包时的设备弹窗里可以直接改安装方式（覆盖 / 清洁 / 全新），且只影响这一次。\n' +
-    '修复：AAB 走多设备安装时，界面上选的拆包签名被丢掉。',
-  '1.0.27':
-    '新增：Logcat 导出目录固定为 D:\\adblogs，按「机型 + 序列号 / 日期」自动分层，导完自动打开目录。\n' +
-    '修复：同一秒内连续导出时，后一份会覆盖前一份。',
-  '1.0.26':
-    '新增：常用工具页增加「Logcat 导出」—— 不用先开抓取，直接把设备已有的日志一次性导出，支持级别 / TAG / 关键字过滤与三个常用预设。',
-  '1.0.25': '调整：全应用图标统一为一套细线图标，替换掉原先的 emoji。功能无变化。',
-  '1.0.24':
-    '新增：设备列表每台的快捷动作（清数据 / 桌面重进 / 杀进程重进等 12 种），可改名、排序、设执行前确认。',
-  '1.0.23': '新增：在线更新的默认更新源填成真实地址，装上后无需任何设置，启动时自动静默检查。',
-  '1.0.22': '新增：应用内增量更新接入「更新源」，填一个网址即可在线检查、下载、校验并更新。',
-  '1.0.21': '修复：拖放安装时正式签名不生效（退回调试签名，导致三方登录报 Invalid key hash）。',
-  '1.0.20': '新增：「导出通用 APK」—— 不需要设备在线，把 AAB 转成一个所有机型都能装的通用包。',
-  '1.0.19':
-    '新增：AAB 的拆包与安装分开，可「仅拆包并另存为 .apks」，之后直接拖入安装、不再重复拆包。',
-  '1.0.18':
-    '新增：AAB 签名方式可选（随包调试密钥 / 自定义正式密钥），并可一键计算各平台需要的 key hash。\n' +
-    '修复：用本工具装完 AAB 后三方登录报 Invalid key hash。',
-  '1.0.17': '新增：支持安装 AAB（用 bundletool 按目标设备拆包后安装）。',
-  '1.0.16': '本版无功能改动，为应用内增量更新的首次完整真机验证。',
-  '1.0.15': '修复：应用内更新在「启动新版本」这一步报错并自动还原（表现为更新一趟、版本没变）。',
-  '1.0.13': '修复：应用内更新启动了却什么都没发生（更新助手被主程序一起带走了）。',
+  '1.1.1': '修复清洁安装在 OPPO / 一加 / realme 上失败；安装失败原因改为中文提示。',
+  '1.1.0': '新增连点器屏幕预览图、拖拽安装到多台设备；日志按日期落盘。修复清数据报权限错误。',
+  '1.0.33': '手机端录制改为电脑全程控制；修复录制坐标偏移与时间轴归零。',
+  '1.0.32': '新增自动连点器，以及配套的手机端屏幕录制采集 App。',
+  '1.0.31': '在线更新支持跨版本升级，中间漏更几版也能小包升上来。',
+  '1.0.30': '修复启动弱网后立刻被判定成已停止；修复弱网生效时误报未授权 VPN。',
+  '1.0.29': '弱网改用设备侧 VPN 实现，所有 App 的流量都被覆盖。',
+  '1.0.28': '拖拽安装弹窗里可直接改安装方式，且只影响这一次。',
+  '1.0.27': 'Logcat 导出目录固定为 D:\\adblogs，按机型与日期自动分层。',
+  '1.0.26': '新增 Logcat 导出：直接导出设备已有的日志，不用先开抓取。',
+  '1.0.25': '调整：全应用图标统一为一套细线图标，替换掉原先的 emoji。',
+  '1.0.24': '新增设备行快捷动作（清数据 / 桌面重进 / 杀进程重进等 12 种）。',
+  '1.0.23': '在线更新默认填好更新源，装上即用。',
+  '1.0.22': '新增应用内增量更新：在线检查、下载、校验并更新。',
+  '1.0.21': '修复拖放安装时正式签名不生效。',
+  '1.0.20': '新增「导出通用 APK」：不需要设备，AAB 转成所有机型都能装的包。',
+  '1.0.19': '调整：AAB 的拆包与安装分开，可仅拆包另存为 .apks。',
+  '1.0.18': '新增 AAB 签名方式可选，并可一键计算各平台需要的 key hash。',
+  '1.0.17': '新增 AAB 安装支持（按目标设备拆包后安装）。',
+  '1.0.16': '本版无功能改动，为应用内增量更新的真机验证。',
+  '1.0.15': '修复应用内更新失败后没有自动还原。',
+  '1.0.13': '修复应用内更新启动了却什么都没发生。',
   '1.0.12': '本版无功能改动，为应用内增量更新的真机验证。',
-  '1.0.11':
-    '修复：应用内增量更新在真机上完全走不通（asar 解压失败、Electron 版本校验不符、助手脚本路径少算一层）。',
-  '1.0.7': '新增：应用内增量更新 —— 用一个小更新包替换文件并重启，新版本启动异常时自动回滚。',
-  '1.0.6': '修复：多台设备同时在线时装错机器（默认选中列表第一台，常常是模拟器）。',
-  '1.0.5':
-    '新增：安装方式选择（覆盖 / 清洁 / 全新），装完按包名在设备上复核。\n' +
-    '修复：界面显示安装成功、手机上却找不到应用。',
-  '1.0.4': '新增：拖放安装 APK，安装过程有实时进度弹窗。',
-  '1.0.3': '新增：设备行的「快速投屏」按钮，不用切到投屏页。',
-  '1.0.2': '新增：常用应用收藏；免 Root 弱网模拟（丢包 / 延迟 / 限速）。\n修复：弱网代理残留导致设备断网。',
-  '1.0.1': '新增：应用管理页常用应用收藏；弱网模拟改为免 Root 代理方案。',
+  '1.0.11': '修复应用内增量更新在真机上完全走不通。',
+  '1.0.7': '新增应用内增量更新：用小包替换文件并重启，失败自动回滚。',
+  '1.0.6': '修复多台设备同时在线时装错机器。',
+  '1.0.5': '新增安装方式选择（覆盖 / 清洁 / 全新），装完按包名复核。',
+  '1.0.4': '新增拖放安装 APK，安装过程有实时进度。',
+  '1.0.3': '新增设备行的「快速投屏」按钮。',
+  '1.0.2': '新增常用应用收藏；弱网模拟改为免 Root 代理方案。修复弱网代理残留导致断网。',
+  '1.0.1': '新增应用管理页常用应用收藏。',
   '1.0.0': '首个版本：设备管理、投屏、截图录屏、分辨率调节、Monkey、APK 安装、文件传输、命令终端、日志导出。',
 };
 
@@ -172,6 +143,21 @@ export default function SettingsPage() {
             ]}
           />
         </Field>
+
+      </Card>
+
+      <Card title="关于">
+        <div className="kv-list">
+          <About k="程序名称" v="ADB 桌面助手" />
+          <About k="版本" v={`v${__APP_VERSION__}`} />
+          <About k="UI 技术栈" v="Electron + React 18 + TypeScript" />
+          <About k="投屏引擎" v="scrcpy 3.1" />
+          <About k="设备通信" v="Android Platform-Tools (adb)" />
+        </div>
+        <Notice tone="accent">
+          {VERSION_NOTES[__APP_VERSION__] ??
+            '更多高级功能将在后续版本加入。'}
+        </Notice>
       </Card>
 
       <Card title="默认保存目录" subtitle="截图、录屏、日志导出与文件拉取的默认位置">
@@ -194,9 +180,36 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      <UpdatePanel />
+
+      <Card title="运行日志" subtitle="操作记录按日期存成本地文件，只保留最近 24 小时">
+        <div className="col">
+          <div className="kv-list">
+            <About k="存放位置" v={logDir || '读取中…'} />
+            <About k="保留时长" v="24 小时（启动时自动清理过期日志）" />
+          </div>
+          <div className="row">
+            <Button variant="default" onClick={() => navigate('/logs')}>
+              查看运行日志
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (logDir) void window.adbApi.openPath(logDir);
+              }}
+            >
+              打开日志文件夹
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* 环境自检：默认收起 —— 只有出问题时才需要展开看详情 */}
       <Card
         title="环境自检"
         subtitle="检查 adb、scrcpy 等组件是否完整"
+        collapsible
+        defaultOpen={false}
         extra={
           <Button size="sm" variant="default" onClick={checkEnv} loading={checking}>
             重新检测
@@ -235,44 +248,6 @@ export default function SettingsPage() {
             )}
           </div>
         )}
-      </Card>
-
-      <Card title="关于">
-        <div className="kv-list">
-          <About k="程序名称" v="ADB 桌面助手" />
-          <About k="版本" v={`v${__APP_VERSION__}`} />
-          <About k="UI 技术栈" v="Electron + React 18 + TypeScript" />
-          <About k="投屏引擎" v="scrcpy 3.1" />
-          <About k="设备通信" v="Android Platform-Tools (adb)" />
-        </div>
-        <Notice tone="accent">
-          {VERSION_NOTES[__APP_VERSION__] ??
-            '更多高级功能将在后续版本加入。'}
-        </Notice>
-      </Card>
-
-      <UpdatePanel />
-
-      <Card title="运行日志" subtitle="操作记录按日期存成本地文件，只保留最近 24 小时">
-        <div className="col">
-          <div className="kv-list">
-            <About k="存放位置" v={logDir || '读取中…'} />
-            <About k="保留时长" v="24 小时（启动时自动清理过期日志）" />
-          </div>
-          <div className="row">
-            <Button variant="default" onClick={() => navigate('/logs')}>
-              查看运行日志
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (logDir) void window.adbApi.openPath(logDir);
-              }}
-            >
-              打开日志文件夹
-            </Button>
-          </div>
-        </div>
       </Card>
     </>
   );
@@ -482,33 +457,69 @@ function UpdatePanel() {
             : 'latest';
 
   return (
-    <Card
-      title="软件更新"
-      subtitle="小更新不用重装整个安装包：选择小更新包，程序退出后自动替换文件并重启"
-      extra={
-        <Button
-          size="sm"
-          variant="ghost"
-          data-update-open-dir="1"
-          onClick={() => window.adbApi.openUpdateDir()}
-        >
-          更新目录
-        </Button>
-      }
+    /*
+     * data-update-* 挂最外层：验收脚本按 [data-update-panel][data-update-check=...] 取，
+     * 卡片默认收起也要能拿到（收起只是视觉隐藏，DOM 一直在）。
+     */
+    <div
+      data-update-panel="1"
+      data-update-kind={ctx?.kind ?? 'unknown'}
+      data-update-check={checkState}
     >
-      {!ctx ? (
-        <div className="row">
-          <Spinner />
-          <span className="text-dim">正在读取更新环境…</span>
-        </div>
-      ) : (
-        <div
-          className="col"
-          data-update-panel="1"
-          data-update-kind={ctx.kind}
-          /* 检查状态也挂在外层：验收脚本按 [data-update-panel][data-update-check=...] 直接取 */
-          data-update-check={checkState}
-        >
+      <Card
+        title="软件更新"
+        subtitle={`当前版本 v${ctx?.version ?? __APP_VERSION__}`}
+        collapsible
+        defaultOpen={false}
+        extra={
+          <div className="row">
+            {checkState === 'available' && check?.latest && (
+              <Badge tone="success">新版本 v{check.latest.version}</Badge>
+            )}
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => runCheck(true)}
+              loading={checking}
+              /* 检查更新是只读操作：即使当前形态不支持应用内更新（开发模式等），也允许点 */
+              disabled={busyNow}
+              data-update-check-btn="1"
+            >
+              检查更新
+            </Button>
+            {checkState === 'available' &&
+              check?.latest?.pkg &&
+              !info?.ok &&
+              confirming !== 'apply' && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={download}
+                  loading={busy === 'download'}
+                  disabled={busyNow}
+                  data-update-download="1"
+                >
+                  下载并更新
+                </Button>
+              )}
+            <Button
+              size="sm"
+              variant="ghost"
+              data-update-open-dir="1"
+              onClick={() => window.adbApi.openUpdateDir()}
+            >
+              更新目录
+            </Button>
+          </div>
+        }
+      >
+        {!ctx ? (
+          <div className="row">
+            <Spinner />
+            <span className="text-dim">正在读取更新环境…</span>
+          </div>
+        ) : (
+          <div className="col">
           <div className="kv-list">
             <About k="当前版本" v={`v${ctx.version}`} />
             <About k="程序形态" v={KIND_LABEL[ctx.kind] ?? ctx.kind} />
@@ -676,30 +687,6 @@ function UpdatePanel() {
           )}
 
           <div className="row">
-            <Button
-              variant="default"
-              onClick={() => runCheck(true)}
-              loading={checking}
-              /* 检查更新是只读操作：即使当前形态不支持应用内更新（开发模式等），也允许点 */
-              disabled={busyNow}
-              data-update-check-btn="1"
-            >
-              检查更新
-            </Button>
-            {checkState === 'available' &&
-              check?.latest?.pkg &&
-              !info?.ok &&
-              confirming !== 'apply' && (
-                <Button
-                  variant="primary"
-                  onClick={download}
-                  loading={busy === 'download'}
-                  disabled={busyNow}
-                  data-update-download="1"
-                >
-                  下载并更新
-                </Button>
-              )}
             {info?.ok && confirming !== 'apply' && (
               <Button
                 variant="primary"
@@ -745,8 +732,9 @@ function UpdatePanel() {
             日志与备份在 <span className="mono">{ctx.updateDir}</span>。
           </div>
         </div>
-      )}
-    </Card>
+        )}
+      </Card>
+    </div>
   );
 }
 

@@ -419,7 +419,8 @@ function ensureBuilt() {
         found: true,
         kind: p.getAttribute('data-update-kind'),
         checkState: p.getAttribute('data-update-check'),
-        text: p.innerText || '',
+        /* ⚠️ textContent 而非 innerText：该卡片默认收起，收起区 display:none */
+        text: p.textContent || '',
         btns,
         hasUnconfigured: !!p.querySelector('[data-update-unconfigured]'),
         hasCheckBtn: !!p.querySelector('[data-update-check-btn]'),
@@ -483,8 +484,8 @@ function ensureBuilt() {
         const avail = p.querySelector('[data-update-available]');
         return {
           checkState: p.getAttribute('data-update-check'),
-          text: p.innerText || '',
-          availText: avail ? avail.innerText : '',
+          text: p.textContent || '',
+          availText: avail ? avail.textContent : '',
           hasDownloadBtn: !!p.querySelector('[data-update-download]'),
           kv: (() => { const o = {}; p.querySelectorAll('.kv').forEach((r) => {
             const k = r.querySelector('.kv-key'); const v = r.querySelector('.kv-value');

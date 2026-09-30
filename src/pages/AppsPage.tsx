@@ -400,7 +400,6 @@ export default function AppsPage() {
               <div className="fav-quick">
                 <div className="fav-quick-head">
                   <strong>常用应用</strong>
-                  <span className="text-dim">一键启动，不用再重新找包名</span>
                 </div>
                 <div className="fav-quick-list">
                   {rows

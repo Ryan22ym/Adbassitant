@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './ui.css';
+import { Icon } from './icons';
 
 /* ------------------------------------------------------------------ */
 /* Button                                                              */
@@ -50,6 +51,12 @@ interface CardProps {
   children: React.ReactNode;
   padding?: boolean;
   className?: string;
+  /** 可折叠：标题行整行可点，收起后只留标题与右侧操作区 */
+  collapsible?: boolean;
+  /** 初始展开状态（仅 collapsible 时生效），默认展开 */
+  defaultOpen?: boolean;
+  /** 收起时替换 subtitle 显示的内容（把当前值带出来用） */
+  collapsedSubtitle?: React.ReactNode;
 }
 
 export function Card({
@@ -59,19 +66,72 @@ export function Card({
   children,
   padding = true,
   className = '',
+  collapsible = false,
+  defaultOpen = true,
+  collapsedSubtitle,
 }: CardProps) {
+  /*
+   * 折叠只是**视觉收起**：body 一直留在 DOM 里（CSS display:none），
+   * 不条件渲染。两个原因：
+   *   1. 折叠卡片里的按钮（如「检查更新」）要能被验收脚本 querySelector 到；
+   *   2. 卡片内部的 useEffect（自检、检查更新）保持常驻，展开时立刻有结果。
+   */
+  const [open, setOpen] = useState(defaultOpen);
+  const expanded = !collapsible || open;
+
+  const toggle = collapsible ? () => setOpen((v) => !v) : undefined;
+
   return (
-    <section className={`card ${className}`}>
+    <section
+      className={`card ${collapsible ? 'card-collapsible' : ''} ${
+        expanded ? '' : 'is-collapsed'
+      } ${className}`}
+    >
       {(title || extra) && (
-        <header className="card-head">
+        <header
+          className={`card-head ${collapsible ? 'card-head-toggle' : ''}`}
+          onClick={toggle}
+          onKeyDown={
+            collapsible
+              ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setOpen((v) => !v);
+                  }
+                }
+              : undefined
+          }
+          role={collapsible ? 'button' : undefined}
+          tabIndex={collapsible ? 0 : undefined}
+          aria-expanded={collapsible ? expanded : undefined}
+        >
           <div className="card-head-text">
-            {title && <h3 className="card-title">{title}</h3>}
-            {subtitle && <p className="card-subtitle">{subtitle}</p>}
+            {title && (
+              <h3 className="card-title">
+                {title}
+                {collapsible && (
+                  <span className="card-toggle-icon" aria-hidden="true">
+                    {expanded ? Icon.up : Icon.down}
+                  </span>
+                )}
+              </h3>
+            )}
+            {subtitle && <p className="card-subtitle">{expanded ? subtitle : collapsedSubtitle ?? subtitle}</p>}
           </div>
-          {extra && <div className="card-extra">{extra}</div>}
+          {extra && (
+            /* 右侧操作区独立可点（如折叠态下的「检查更新」），别让点击穿到标题的折叠开关 */
+            <div className="card-extra" onClick={(e) => e.stopPropagation()}>
+              {extra}
+            </div>
+          )}
         </header>
       )}
-      <div className={padding ? 'card-body' : ''}>{children}</div>
+      <div
+        className={`${padding ? 'card-body' : ''} ${expanded ? '' : 'card-body-collapsed'}`}
+        aria-hidden={collapsible ? !expanded : undefined}
+      >
+        {children}
+      </div>
     </section>
   );
 }

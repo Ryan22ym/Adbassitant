@@ -524,10 +524,9 @@ export default function WeakNetworkPage() {
               </div>
               <p className="text-dim wn-vpn-desc">
                 {!probe.hasVpnApp
-                  ? '在设备上安装一个配套 App（随工具一起发布，无需你自己编译），由它在 IP 层接管全部流量。' +
-                    '相比旧的代理方案：覆盖所有 App（不只是走系统代理的）、不需要 Root、也不写系统设置、不留代理残留。'
+                  ? '在设备上安装一个配套 App，由它在 IP 层接管全部流量（覆盖所有 App，不需要 Root）。'
                   : probe.vpnAuthorized
-                    ? '已安装并授权，可以直接开始。全部 IPv4 流量会在设备侧被逐包整形，包括那些完全不走代理的 App。'
+                    ? '已安装并授权，可以直接开始。全部 IPv4 流量会在设备侧被逐包整形。'
                     : '配套 App 已装好，还差一次系统授权 —— VPN 会看到全部流量，所以 Android 要求你亲自在手机上点「确定」，' +
                       '这步没法自动代劳。点下面的按钮会把它弹出来。'}
               </p>
@@ -729,7 +728,7 @@ export default function WeakNetworkPage() {
         <div className="wn-col">
           <Card
             title="弱网参数"
-            subtitle="对标 clumsy：分别控制上行（设备发出）与下行（设备接收）"
+            subtitle="分别控制上行（设备发出）与下行（设备接收）"
             extra={
               <div className="row" style={{ gap: 6 }}>
                 <Button size="sm" variant="ghost" onClick={() => setParams({ ...DEFAULT_PARAMS, engine: params.engine })}>

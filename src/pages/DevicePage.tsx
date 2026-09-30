@@ -6,22 +6,7 @@ import { useApp, useOnlineCount } from '@/store/app';
 import { call, tryCall } from '@/lib/ipc';
 import { formatBytes } from '@/lib/format';
 import { mirrorOptionsFor, isMirroringDevice } from '@/lib/mirror';
-import type { QuickAction } from '@shared/types';
-
-interface DeviceDetail {
-  brand?: string;
-  model?: string;
-  androidVersion?: string;
-  sdk?: number;
-  serialno?: string;
-  product?: string;
-  device?: string;
-  buildId?: string;
-  battery?: number;
-  batteryTemp?: number;
-  memTotalKB?: number;
-  memAvailKB?: number;
-}
+import type { DeviceDetail, QuickAction } from '@shared/types';
 
 export default function DevicePage() {
   const devices = useApp((s) => s.devices);
@@ -327,16 +312,9 @@ export default function DevicePage() {
               <KV label="Android 版本" value={detail.androidVersion} />
               <KV label="SDK 等级" value={detail.sdk} />
               <KV label="产品名" value={detail.product} />
-              <KV label="设备代号" value={detail.device} />
-              <KV label="系统版本号" value={detail.buildId} />
-              <KV
-                label="电量"
-                value={
-                  detail.battery !== undefined
-                    ? `${detail.battery}%${detail.batteryTemp ? ` · ${detail.batteryTemp.toFixed(1)}°C` : ''}`
-                    : undefined
-                }
-              />
+              <KV label="屏幕分辨率" value={detail.resolution} />
+              <KV label="CPU 型号" value={detail.cpu} />
+              <KV label="GPU 型号" value={detail.gpu} />
               <KV
                 label="内存"
                 value={
@@ -351,7 +329,7 @@ export default function DevicePage() {
       )}
 
       {/* 无线连接 */}
-      <Card title="无线连接" subtitle="通过 WiFi 连接设备，摆脱数据线">
+      <Card title="无线连接" subtitle="通过 WiFi 连接设备">
         <div className="col">
           <Segmented
             value={tcpMode}

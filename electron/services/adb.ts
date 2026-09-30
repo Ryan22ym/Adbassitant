@@ -2,7 +2,7 @@ import { spawn, ChildProcess, execFile } from 'child_process';
 import { existsSync, mkdirSync, statSync, createWriteStream } from 'fs';
 import { join, dirname, basename } from 'path';
 import { randomUUID } from 'crypto';
-import type { CommandResult, DeviceInfo } from '../../shared/types';
+import type { CommandResult, DeviceDetail, DeviceInfo } from '../../shared/types';
 
 /**
  * 二进制目录解析
@@ -423,6 +423,123 @@ async function getDeviceProps(serial: string): Promise<Partial<DeviceInfo>> {
     device: lines[5] || undefined,
     isEmulator: looksLikeEmulator(serial, lines[0], lines[1], lines[4], lines[5]),
   };
+}
+
+/**
+ * 设备详情（「设备详情」卡片用）：品牌 / 型号 / 系统版本 / 分辨率 / CPU / GPU / 内存。
+ *
+ * 一次 shell 调用把全部采样串起来（设备端只跑一趟，比多次 adb 往返明显快），
+ * 各段用 `__XXX__` 标记分隔 —— 某一段失败不会影响其它段。
+ *
+ * 采集口径（真机 OPPO / Android 10 + AOSP 模拟器 / Android 12 实测）：
+ *   · 屏幕：`wm size` 的 Physical size；被 override 过时附上物理值
+ *   · CPU ：ro.soc.model（Android 12+）→ /proc/cpuinfo 的 Hardware（ARM 真机常见）
+ *           → model name（x86 / 模拟器）→ ro.board.platform（兜底，如 trinket）
+ *   · GPU ：`dumpsys SurfaceFlinger` 的 `GLES: <vendor>, <renderer>, OpenGL ES ...`
+ *           → 取 renderer 段；拿不到再退 ro.hardware.egl（adreno / mali）
+ *
+ * ⚠️ 这里不再读电量 / buildId / 设备代号：电量随时在变、后两个日常用不上。
+ */
+export async function getDeviceDetail(serial: string): Promise<DeviceDetail> {
+  const [props, mem] = await Promise.all([
+    runAdb(
+      [
+        '-s',
+        serial,
+        'shell',
+        'echo __PROPS__; ' +
+          'getprop ro.product.brand; getprop ro.product.model; getprop ro.build.version.release; ' +
+          'getprop ro.build.version.sdk; getprop ro.serialno; getprop ro.product.name; ' +
+          'getprop ro.soc.model; getprop ro.board.platform; getprop ro.hardware.egl; ' +
+          'echo __CPU__; cat /proc/cpuinfo | grep -i -e Hardware -e model; ' +
+          'echo __GPU__; dumpsys SurfaceFlinger | grep -i GLES; ' +
+          'echo __SIZE__; wm size',
+      ],
+      { silent: true, timeout: 20000 },
+    ),
+    runAdb(['-s', serial, 'shell', 'cat', '/proc/meminfo'], { silent: true, timeout: 10000 }),
+  ]);
+
+  const sec = splitSections(props.stdout, ['PROPS', 'CPU', 'GPU', 'SIZE']);
+  const p = (sec.PROPS ?? '').split(/\r?\n/).map((x) => x.trim());
+
+  const memTotal = mem.stdout.match(/MemTotal:\s*(\d+)/)?.[1];
+  const memAvail = mem.stdout.match(/MemAvailable:\s*(\d+)/)?.[1];
+
+  return {
+    brand: p[0] || undefined,
+    model: p[1] || undefined,
+    androidVersion: p[2] || undefined,
+    sdk: parseInt(p[3], 10) || undefined,
+    serialno: p[4] || undefined,
+    product: p[5] || undefined,
+    cpu: parseCpuModel(sec.CPU ?? '', p[6], p[7]),
+    gpu: parseGpuModel(sec.GPU ?? '', p[8]),
+    resolution: parseResolution(sec.SIZE ?? ''),
+    memTotalKB: memTotal ? parseInt(memTotal, 10) : undefined,
+    memAvailKB: memAvail ? parseInt(memAvail, 10) : undefined,
+  };
+}
+
+/**
+ * 按 `__TAG__` 把一段 shell 输出切成多段。
+ *
+ * ⚠️ 必须逐个 indexOf 再取「下一个标记之前」—— 用 split 的正则在设备端输出
+ * 混入 `\r`（adb 在 Windows 上是 CRLF）时会漏匹配，切出来整段错位。
+ */
+function splitSections(text: string, tags: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const marks = tags.map((t) => `__${t}__`);
+  const at = marks.map((m) => text.indexOf(m));
+
+  for (let i = 0; i < tags.length; i++) {
+    if (at[i] < 0) continue;
+    const from = at[i] + marks[i].length;
+    let to = text.length;
+    for (let j = 0; j < tags.length; j++) {
+      if (j !== i && at[j] > from && at[j] < to) to = at[j];
+    }
+    out[tags[i]] = text.slice(from, to).trim();
+  }
+  return out;
+}
+
+/** CPU 型号：优先 SoC 型号，其次 cpuinfo 的 Hardware / model name，最后退芯片平台代号 */
+function parseCpuModel(cpuInfoOut: string, socModel?: string, board?: string): string | undefined {
+  const hw = cpuInfoOut.match(/^Hardware\s*:\s*(.+)$/im)?.[1]?.trim();
+  const modelName = cpuInfoOut.match(/^model name\s*:\s*(.+)$/im)?.[1]?.trim();
+
+  const raw = socModel?.trim() || hw || modelName || board?.trim();
+  if (!raw) return undefined;
+
+  // "Qualcomm Technologies, Inc SDM665" → "Qualcomm SDM665"
+  return raw
+    .replace(/,\s*Inc\.?/i, '')
+    .replace(/\bTechnologies\b/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/** GPU 型号：从 SurfaceFlinger 的 GLES 行取 renderer，取不到退 ro.hardware.egl */
+function parseGpuModel(glesOut: string, eglProp?: string): string | undefined {
+  const line = glesOut.match(/GLES:\s*(.+)/i)?.[1]?.split('\n')[0]?.trim();
+  if (line) {
+    // "Qualcomm, Adreno (TM) 610, OpenGL ES 3.2 V@..." → 取中间那段 renderer
+    const segs = line.split(',').map((s) => s.trim()).filter(Boolean);
+    const name = (segs.length >= 2 ? segs[1] : segs[0])?.replace(/\s*OpenGL.*$/i, '').trim();
+    if (name) return name;
+  }
+  const egl = eglProp?.trim();
+  if (egl) return egl.charAt(0).toUpperCase() + egl.slice(1);
+  return undefined;
+}
+
+/** 分辨率：以物理分辨率为主，被临时改过时把当前值与物理值一起给出 */
+function parseResolution(sizeOut: string): string | undefined {
+  const phys = sizeOut.match(/Physical size:\s*(\d+x\d+)/i)?.[1];
+  const over = sizeOut.match(/Override size:\s*(\d+x\d+)/i)?.[1];
+  if (phys && over && over !== phys) return `${over}（物理 ${phys}）`;
+  return phys ?? over;
 }
 
 /**

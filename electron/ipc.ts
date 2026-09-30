@@ -20,6 +20,7 @@ import {
 import {
   listDevices,
   runAdb,
+  getDeviceDetail,
   adbStartServer,
   adbKillServer,
   ensureDevice,
@@ -223,40 +224,11 @@ export function registerIpc() {
     wrap(() => listDevices(true)),
   );
 
-  ipcMain.handle(
-    IPC.DEVICE_DETAIL,
-    wrap(async (_e, serial: string) => {
-      const [res, battery, mem] = await Promise.all([
-        runAdb(
-          ['-s', serial, 'shell', 'getprop ro.product.brand; getprop ro.product.model; getprop ro.build.version.release; getprop ro.build.version.sdk; getprop ro.serialno; getprop ro.product.name; getprop ro.product.device; getprop ro.build.display.id'],
-          { silent: true, timeout: 10000 },
-        ),
-        runAdb(['-s', serial, 'shell', 'dumpsys', 'battery'], { silent: true, timeout: 10000 }),
-        runAdb(['-s', serial, 'shell', 'cat', '/proc/meminfo'], { silent: true, timeout: 10000 }),
-      ]);
-
-      const p = res.stdout.split(/\r?\n/).map((x) => x.trim());
-      const batteryLevel = battery.stdout.match(/level:\s*(\d+)/)?.[1];
-      const batteryTemp = battery.stdout.match(/temperature:\s*(\d+)/)?.[1];
-      const memTotal = mem.stdout.match(/MemTotal:\s*(\d+)/)?.[1];
-      const memAvail = mem.stdout.match(/MemAvailable:\s*(\d+)/)?.[1];
-
-      return {
-        brand: p[0],
-        model: p[1],
-        androidVersion: p[2],
-        sdk: parseInt(p[3], 10) || undefined,
-        serialno: p[4],
-        product: p[5],
-        device: p[6],
-        buildId: p[7],
-        battery: batteryLevel ? parseInt(batteryLevel, 10) : undefined,
-        batteryTemp: batteryTemp ? parseInt(batteryTemp, 10) / 10 : undefined,
-        memTotalKB: memTotal ? parseInt(memTotal, 10) : undefined,
-        memAvailKB: memAvail ? parseInt(memAvail, 10) : undefined,
-      };
-    }),
-  );
+  /*
+   * 设备详情：采集口径全在 getDeviceDetail 里（一次 shell 调用串起全部采样），
+   * 这里只做转发 —— 详情字段的增删改都改 services/adb.ts，别再往 IPC 层塞解析逻辑。
+   */
+  ipcMain.handle(IPC.DEVICE_DETAIL, wrap((_e, serial: string) => getDeviceDetail(serial)));
 
   ipcMain.handle(
     IPC.DEVICE_CONNECT_TCP,
