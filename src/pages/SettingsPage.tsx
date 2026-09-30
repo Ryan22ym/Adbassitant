@@ -63,6 +63,8 @@ const ACCENTS: {
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.2':
+    '新增 5 套主题色，界面配色可整体切换；设置页重排、卡片可折叠；设备详情改为屏幕分辨率与 CPU / GPU 型号；应用图标随版本自动更新；界面说明文案精简。',
   '1.1.1': '修复清洁安装在 OPPO / 一加 / realme 上失败；安装失败原因改为中文提示。',
   '1.1.0': '新增连点器屏幕预览图、拖拽安装到多台设备；日志按日期落盘。修复清数据报权限错误。',
   '1.0.33': '手机端录制改为电脑全程控制；修复录制坐标偏移与时间轴归零。',
@@ -171,7 +173,7 @@ export default function SettingsPage() {
   return (
     <>
       <Card title="外观">
-        <Field label="主题模式" hint="浅色 / 深色，决定整个界面的明暗">
+        <Field label="主题模式">
           <Segmented
             value={theme}
             onChange={(v) => changeTheme(v as 'light' | 'dark')}
@@ -188,10 +190,7 @@ export default function SettingsPage() {
           再触发一次，所以这里手写同样的 .field / .field-label 结构。
         */}
         <div className="field accent-field">
-          <span className="field-label">
-            主题色
-            <em className="field-hint">决定主色与整体底色；色块左半是左侧功能栏、右半是右侧内容区</em>
-          </span>
+          <span className="field-label">主题色</span>
           <div className="accent-picker">
             {ACCENTS.map((a) => {
               const [bar, app] = theme === 'dark' ? a.dark : a.light;
