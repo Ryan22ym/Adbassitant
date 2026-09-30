@@ -209,11 +209,10 @@ export default function App() {
       {/*
         自绘标题栏。窗口已经没有系统标题栏了，这一条既提供底色（跟着主题色走），
         也是拖窗口 / 双击最大化的地方（-webkit-app-region: drag 在 CSS 里）。
+        整条同色、内部不放任何元素 —— 原来那两段（侧栏宽的一段 + 剩余一段）
+        是为了让侧栏竖线通到窗口顶，现在不需要了，竖线留着反而像多出来的分割线。
       */}
-      <div className="titlebar">
-        <div className="titlebar-side" />
-        <div className="titlebar-main" />
-      </div>
+      <div className="titlebar" />
 
       <div className="app-body">
         <Sidebar />

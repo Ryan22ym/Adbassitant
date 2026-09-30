@@ -18,12 +18,15 @@
  *
  * 底色用 --bg-titlebar：**第三种颜色** —— 侧栏色与内容区色混出的中间调，
  * 三色同色系、只差深浅（侧栏最深 / 标题栏居中 / 内容区最浅），互相压得住。
- * 所以这一条是**整宽一整条**，不分左右两半：横贯窗口，和下面的 sidebar / header
- * 用一条发丝线断开，像窗口自己的顶栏。
+ *
+ * 这一条是**整宽一整条、内部不画任何竖线**（v1.1.5 起）：
+ * 原来里面还有一段 --sidebar-w 宽的 .titlebar-side，靠 border-right 把侧栏的
+ * 分界线往上续到窗口顶 —— 但整条已经是一个颜色，那条竖线就把同色的一条切成了
+ * 两半，看着像多余的分割线，已删。侧栏与内容区之间的竖线现在只从带子下面开始。
  *
  * 右上角那三个系统按钮是系统 overlay 画在窗口上的，颜色由主进程设置
  * （ipc.ts 的 window:setTitlebar，色值同样取 --bg-titlebar），所以
- * --titlebar-h 必须和 TITLEBAR_HEIGHT 一致。
+ * --titlebar-h 必须和 TITLEBAR_HEIGHT 一致（高度见 global.css）。
  */
 .titlebar {
   height: var(--titlebar-h);
@@ -33,18 +36,6 @@
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag; /* 拖窗口 / 双击最大化都靠它 */
   user-select: none;
-}
-
-/* 左半段只负责把「侧栏分界线」往上延一段，让竖线从窗口顶一直通到底 */
-.titlebar-side {
-  width: var(--sidebar-w);
-  flex: none;
-  border-right: 1px solid var(--border);
-}
-
-.titlebar-main {
-  flex: 1;
-  min-width: 0;
 }
 
 .app-body {

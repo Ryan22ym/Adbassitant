@@ -58,12 +58,15 @@ function createWindow() {
    *
    * 做法：titleBarStyle:'hidden' + titleBarOverlay。系统标题栏让位，
    * 窗口控制按钮（最小化/最大化/关闭）变成右上角的 overlay，
-   * 而顶部那一条由渲染层的 .titlebar 自己画（左半 --bg-sidebar、右半 --bg-app）。
+   * 而顶部那一条由渲染层的 .titlebar 自己画（整宽一条 --bg-titlebar，内部无竖线）。
    * overlay 的底色**只能从主进程给**，所以渲染层读到 CSS 变量后通过
    * IPC.WINDOW_SET_TITLEBAR 回传（见 ipc.ts 与 App.tsx 里的同步 effect）。
    *
-   * ⚠️ height 必须和 CSS 的 --titlebar-h、以及 ipc 里更新时用的高度一致，
+   * ⚠️ height 必须和 CSS 的 --titlebar-h 一致（都取 TITLEBAR_HEIGHT），
    *    否则系统按钮会和自绘色带错位。
+   * 🔴 而且它**不能小于系统标题栏高度**，否则按钮退回系统高度、在右上角糊出台阶 ——
+   *    约束与实测数字见 shared/types.ts 里 TITLEBAR_HEIGHT 的注释。真要做更薄，
+   *    得放弃系统按钮、改成自绘（那时 titleBarOverlay 整个去掉）。
    */
   const dark = nativeTheme.shouldUseDarkColors;
 

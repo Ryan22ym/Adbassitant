@@ -1286,8 +1286,27 @@ export const IPC = {
  * ⚠️ 三处必须一致，不一致系统按钮就会和自绘色带对不齐：
  *   主进程建窗口时的 `titleBarOverlay.height`、更新配色时的 height、
  *   渲染层 CSS 变量 `--titlebar-h`（src/styles/global.css）。
+ *
+ * 🔴 **这个值只能比系统标题栏高，不能比它矮** —— 这是 Electron 的硬约束，
+ *    源码 shell/browser/ui/views/win_frame_view.cc：
+ *
+ *        int WinFrameView::TitlebarHeight(int custom_height) const {
+ *          int height = TitlebarMaximizedVisualHeight()   // = SM_CYCAPTION（DIP）
+ *                     + FrameTopBorderThickness(false) - WindowTopY();
+ *          if (custom_height > TitlebarMaximizedVisualHeight())  // ← 只有更大才生效
+ *            height = custom_height - WindowTopY();
+ *          return height;
+ *        }
+ *        // 旁边原注释：// Needed for heights larger than default
+ *
+ *    也就是说：给的 height 一旦 ≤ 系统值，图标按钮就**退回系统高度**（不再跟着缩），
+ *    但 overlay 区域（渲染层 reserving 的那块、以及 WCO 上报的 rect）仍然是用你给的值 ——
+ *    结果就是右上角那三个按钮比色带高出一截，在角上糊出一块台阶。
+ *    本机实测（120 DPI）：SM_CYCAPTION = 23.2 DIP、SM_CYSIZEFRAME = 3.2 DIP
+ *    ⇒ 用系统按钮时**带子最低 ≈ 24 DIP**（这里取 25 留 1px 余量，避免不同缩放档位取整后踩线）。
+ *    要真的更薄（例如 21），只能不要系统按钮、改成自绘三个按钮（见 main.ts 的说明）。
  */
-export const TITLEBAR_HEIGHT = 32;
+export const TITLEBAR_HEIGHT = 25;
 
 /* ------------------------------------------------------------------ */
 /* 环境自检                                                            */

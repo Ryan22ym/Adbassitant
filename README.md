@@ -387,6 +387,12 @@ adb-assistant-v0.9/
   🔴 回传给主进程的颜色必须先归一成 `#rrggbb`（`src/lib/color.ts` 的 `toHexColor`）：
   `color-mix()` 经 `getComputedStyle` 会序列化成 `color(srgb …)`，而 ipc 侧的颜色校验只认 hex。
   ⚠️ 高度三处必须一致：`shared/types.ts` 的 `TITLEBAR_HEIGHT`、主进程两个 height、CSS `--titlebar-h`。
+  🔴 这个高度**只能比系统标题栏高，不能更矮**：`WinFrameView::TitlebarHeight()` 里那句
+  `if (custom_height > TitlebarMaximizedVisualHeight())` 意味着比系统值小就整段不生效 ——
+  系统按钮退回系统高度、overlay 却按你给的值走，右上角会多出一块台阶。
+  本机（120 DPI）实测 `SM_CYCAPTION = 23.2 DIP` ⇒ 用系统按钮时带子最低 ≈ 24 DIP，现值 25。
+  要更薄只能放弃系统按钮、改成自绘（那就不给 `titleBarOverlay`）。顶部带子内部**不画竖线** ——
+  整条是一个颜色，竖线会把同色的一条切成两半，看着像多余的分割线。
 
 ---
 

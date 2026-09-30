@@ -85,8 +85,12 @@
   /* 尺寸 */
   --sidebar-w: 208px;
   --header-h: 56px;
-  /* 自绘标题栏高度：必须等于 shared/types.ts 的 TITLEBAR_HEIGHT，否则系统按钮会错位 */
-  --titlebar-h: 32px;
+  /*
+   * 自绘标题栏高度：必须等于 shared/types.ts 的 TITLEBAR_HEIGHT，否则系统按钮会错位。
+   * 25px = 原 32px 压到「系统按钮还跟得上」的下限（约束见 TITLEBAR_HEIGHT 的注释，
+   * 再往下压系统按钮就退回系统高度、在右上角糊出台阶）。
+   */
+  --titlebar-h: 25px;
 
   /* 动效 */
   --t-fast: 0.12s ease;
