@@ -165,17 +165,24 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   suffix?: React.ReactNode;
 }
 
-export function Input({ suffix, className = '', ...rest }: InputProps) {
+/*
+ * 用 forwardRef 暴露 input 节点 —— 「快捷动作」的「指定包名」输入框是切到该模式后
+ * 才挂上去的，必须能在挂载后立刻聚焦（见 QuickActions 里 pkgRefs 的用法）。
+ */
+export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Input(
+  { suffix, className = '', ...rest },
+  ref,
+) {
   if (suffix) {
     return (
       <span className="input-wrap">
-        <input className={`input ${className}`} {...rest} />
+        <input ref={ref} className={`input ${className}`} {...rest} />
         <span className="input-suffix">{suffix}</span>
       </span>
     );
   }
-  return <input className={`input ${className}`} {...rest} />;
-}
+  return <input ref={ref} className={`input ${className}`} {...rest} />;
+});
 
 interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   options: { value: string; label: string }[];

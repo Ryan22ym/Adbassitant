@@ -596,6 +596,30 @@
   flex-wrap: wrap;
 }
 
+/* 应用管理页的页内标签栏（已装应用 / 安装包管理，v1.1.6） */
+.apps-tabs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.apps-tabs .text-dim {
+  font-size: 12.5px;
+}
+
+/* 页内标签栏右侧的动作区（安装包管理的「刷新 / 立即整理」由 portal 挂进来） */
+.apps-tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.apps-tabs-actions:empty {
+  display: none;
+}
+
 .apps-toolbar .input {
   flex: 1;
   min-width: 130px;

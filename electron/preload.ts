@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 // 仅类型导入：编译后会被擦除，不会把 shared/ 的相对路径带进 preload 运行时。
-import type { QuickAction } from '../shared/types';
+import type { PackageOverride, QuickAction } from '../shared/types';
 
 /**
  * IPC 通道常量
@@ -77,6 +77,16 @@ const IPC = {
   QUICK_ACTION_RESET: 'quickAction:reset',
   QUICK_ACTION_RUN: 'quickAction:run',
   QUICK_ACTION_FOREGROUND: 'quickAction:foreground',
+
+  /* 安装包管理（v1.1.6） */
+  PACKAGES_SCAN: 'packages:scan',
+  PACKAGES_ORGANIZE: 'packages:organize',
+  PACKAGES_PICK_DIR: 'packages:pickDir',
+  PACKAGES_REVEAL: 'packages:reveal',
+  /** 手工指定一个包的类型/通道/版本（null = 恢复自动识别） */
+  PACKAGES_SET_TAG: 'packages:setTag',
+  /** 清空全部手动标签 */
+  PACKAGES_CLEAR_TAGS: 'packages:clearTags',
 
   /* 实时 Logcat（v1.0） */
   LOGCAT_START: 'logcat:start',
@@ -357,6 +367,21 @@ const api = {
   runQuickAction: (serial: string | undefined, action: QuickAction) =>
     invoke(IPC.QUICK_ACTION_RUN, serial, action),
   foregroundApp: (serial?: string) => invoke(IPC.QUICK_ACTION_FOREGROUND, serial),
+
+  /*
+   * 安装包管理（v1.1.6）：本地安装包仓库
+   * 扫描只读；organize 才会真的移动文件（幂等，可重复点）。
+   */
+  packagesScan: () => invoke(IPC.PACKAGES_SCAN),
+  packagesOrganize: () => invoke(IPC.PACKAGES_ORGANIZE),
+  pickPackageDir: (current?: string) => invoke(IPC.PACKAGES_PICK_DIR, current),
+  /** 在资源管理器里定位一个包（reveal=false 时只打开所在目录） */
+  revealPackage: (path: string, reveal = true) => invoke(IPC.PACKAGES_REVEAL, path, reveal),
+  /** 手工改一个包的标签（类型/通道/版本）；tag=null 表示恢复自动识别。返回新的扫描结果 */
+  setPackageTag: (name: string, tag: PackageOverride | null) =>
+    invoke(IPC.PACKAGES_SET_TAG, name, tag),
+  /** 清空全部手动标签。返回新的扫描结果 */
+  clearPackageTags: () => invoke(IPC.PACKAGES_CLEAR_TAGS),
 
   /* 实时 Logcat（v1.0） */
   startLogcat: (serial: string | undefined, filter?: any) =>

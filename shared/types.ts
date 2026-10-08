@@ -807,6 +807,160 @@ export interface WeakNetStatus {
 }
 
 /* ------------------------------------------------------------------ */
+/* 安装包管理（v1.1.6）                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 安装包归类。
+ *
+ * - `official` 官网包：给官网/自有渠道分发的构建（默认命名 `Domino_GW_V2.83_release_18.apk`）
+ * - `google`  Google 包：给 Google Play 的构建（默认命名 `app-dmno_release-release_10.aab`）
+ * - `single`  单包：**认不出官网 / Google 类型的一律归这里**（v1.1.6 收敛规则），
+ *             不按 release/test 再分一层
+ *
+ * 🔴 `single` 的判据是「类型关键字没命中」，与有没有 release/test 标记无关 ——
+ *    早先还要求「也没有通道标记」，于是 `xxx_release_3.aab` 会被扩展名兜底塞进
+ *    Google 包目录。第三方包恰好带 release 是常事，宁可让它落到单包让人看见，
+ *    也别让它冒充 Google 包。
+ */
+export type PackageKind = 'official' | 'google' | 'single';
+
+/** 发布通道。单包、以及名字里没有任何通道标记的包没有这个值（按 release 归置） */
+export type PackageChannel = 'release' | 'test';
+
+/** 包的载体格式（只收这两种，其他文件一律不参与整理） */
+export type PackageFormat = 'apk' | 'aab';
+
+/** 分类目录名（全部可自定义，默认中文名直接可见） */
+export interface PackageDirNames {
+  official: string;
+  google: string;
+  single: string;
+  release: string;
+  test: string;
+  /** 版本号解析不出来时的兜底目录 */
+  unknownVersion: string;
+}
+
+/** 目录结构：先版本（默认）还是先类型 */
+export type PackageStructure = 'version-first' | 'type-first';
+
+/** 识别关键字（小写；按「整词」匹配文件名里被分隔符切出来的片段） */
+export interface PackageKeywords {
+  official: string[];
+  google: string[];
+  release: string[];
+  test: string[];
+}
+
+/** 安装包管理当前的筛选条件（多选，空数组 = 不限） */
+export interface PackageFilters {
+  /** 版本号，如 ['2.83','2.84'] */
+  versions: string[];
+  kinds: PackageKind[];
+  channels: PackageChannel[];
+  formats: PackageFormat[];
+  /** 文件名关键字（子串，忽略大小写） */
+  keyword: string;
+}
+
+/**
+ * 手动标签（v1.1.6 增强）。
+ *
+ * 自动归类只认文件名里的关键字，判错在所难免（第三方包叫 `xxx_release_3.apk`、
+ * 官网包名字里没写 GW…）。这一层让用户把 类型 / 通道 / 版本 三项逐个钉死，
+ * 钉完之后整理、筛选、列表显示**全部按手工值走**。
+ *
+ * 字段是「三元」语义：
+ *   - 不给（undefined）→ 该字段仍按自动识别；
+ *   - 给了值           → 用这个值；
+ *   - 给了空串         → 明确「没有」——通道空 = 不带通道层，版本空 = 归未识别版本目录。
+ *
+ * 🔴 以**文件名**为键，不是路径：整理会把文件搬到别的目录，路径一变覆盖就丢了，
+ *    而移动文件恰恰是本模块的核心动作。整理不改名（只有同名冲突才加 `(2)` 后缀），
+ *    所以文件名是这里最稳的锚点。
+ */
+export interface PackageOverride {
+  kind?: PackageKind;
+  /** 通道；'' = 明确不带通道 */
+  channel?: PackageChannel | '';
+  /** 版本号；'' = 明确没有版本号 */
+  version?: string;
+  /** 打标签的时间戳，仅用于展示 */
+  at?: number;
+}
+
+/** 文件名 → 手动标签 */
+export type PackageOverrideMap = Record<string, PackageOverride>;
+
+/** 一个安装包文件（扫描结果里的一行） */
+export interface PackageEntry {
+  absPath: string;
+  /** 相对工作目录的路径 */
+  relPath: string;
+  name: string;
+  format: PackageFormat;
+  size: number;
+  mtimeMs: number;
+  /** 归一化后的版本号（2.83）；解析不出来时为空 */
+  version?: string;
+  /** 版本号是从文件名读到的、从上级目录名兜底读到的，还是用户手工填的 */
+  versionFrom?: 'name' | 'folder' | 'manual';
+  /** 文件名里出现过的原始版本串（V2.83 这种），仅用于界面展示 */
+  rawVersion?: string;
+  /** 版本号后面的构建号（_18 / _10） */
+  build?: string;
+  kind: PackageKind;
+  /** 判不出通道时按 release 归置，这里给的是最终归置用的通道 */
+  channel?: PackageChannel;
+  /** 该包「应该」放在哪个相对目录（相对工作目录，POSIX 分隔符） */
+  targetDir: string;
+  /** 该包「应该」的绝对路径 */
+  targetPath: string;
+  /** 已经在正确位置（不需要移动） */
+  organized: boolean;
+  /** 该包的 类型/通道/版本 里有手工指定的项（界面上标「手动」，可一键恢复自动） */
+  overridden?: boolean;
+  /** 未移动时的原因：duplicate=同名同大小文件已存在 */
+  skipReason?: 'duplicate';
+}
+
+/** 扫描结果 */
+export interface PackageScanResult {
+  root: string;
+  /** 工作目录是否存在 */
+  exists: boolean;
+  entries: PackageEntry[];
+  /** 需要移动的文件数 */
+  pending: number;
+  /** 识别到的版本号（倒序） */
+  versions: string[];
+  stats: {
+    total: number;
+    bytes: number;
+    byKind: Record<PackageKind, number>;
+    byChannel: Record<PackageChannel, number>;
+    byFormat: Record<PackageFormat, number>;
+    /** 工作目录里被忽略的非 apk/aab 文件数（不移动） */
+    ignored: number;
+  };
+  /** 整理时会用到的目录（相对工作目录，用于「目录树」预览） */
+  dirs: string[];
+  scannedAt: number;
+}
+
+export interface PackageOrganizeResult {
+  root: string;
+  moved: number;
+  /** 已经在正确位置、或同名同大小被跳过的数量 */
+  skipped: number;
+  failed: { name: string; error: string }[];
+  details: { from: string; to: string }[];
+  /** 整理完重新扫一次的结果，界面直接用它刷新列表 */
+  scan: PackageScanResult;
+}
+
+/* ------------------------------------------------------------------ */
 /* 会话设置                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -861,6 +1015,23 @@ export interface AppSettings {
   clickerJitterPx: number;
   /** 采集端控制端口（设备侧，adb forward 映射用） */
   recorderPort: number;
+  /*
+   * 安装包管理（v1.1.6）：一个按「版本 / 类型 / 通道」自动归类的本地仓库。
+   * 与截图/录屏那些「跟系统走」的目录不同，这里默认给一个固定的仓库根
+   * （和 logcat 导出根 D:\adblogs 一个道理），用户随时可在模块里改。
+   */
+  /** 仓库工作目录（整理与浏览都只看这一个目录） */
+  packageRootDir: string;
+  /** 分类目录名（可自定义） */
+  packageDirNames: PackageDirNames;
+  /** 目录结构：先版本还是先类型 */
+  packageStructure: PackageStructure;
+  /** 进入模块时自动整理一次 */
+  packageAutoOrganize: boolean;
+  /** 上次用的筛选条件（下次进入沿用） */
+  packageFilters: PackageFilters;
+  /** 手动标签（按文件名），自动识别判错时用户钉死的值 */
+  packageOverrides: PackageOverrideMap;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1162,6 +1333,20 @@ export const IPC = {
   QUICK_ACTION_RESET: 'quickAction:reset',
   QUICK_ACTION_RUN: 'quickAction:run',
   QUICK_ACTION_FOREGROUND: 'quickAction:foreground',
+
+  /* 安装包管理（v1.1.6） */
+  /** 只扫描不落盘：把工作目录里的包按规则算出「应该在哪」 */
+  PACKAGES_SCAN: 'packages:scan',
+  /** 真的把文件挪到分类目录里（幂等，重复跑只会有 0 次移动） */
+  PACKAGES_ORGANIZE: 'packages:organize',
+  /** 选工作目录（系统选文件夹框） */
+  PACKAGES_PICK_DIR: 'packages:pickDir',
+  /** 在资源管理器里定位某个包 */
+  PACKAGES_REVEAL: 'packages:reveal',
+  /** 手工指定一个包的类型/通道/版本（tag=null = 恢复自动识别） */
+  PACKAGES_SET_TAG: 'packages:setTag',
+  /** 清空全部手动标签 */
+  PACKAGES_CLEAR_TAGS: 'packages:clearTags',
 
   /* 实时 Logcat（v1.0） */
   LOGCAT_START: 'logcat:start',

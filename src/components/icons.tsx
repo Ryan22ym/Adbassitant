@@ -62,6 +62,15 @@ export const Icon = {
       <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8" />
     </svg>
   ),
+  /** 文件夹（安装包管理的「在资源管理器中定位」用） */
+  folder: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path
+        d="M3 6.5a2 2 0 012-2h3.6a2 2 0 011.6.8l1 1.4H19a2 2 0 012 2v9.8a2 2 0 01-2 2H5a2 2 0 01-2-2v-12z"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ),
   logcat: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <rect x="2.5" y="4" width="19" height="16" rx="2.5" />

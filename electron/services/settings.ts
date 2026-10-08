@@ -1,7 +1,24 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { app } from 'electron';
+import { DEFAULT_PACKAGE_DIR_NAMES, DEFAULT_PACKAGE_FILTERS } from '../../shared/packages';
 import type { AppSettings } from '../../shared/types';
+
+/** 安装包仓库默认根目录（产品约定放 D 盘，和 logcat 导出根一个思路） */
+export const DEFAULT_PACKAGE_ROOT = 'D:\\ApkPackages';
+
+/**
+ * 没有 D 盘（或 D 盘不可写）时退到系统下载目录 —— 只在 defaultDirs 里用，
+ * 因为 DEFAULTS 是模块级常量，那时候 app 可能还没 ready，取不了系统路径。
+ */
+function defaultPackageRoot(): string {
+  try {
+    if (existsSync('D:\\')) return DEFAULT_PACKAGE_ROOT;
+  } catch {
+    /* ignore */
+  }
+  return join(app.getPath('downloads'), 'ApkPackages');
+}
 
 const DEFAULTS: AppSettings = {
   theme: 'light',
@@ -20,6 +37,14 @@ const DEFAULTS: AppSettings = {
   clickerJitterPx: 6,
   // 与设备侧 ControlServer.DEFAULT_PORT 一致；改这里要同步改 android/recorder 里的常量
   recorderPort: 18081,
+  // 安装包管理（v1.1.6）
+  packageRootDir: DEFAULT_PACKAGE_ROOT,
+  packageDirNames: DEFAULT_PACKAGE_DIR_NAMES,
+  packageStructure: 'version-first',
+  packageAutoOrganize: true,
+  packageFilters: DEFAULT_PACKAGE_FILTERS,
+  // 手动标签：对象默认给空的一份（与上面几个对象字段同理，别共享引用）
+  packageOverrides: {},
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -78,6 +103,18 @@ function defaultDirs(): AppSettings {
     clickerSpeed: 1,
     clickerJitterPx: 6,
     recorderPort: 18081,
+    /*
+     * 安装包仓库（v1.1.6）：默认 D:\ApkPackages（没有 D 盘时退到下载目录）。
+     * 对象字段都给一份新副本 —— getSettings() 会把 merged 直接交给调用方，
+     * 共享同一个引用的话，界面改筛选条件会顺手改掉「默认值」本身。
+     */
+    packageRootDir: defaultPackageRoot(),
+    packageDirNames: { ...DEFAULT_PACKAGE_DIR_NAMES },
+    packageStructure: 'version-first',
+    packageAutoOrganize: true,
+    packageFilters: { ...DEFAULT_PACKAGE_FILTERS },
+    // 手动标签默认空表（每次都给一份新对象）
+    packageOverrides: {},
   };
 }
 

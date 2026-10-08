@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input, Select, Switch, Spinner } from '@/components/ui';
-import { useApp } from '@/store/app';
+import { useApp, useCurrentDevice } from '@/store/app';
 import { call, tryCall } from '@/lib/ipc';
 import { ActionIcon, Icon } from './icons';
-import type { FavoriteApp } from '@shared/types';
+import type { AppInfo, FavoriteApp } from '@shared/types';
 import {
   QUICK_ACTION_INLINE_MAX,
   QUICK_ACTION_KIND_LABEL,
@@ -38,9 +38,13 @@ export function shortPkg(pkg?: string): string {
 /** 动作的作用对象提示；与包名无关的动作返回空 */
 function targetHint(a: QuickAction): string {
   if (!QUICK_ACTION_NEEDS_TARGET[a.kind]) return '';
-  const t = (a.target || '').trim();
-  if (!t || t === QUICK_TARGET_FOREGROUND) return '前台应用';
-  return shortPkg(t);
+  const t = a.target;
+  // 没写 target（老配置）与 'foreground' 都是「跟着当前前台应用走」
+  if (t === undefined || t === QUICK_TARGET_FOREGROUND) return '前台应用';
+  const s = t.trim();
+  // 空串 = 选了「指定包名」但还没填，这与「前台应用」不是一回事，别显示成前台
+  if (!s) return '未填包名';
+  return shortPkg(s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -257,9 +261,14 @@ export function QuickActionsDialog({
   onSaved: (list: QuickAction[]) => void;
 }) {
   const toast = useApp((s) => s.toast);
+  const current = useCurrentDevice();
   const [draft, setDraft] = useState<QuickAction[]>([]);
   const [saving, setSaving] = useState(false);
   const [favs, setFavs] = useState<FavoriteApp[]>([]);
+  /** 当前设备上装的第三方应用（给「指定包名」做候选，省得手打） */
+  const [installed, setInstalled] = useState<AppInfo[]>([]);
+  /** 「指定包名」输入框：切到该模式后自动聚焦 */
+  const pkgRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
     if (open) setDraft(actions.map((a) => ({ ...a })));
@@ -272,6 +281,42 @@ export function QuickActionsDialog({
       setFavs(list || []);
     })();
   }, [open]);
+
+  /*
+   * 拉一次当前设备的第三方应用列表当候选。
+   * 失败（没连设备 / adb 忙）就不给候选，输入框照样能手填 —— 不打扰用户。
+   */
+  useEffect(() => {
+    if (!open || !current?.serial) {
+      setInstalled([]);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const list = await tryCall<AppInfo[]>(() => window.adbApi.listApps(current.serial, false));
+      if (alive) setInstalled(list || []);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open, current?.serial]);
+
+  /** 候选 = 常用应用（跨设备，带 ☆ 标记）+ 当前设备上装的第三方应用 */
+  const suggestions = useMemo(() => {
+    const out: { value: string; label: string }[] = [];
+    const seen = new Set<string>();
+    favs.forEach((f) => {
+      if (seen.has(f.packageName)) return;
+      seen.add(f.packageName);
+      out.push({ value: f.packageName, label: `★ ${f.label || f.packageName}` });
+    });
+    installed.forEach((a) => {
+      if (seen.has(a.packageName)) return;
+      seen.add(a.packageName);
+      out.push({ value: a.packageName, label: a.label || a.packageName });
+    });
+    return out;
+  }, [favs, installed]);
 
   useEffect(() => {
     if (!open) return;
@@ -336,11 +381,23 @@ export function QuickActionsDialog({
       toast('warn', `「${bad.label}」还没有填命令`);
       return;
     }
+    /*
+     * 选了「指定包名」却空着 —— 存下去会变成一条「跑起来必然报错」的动作，
+     * 在这里拦住比之后在设备行上点一下再失败要清楚得多。
+     */
+    const noPkg = draft.find(
+      (a) => QUICK_ACTION_NEEDS_TARGET[a.kind] && a.target !== undefined && !a.target.trim(),
+    );
+    if (noPkg) {
+      toast('warn', `「${noPkg.label}」选了「指定包名」，包名还没填`);
+      return;
+    }
     setSaving(true);
     try {
-      const list = await call<QuickAction[]>(() => window.adbApi.saveQuickActions(draft), {
-        silent: true,
-      });
+      const list = await call<QuickAction[]>(
+        () => window.adbApi.saveQuickActions(draft.map((a) => ({ ...a, target: a.target?.trim() }))),
+        { silent: true },
+      );
       onSaved(list && list.length ? list : draft);
       toast('success', '快捷动作配置已保存');
       onClose();
@@ -373,7 +430,7 @@ export function QuickActionsDialog({
           <div>
             <h3 className="qa-dialog-title">快捷动作配置</h3>
             <p className="qa-dialog-sub">
-              设备行上最多直显 {QUICK_ACTION_INLINE_MAX} 个按钮，其余收进「更多」菜单；顺序即显示顺序
+              设备行上最多直显 {QUICK_ACTION_INLINE_MAX} 个按钮，其余收进「更多」菜单
             </p>
           </div>
           <button className="qa-dialog-close" onClick={onClose} title="关闭">
@@ -387,7 +444,13 @@ export function QuickActionsDialog({
           ) : (
             draft.map((a, i) => {
               const needs = QUICK_ACTION_NEEDS_TARGET[a.kind];
-              const fixed = !!a.target && a.target !== QUICK_TARGET_FOREGROUND;
+              /*
+               * 「指定包名」这一档的判据是「target 存在且不是 foreground」，**空串也算**
+               * （用户刚选完模式、包名还没填）。
+               * 以前写成 `!!a.target`，选完立刻被判回「当前前台应用」，
+               * 于是这个选项看着就像点不动 —— 这是要修的那个 bug。
+               */
+              const fixed = a.target !== undefined && a.target !== QUICK_TARGET_FOREGROUND;
               return (
                 <div className={`qa-cfg-row ${a.enabled ? '' : 'off'}`} key={a.id}>
                   <div className="qa-cfg-main">
@@ -414,14 +477,15 @@ export function QuickActionsDialog({
                         <Select
                           className="qa-cfg-mode"
                           value={fixed ? '__fixed__' : QUICK_TARGET_FOREGROUND}
-                          onChange={(e) =>
-                            patch(i, {
-                              target:
-                                e.target.value === QUICK_TARGET_FOREGROUND
-                                  ? QUICK_TARGET_FOREGROUND
-                                  : '',
-                            })
-                          }
+                          onChange={(e) => {
+                            const toFixed = e.target.value === '__fixed__';
+                            // 空串 = 已选「指定包名」、包名待填（主进程认得这个语义）
+                            patch(i, { target: toFixed ? '' : QUICK_TARGET_FOREGROUND });
+                            if (toFixed) {
+                              // 输入框这一帧才挂上去，等渲染完再聚焦
+                              window.setTimeout(() => pkgRefs.current[i]?.focus(), 0);
+                            }
+                          }}
                           options={[
                             { value: QUICK_TARGET_FOREGROUND, label: '当前前台应用' },
                             { value: '__fixed__', label: '指定包名' },
@@ -432,6 +496,9 @@ export function QuickActionsDialog({
                             className="qa-cfg-pkg mono"
                             list="qa-fav-pkgs"
                             placeholder="com.example.app"
+                            ref={(el: HTMLInputElement | null) => {
+                              pkgRefs.current[i] = el;
+                            }}
                             value={a.target || ''}
                             onChange={(e) => patch(i, { target: e.target.value })}
                           />
@@ -532,9 +599,9 @@ export function QuickActionsDialog({
         </footer>
 
         <datalist id="qa-fav-pkgs">
-          {favs.map((f) => (
-            <option key={f.packageName} value={f.packageName}>
-              {f.label || f.packageName}
+          {suggestions.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
             </option>
           ))}
         </datalist>

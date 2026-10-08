@@ -17,6 +17,7 @@ import {
   type ClickerScript,
   type ClickerStep,
   type RecordedSession,
+  type PackageOverride,
 } from '../shared/types';
 import {
   listDevices,
@@ -116,6 +117,14 @@ import {
   runQuickAction,
   foregroundApp,
 } from './services/quick-actions';
+import {
+  clearPackageTags,
+  organizePackageDir,
+  pickPackageDir,
+  revealPackage,
+  scanPackageDir,
+  setPackageTag,
+} from './services/packages';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
 import {
@@ -825,6 +834,32 @@ export function registerIpc() {
     IPC.QUICK_ACTION_FOREGROUND,
     wrap((_e, serial?: string) => foregroundApp(serial)),
   );
+
+  /* ---------------- 安装包管理（v1.1.6） ---------------- */
+
+  // 只扫描、不改动磁盘：界面上的列表与「整理预览」都走它
+  ipcMain.handle(IPC.PACKAGES_SCAN, wrap(() => scanPackageDir()));
+
+  // 真整理（移动文件）。幂等：没有该移动的东西时返回 moved=0
+  ipcMain.handle(IPC.PACKAGES_ORGANIZE, wrap(() => organizePackageDir()));
+
+  ipcMain.handle(
+    IPC.PACKAGES_PICK_DIR,
+    wrap((_e, current?: string) => pickPackageDir(current)),
+  );
+
+  ipcMain.handle(
+    IPC.PACKAGES_REVEAL,
+    wrap((_e, path: string, reveal = true) => revealPackage(path, reveal)),
+  );
+
+  // 手工改标签（类型/通道/版本）。tag=null → 恢复自动识别。返回新的扫描结果
+  ipcMain.handle(
+    IPC.PACKAGES_SET_TAG,
+    wrap((_e, name: string, tag: PackageOverride | null) => setPackageTag(name, tag)),
+  );
+
+  ipcMain.handle(IPC.PACKAGES_CLEAR_TAGS, wrap(() => clearPackageTags()));
 
   /* ---------------- 实时 Logcat（v1.0） ---------------- */
 

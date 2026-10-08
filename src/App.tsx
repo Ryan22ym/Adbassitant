@@ -22,7 +22,7 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/': { title: '设备', desc: '查看设备状态与详细信息' },
   '/mirror': { title: '投屏', desc: '通过 scrcpy 实时投屏并控制设备' },
   '/tools': { title: '常用工具', desc: '截图、录屏、分辨率、应用安装与文件传输' },
-  '/apps': { title: '应用管理', desc: '浏览应用列表，卸载、停止、清数据与提取 APK' },
+  '/apps': { title: '应用管理', desc: '已装应用的管理，以及本地安装包按版本自动归类' },
   '/logcat': { title: '实时 Logcat', desc: '流式抓取设备日志，过滤与一键保存' },
   '/weaknet': { title: '弱网模拟', desc: '模拟带宽、延迟、抖动、丢包等真实网络状况' },
   // 连点器页的顶栏描述去掉了（用户反馈这句是废话）：标题「自动连点器」已经说清楚了

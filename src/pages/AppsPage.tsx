@@ -12,9 +12,13 @@ import {
 import { useApp, useCurrentDevice } from '@/store/app';
 import { call } from '@/lib/ipc';
 import { formatBytes, formatTime } from '@/lib/format';
+import PackageManager from './PackageManager';
 import type { AppDetail, AppInfo, FavoriteApp } from '@shared/types';
 
 type FilterKey = 'fav' | 'user' | 'system' | 'all' | 'running';
+
+/** 页内两个标签：设备上装了什么 / 本地安装包仓库（v1.1.6） */
+type PageTab = 'apps' | 'packages';
 
 /**
  * 列表行：把「设备上装了的应用」和「收藏里但当前设备没装的包名」统一成一种形状，
@@ -39,12 +43,18 @@ export default function AppsPage() {
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [favorites, setFavorites] = useState<FavoriteApp[]>([]);
   const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState<PageTab>('apps');
   const [filter, setFilter] = useState<FilterKey>('user');
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<AppDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  /**
+   * 页内标签栏右侧的挂载点。安装包管理把「刷新 / 立即整理」两个全局动作
+   * 通过 portal 挂在这里 —— 那两个键属于整页，放在仓库卡片里会被下面的列表压没。
+   */
+  const [pkgActionsHost, setPkgActionsHost] = useState<HTMLDivElement | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -265,8 +275,42 @@ export default function AppsPage() {
   const selectedIsFav = !!selected && favMap.has(selected);
   const selectedLabel = currentApp?.label || currentRow?.label || selected || '';
 
+  /*
+   * 页内标签栏。
+   * 「安装包管理」是纯本地功能（不依赖设备），所以它跟「已装应用」平级，
+   * 而不是塞进设备应用的列表里 —— 没连设备时也一样能用。
+   */
+  const tabbar = (
+    <div className="apps-tabs" data-apps-tabs>
+      <Segmented
+        size="sm"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'apps', label: '已装应用' },
+          { value: 'packages', label: '安装包管理' },
+        ]}
+      />
+      <span className="text-dim">
+        {tab === 'packages' ? '本地安装包按 版本 / 类型 / 通道 自动归类' : '设备上已安装的应用'}
+      </span>
+      {/* 安装包管理页的全局动作（刷新 / 立即整理）挂在这里 */}
+      <div className="apps-tabs-actions" ref={setPkgActionsHost} />
+    </div>
+  );
+
+  if (tab === 'packages') {
+    return (
+      <>
+        {tabbar}
+        <PackageManager actionsHost={pkgActionsHost} />
+      </>
+    );
+  }
+
   return (
     <>
+      {tabbar}
       {!current && (
         <Notice tone="warn">
           当前没有可用设备，请先在「设备」页面连接手机并授权 USB 调试。

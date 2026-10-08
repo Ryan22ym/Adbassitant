@@ -88,7 +88,18 @@ function normalize(raw: unknown): QuickAction | null {
   if (!label) return null;
 
   const id = String(x.id || '').trim() || newId();
-  const target = String(x.target ?? '').trim() || QUICK_TARGET_FOREGROUND;
+  /*
+   * target 的语义（v1.1.6 起把「空」和「前台」分开）：
+   *   'foreground' / 缺省 → 当前前台应用
+   *   ''                  → 选了「指定包名」但包名还没填（界面正在输入）
+   *   其它                → 固定包名
+   *
+   * 以前写成 `String(x.target ?? '').trim() || QUICK_TARGET_FOREGROUND`，
+   * 空串被强行掰成前台应用 —— 于是界面上「指定包名」选完即失效，
+   * 存下去配置里也永远只有前台应用，这个功能等于没做。
+   */
+  const rawTarget = x.target;
+  const target = typeof rawTarget === 'string' ? rawTarget.trim() : QUICK_TARGET_FOREGROUND;
   const command = typeof x.command === 'string' ? x.command : undefined;
   const tone = x.tone === 'primary' || x.tone === 'danger' ? x.tone : 'default';
 
@@ -268,8 +279,14 @@ export async function foregroundApp(serial?: string): Promise<QuickForegroundInf
  * 钉死包名的直接用；取「当前前台」时若前台是桌面，回退到最近一次的应用并记日志。
  */
 async function resolveTargetPackage(s: string, action: QuickAction): Promise<string> {
-  const fixed = (action.target || '').trim();
-  if (fixed && fixed !== QUICK_TARGET_FOREGROUND) return fixed;
+  const t = (action.target ?? '').trim();
+  // 选了「指定包名」却空着：给一句能照着做的提示，别等到 adb 报一堆用法
+  if (!t) {
+    throw new Error(
+      `「${action.label}」选了「指定包名」，但包名是空的 —— 打开「配置快捷动作」填上，或改成「当前前台应用」`,
+    );
+  }
+  if (t !== QUICK_TARGET_FOREGROUND) return t;
 
   const info = await foregroundApp(s);
   if (info.packageName && !info.isLauncher) return info.packageName;

@@ -534,6 +534,131 @@ async function runChecks(page) {
     await sleep(400);
   }
 
+  /* ============ D. 「指定包名」 ============ */
+  log('---- D. 指定包名 ----');
+
+  /*
+   * 这一段的由来：配置里「目标」原来只有「当前前台应用」能用 ——
+   * 选「指定包名」时界面把 target 置成空串，而空串又被当成「前台应用」判回去，
+   * 于是下拉一秒弹回、包名输入框永不出现；主进程那边也把空串归一化成 foreground。
+   * 现在空串是**独立语义**（选了指定包名但还没填），所以这里四条都钉住。
+   */
+  const emptySaved = await saveActions(page, [
+    { id: 'd1', label: '空包名', kind: 'launch', target: '', enabled: true },
+  ]);
+  record(
+    Array.isArray(emptySaved) && emptySaved[0] && emptySaved[0].target === '',
+    'D1 空 target 落盘后不被掰成 foreground（独立语义）',
+    JSON.stringify(Array.isArray(emptySaved) ? emptySaved.map((a) => a.target) : emptySaved),
+  );
+
+  // 不叫 target：C 段里那个 const target 在本函数作用域后面才声明（TDZ）
+  const dDev = await waitDeviceRows(page);
+  const dSerial = dDev.ready[0];
+  if (dSerial) {
+    const emptyRun = await callApi(
+      page,
+      `window.adbApi.runQuickAction(${JSON.stringify(dSerial)}, { id: 'd1', label: '空包名', kind: 'launch', target: '', enabled: true })`,
+    );
+    record(
+      !!(emptyRun && emptyRun.__error && /指定包名/.test(emptyRun.__error)),
+      'D2 空包名执行时给出「指定包名」相关提示（不回落到前台应用）',
+      JSON.stringify(emptyRun),
+    );
+  } else {
+    record(true, 'D2 无设备，跳过执行层用例', 'skip');
+  }
+
+  /* 界面：切到「指定包名」应该立刻出现包名输入框 */
+  await page.evalJS(`
+    (() => {
+      document.querySelector('[data-qa-more]')?.click();
+      return true;
+    })()
+  `);
+  await sleep(300);
+  await page.evalJS(`document.querySelector('[data-qa-configure]')?.click(); undefined;`);
+  await sleep(500);
+
+  const selectTarget = (value) => `
+    (() => {
+      const sel = document.querySelector('[data-qa-dialog] .qa-cfg-row .qa-cfg-mode');
+      if (!sel) return false;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+      setter.call(sel, ${JSON.stringify(value)});
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()
+  `;
+
+  // 先切回「当前前台应用」确认输入框会消失，再切到「指定包名」确认它回来
+  await page.evalJS(selectTarget('foreground'));
+  await sleep(400);
+  const noPkgBox = await page.evalJS(
+    `!!document.querySelector('[data-qa-dialog] .qa-cfg-row .qa-cfg-pkg')`,
+  );
+  await page.evalJS(selectTarget('__fixed__'));
+  await sleep(400);
+  const pkgBox = await page.evalJS(
+    `!!document.querySelector('[data-qa-dialog] .qa-cfg-row .qa-cfg-pkg')`,
+  );
+  record(
+    noPkgBox === false && pkgBox === true,
+    'D3 目标在「前台应用 / 指定包名」间切换时包名输入框跟着出现（以前点了没反应）',
+    `foreground⇒${noPkgBox} fixed⇒${pkgBox}`,
+  );
+
+  // 空着就保存：应该被拦住，不落盘
+  await page.evalJS(`document.querySelector('[data-qa-save]')?.click(); undefined;`);
+  await sleep(600);
+  const stillOpen = await page.evalJS(`!!document.querySelector('[data-qa-dialog]')`);
+  const blocked = await page.evalJS(`
+    [...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')
+  `);
+  record(
+    stillOpen && /包名/.test(blocked),
+    'D4 空包名保存被拦下并给出提示（不会存成一条跑不通的动作）',
+    `open=${stillOpen} toast=${blocked}`,
+  );
+
+  // 填上包名再保存
+  await page.evalJS(`
+    (() => {
+      const el = document.querySelector('[data-qa-dialog] .qa-cfg-row .qa-cfg-pkg');
+      if (!el) return false;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(el, 'com.example.app');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()
+  `);
+  await sleep(300);
+  await page.evalJS(`document.querySelector('[data-qa-save]')?.click(); undefined;`);
+  await sleep(800);
+  const afterSave = await callApi(page, `window.adbApi.quickActions()`);
+  record(
+    Array.isArray(afterSave) && afterSave[0] && afterSave[0].target === 'com.example.app',
+    'D5 填了包名后保存，固定包名真的存下来了',
+    JSON.stringify(Array.isArray(afterSave) ? afterSave.map((a) => a.target) : afterSave),
+  );
+
+  // 收尾：把测试配置清掉，恢复默认
+  const restoreD = await callApi(page, `window.adbApi.resetQuickActions()`);
+  record(
+    Array.isArray(restoreD) && restoreD.length === 3 && restoreD[0].target === 'foreground',
+    'D6 测试配置已清理，回到默认（前台应用）',
+    JSON.stringify(Array.isArray(restoreD) ? restoreD.map((a) => a.target) : restoreD),
+  );
+
+  await page.evalJS(`
+    (() => {
+      const d = document.querySelector('[data-qa-dialog]');
+      if (d) [...d.querySelectorAll('.btn')].find((b) => b.textContent.trim() === '取消')?.click();
+      return true;
+    })()
+  `);
+  await sleep(300);
+
   /* ============ C. 执行层 ============ */
   log('---- C. 执行层 ----');
 

@@ -151,8 +151,7 @@ export default function MirrorPage() {
         ) : (
           <div className="col">
             <p className="text-dim">
-              点击下方「启动投屏」后，将弹出一个独立的投屏窗口。窗口内可用鼠标操作手机、
-              用键盘输入文字，支持 Ctrl+C / Ctrl+V 双向剪贴板同步。
+              窗口内可用鼠标操作手机、用键盘输入文字，支持 Ctrl+C / Ctrl+V 双向剪贴板同步。
             </p>
             <div className="row">
               <Button variant="primary" onClick={start} loading={busy} disabled={!current}>
