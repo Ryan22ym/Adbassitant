@@ -42,3 +42,32 @@ export function toHexColor(input: string): string {
   // 认不出来就原样交回去，由主进程的校验去报错（别在这里静默给个错色）
   return s;
 }
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec((hex || '').trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/**
+ * 按「盖上一层半透明色」的效果算出叠加后的颜色，返回 `#rrggbb`。
+ *
+ * 用在标题栏右上角的系统按钮区：那块是 titleBarOverlay 由主进程画的，
+ * **在渲染内容之外**，页面上的遮罩（.install-mask 等）盖不到它 ——
+ * 弹窗变暗时它会保持原色，看着像贴了块高亮补丁。
+ * 既然盖不住，就反过来自己算出「被盖住之后应该是什么色」再回传，
+ * 让它看起来和周围是一起变暗的。
+ *
+ * 参数 `over` / `alpha` 从遮罩元素的实际计算样式里读（见 App.tsx），
+ * 不在这里写死一份 —— 免得改了 CSS 的遮罩色两边不同步。
+ */
+export function dimOver(base: string, over: string, alpha: number): string {
+  const b = hexToRgb(base);
+  const o = hexToRgb(over);
+  if (!b || !o) return base;
+  const a = Math.min(1, Math.max(0, alpha));
+  const mix = (x: number, y: number) => Math.round(x * (1 - a) + y * a);
+  const h = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
+  return `#${h(mix(b[0], o[0]))}${h(mix(b[1], o[1]))}${h(mix(b[2], o[2]))}`;
+}

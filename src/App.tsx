@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
-import { toHexColor } from './lib/color';
+import { toHexColor, dimOver } from './lib/color';
 import { IPC } from '@shared/types';
 import type { UpdateResult, UpdateCheckResult, AabSigningInfo } from '@shared/types';
 
@@ -32,6 +32,39 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/settings': { title: '设置', desc: '外观、默认目录与环境自检' },
 };
 
+/**
+ * 页面上的全屏遮罩（有视觉色彩的那些）。
+ *
+ * 白名单而不是「所有 fixed 全屏层」：.qa-mask（纯透明点击拦截）和 .qa-menu（局部菜单）
+ * 也是 fixed，但它们不是遮罩，不该让标题栏跟着变暗。
+ */
+const SCRIM_SEL = '.install-mask, .qa-dialog-mask';
+
+/**
+ * 读当前页面上全屏遮罩的实际底色与透明度（没有则返回 null）。
+ *
+ * 只认白名单里的两种遮罩（安装弹窗 / 快捷动作配置弹层）—— 不用「找出所有
+ * fixed 全屏层」那种通用写法：菜单、下拉这类局部浮层也是 fixed，
+ * 但它们不是遮罩，不该让标题栏跟着变暗。
+ */
+function readScrim(): { color: string; alpha: number } | null {
+  const els = document.querySelectorAll(SCRIM_SEL);
+  for (const el of Array.from(els)) {
+    const bg = getComputedStyle(el).backgroundColor;
+    const parts = bg
+      .replace(/^rgba?\(|\)$/gi, '')
+      .split(/[,\s/]+/)
+      .filter(Boolean);
+    if (parts.length < 3) continue;
+    const alpha = parts.length >= 4 ? parseFloat(parts[3]) : 1;
+    if (!(alpha > 0)) continue;
+    const color = toHexColor(`rgb(${parts[0]}, ${parts[1]}, ${parts[2]})`);
+    if (!/^#[0-9a-f]{6}$/.test(color)) continue;
+    return { color, alpha };
+  }
+  return null;
+}
+
 export default function App() {
   const location = useLocation();
   const setDevices = useApp((s) => s.setDevices);
@@ -43,6 +76,8 @@ export default function App() {
   // 标题栏配色要跟着这两个走（见下面同步给主进程的 effect）
   const theme = useApp((s) => s.theme);
   const accent = useApp((s) => s.accent);
+  // 当前页面上有没有全屏遮罩（弹窗变暗时右上角系统按钮区要跟着一起压暗）
+  const [scrimActive, setScrimActive] = useState(false);
 
   /* 初始化：读取设置、订阅推送（仅执行一次） */
   useEffect(() => {
@@ -183,6 +218,38 @@ export default function App() {
   const meta = PAGE_META[location.pathname] || PAGE_META['/'];
 
   /*
+   * 盯着页面上有没有全屏遮罩，供下面那个标题栏配色的 effect 用。
+   *
+   * 用 MutationObserver 而不是让每个遮罩组件自己上报：遮罩散在几个组件里
+   * （.install-mask 两处、.qa-dialog-mask 一处），将来再加一个就得记得补一行，
+   * 漏了又是一块「白补丁」。这里统一盯 body，且**只在进出变动里真的出现了遮罩元素时**
+   * 才查一次 DOM —— logcat 那种高频刷 DOM 的页面不会被这段拖慢。
+   */
+  useEffect(() => {
+    const sync = () => {
+      const next = !!document.querySelector(SCRIM_SEL);
+      setScrimActive((prev) => (prev === next ? prev : next));
+    };
+    const mo = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const node of [...Array.from(r.addedNodes), ...Array.from(r.removedNodes)]) {
+          if (node.nodeType !== 1) continue;
+          const el = node as Element;
+          // 遮罩通常就是被插入/移除的那个元素；带一层 querySelector 兜底，
+          // 免得将来有人把它包进别的容器里（Fragment 不产生节点，不影响）。
+          if (el.matches(SCRIM_SEL) || (el.firstElementChild && el.querySelector(SCRIM_SEL))) {
+            sync();
+            return;
+          }
+        }
+      }
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+    sync();
+    return () => mo.disconnect();
+  }, []);
+
+  /*
    * 标题栏配色跟随主题。
    *
    * 窗口是 titleBarStyle:'hidden'（见 electron/main.ts）：顶部那条整宽色带由页面自己画
@@ -198,11 +265,29 @@ export default function App() {
   useEffect(() => {
     const bar = document.querySelector('.titlebar') as HTMLElement | null;
     const cs = getComputedStyle(document.documentElement);
-    const color = toHexColor(bar ? getComputedStyle(bar).backgroundColor : '');
-    const symbolColor = cs.getPropertyValue('--text-primary').trim();
-    if (!/^#[0-9a-f]{6}$/.test(color)) return;
+    const base = toHexColor(bar ? getComputedStyle(bar).backgroundColor : '');
+    if (!/^#[0-9a-f]{6}$/.test(base)) return;
+    const symbolBase = toHexColor(cs.getPropertyValue('--text-primary').trim());
+
+    /*
+     * 有全屏遮罩时，连右上角那块系统按钮区一起压暗。
+     *
+     * 它会「亮」是因为：titleBarOverlay 由主进程画在渲染内容之外，
+     * 页面上的 .install-mask 之类盖不到它 —— 弹窗一出，整屏都暗了，只有右上角
+     * 还是原色，像贴了块高亮补丁（用户反馈的正是这个）。
+     * 盖不住就反过来算：按遮罩的实际色与透明度求出「被盖住后」的颜色再回传。
+     * 🔴 遮罩色/透明度从遮罩元素的计算样式里现读（不在这里抄一份常量），
+     *    免得以后改了 CSS 两边不同步。
+     */
+    const scrim = scrimActive ? readScrim() : null;
+    const color = scrim ? dimOver(base, scrim.color, scrim.alpha) : base;
+    const symbolColor =
+      scrim && /^#[0-9a-f]{6}$/.test(symbolBase)
+        ? dimOver(symbolBase, scrim.color, scrim.alpha)
+        : symbolBase;
+
     void window.adbApi.setTitlebar({ color, symbolColor });
-  }, [theme, accent]);
+  }, [theme, accent, scrimActive]);
 
   return (
     <div className="app-shell">
