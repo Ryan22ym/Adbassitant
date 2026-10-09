@@ -135,11 +135,18 @@ function cmpVersion(a, b) {
  * 只在 bin 完全没变时才成立。v1.1.0 换了应用图标（bin/icon.png 变了），
  * 本版指纹就不再等于上一版指纹，于是「主小包基准 == 上一版机器」那条断言
  * 变成必然的假失败 —— 而包本身是对的。所以改成按 runtimeHash 反查真身。
+ *
+ * 🔴 还要**排除「本次正在验收的那个产物目录」**（v1.1.7 踩到）：
+ * 本版 bin 没变时，本版指纹与上一版一模一样，按 hash 反查会查到**本版自己**，
+ * 于是造出来的「最新机器」已经是本版 → prepareUpdate 按「目标版本必须比自己新」
+ * 把它判掉，C 段那两条「最新机器 + 主小包/完整包 → 通过」必然假失败。
+ * 这里只收真·旧版本的树，语义才对（这些树代表用户机器上「已经装着的旧版」）。
  */
 function listTrees() {
   const out = [];
   for (const name of fs.readdirSync(ROOT)) {
     if (!/^out-v\d+\.\d+\.\d+/.test(name)) continue;
+    if (path.resolve(ROOT, name) === path.resolve(OUT_DIR)) continue;
     const upd = path.join(ROOT, name, 'update');
     const res = path.join(ROOT, name, 'win-unpacked', 'resources');
     if (!fs.existsSync(upd) || !fs.existsSync(path.join(res, 'bin'))) continue;

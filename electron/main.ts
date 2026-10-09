@@ -7,6 +7,7 @@ import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
 import { refreshShortcutIcons } from './services/shortcuts';
+import { syncAutoLaunch } from './services/auto-launch';
 import { IPC, TITLEBAR_HEIGHT } from '../shared/types';
 
 const isDev = !app.isPackaged;
@@ -138,6 +139,18 @@ app.whenReady().then(() => {
     refreshShortcutIcons(__dirname);
   } catch {
     /* 兜底：这个函数自己已经 try/catch 过，这里只是不让它有任何机会拖垮启动 */
+  }
+
+  /*
+   * 按设置对齐开机自启动项（v1.1.7）。
+   * 幂等：开启就重写一遍注册表路径（重装换过目录的老条目靠这一步修回来），
+   * 关闭就删掉那条。内部吞掉所有异常，不影响启动。
+   */
+  try {
+    const on = syncAutoLaunch();
+    log('info', '系统', `开机自启动：${on ? '已开启' : '未开启'}`);
+  } catch {
+    /* 对齐失败不影响启动 */
   }
 
   /*

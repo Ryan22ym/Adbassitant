@@ -2107,3 +2107,20 @@
 .accent-name {
   white-space: nowrap;
 }
+
+/* ---------------- 设置页 · 单行设置项（开机自启动） ----------------
+ * 其它设置项走 <Field>：label 一行、控件一行。
+ * 开关这类「二元、一眼就能看懂」的项没必要占两行 —— 名称靠左、开关靠右，
+ * 中间用 .spacer 顶开，整项就是一行。
+ */
+.setting-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 24px;
+}
+
+.setting-line-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}

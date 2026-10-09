@@ -62,6 +62,8 @@ const ACCENTS: {
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.7':
+    '设置页新增「开机自启动」开关，一行显示、改动立即生效；其余设置项默认折叠，只留标题与一句说明，点开与原来一致（「外观」「关于」两栏保持展开）。',
   '1.1.6':
     '新增「安装包管理」：指定目录按版本自动归类为官网包 / Google 包 / 单包，认不出类型的一律归单包并可在列表里手工改标签，筛选后直接安装、条件自动记住；修复快捷动作「指定包名」点不动且不生效；精简投屏页说明文案。',
   '1.1.5':
@@ -179,7 +181,13 @@ export default function SettingsPage() {
 
   return (
     <>
-      <Card title="外观">
+      {/*
+        设置页的卡片默认折叠，只留标题 + 一句说明；想改哪一项再展开 —— 设置项本身不多，
+        但都摊开时整页要滚很久，找东西反而慢。
+        **前两栏（外观 / 关于）例外，默认展开**：主题是最常改的一项，版本信息也常要一眼看到。
+        折叠只是视觉收起（body 仍在 DOM 里），所以自检、检查更新那几处副作用照常跑。
+      */}
+      <Card title="外观" subtitle="主题模式与主题色" collapsible defaultOpen>
         <Field label="主题模式">
           <Segmented
             value={theme}
@@ -224,7 +232,12 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      <Card title="关于">
+      <Card
+        title="关于"
+        subtitle="程序信息与当前版本的更新说明"
+        collapsible
+        defaultOpen
+      >
         <div className="kv-list">
           <About k="程序名称" v="ADB 桌面助手" />
           <About k="版本" v={`v${__APP_VERSION__}`} />
@@ -238,7 +251,12 @@ export default function SettingsPage() {
         </Notice>
       </Card>
 
-      <Card title="默认保存目录" subtitle="截图、录屏、日志导出与文件拉取的默认位置">
+      <Card
+        title="默认保存目录"
+        subtitle="截图、录屏、日志导出与文件拉取的默认位置"
+        collapsible
+        defaultOpen={false}
+      >
         <div className="col">
           <DirRow
             label="截图保存目录"
@@ -260,7 +278,12 @@ export default function SettingsPage() {
 
       <UpdatePanel />
 
-      <Card title="运行日志" subtitle="操作记录按日期存成本地文件，只保留最近 24 小时">
+      <Card
+        title="运行日志"
+        subtitle="操作记录按日期存成本地文件，只保留最近 24 小时"
+        collapsible
+        defaultOpen={false}
+      >
         <div className="col">
           <div className="kv-list">
             <About k="存放位置" v={logDir || '读取中…'} />
@@ -326,6 +349,25 @@ export default function SettingsPage() {
             )}
           </div>
         )}
+      </Card>
+
+      {/*
+        开机自启动（v1.1.7）：所有设置项的最下方。
+        刻意跟其它项区分 —— 别的都是「标题 + 说明 + 控件」两行，这里**只有一行**：
+        左边名称、右边开关。所以**不传 title**（Card 无 title 时不渲染标题行），
+        整张卡片就这一条内容，不重复、不啰嗦。
+        也不折叠：开关藏起来就没意义了。
+      */}
+      <Card>
+        <div className="setting-line">
+          <span className="setting-line-label">开机自启动</span>
+          <span className="spacer" />
+          <Switch
+            checked={!!settings.autoLaunch}
+            onChange={(v) => update({ autoLaunch: v })}
+            aria-label="开机自启动"
+          />
+        </div>
       </Card>
     </>
   );

@@ -127,6 +127,7 @@ import {
 } from './services/packages';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
+import { applyAutoLaunch } from './services/auto-launch';
 import {
   applyUpdate,
   cancelOnlineDownload,
@@ -1148,9 +1149,20 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.SETTINGS_GET, wrap(() => getSettings()));
 
+  /*
+   * 保存设置。带 `autoLaunch` 的这次要落到系统（注册表启动项），并且**以系统回读为准** ——
+   * 写不进去（组策略锁死等）时把开关弹回实际状态，免得界面显示已开启、开机却没动静。
+   */
   ipcMain.handle(
     IPC.SETTINGS_SET,
-    wrap((_e, patch: Partial<AppSettings>) => saveSettings(patch)),
+    wrap((_e, patch: Partial<AppSettings>) => {
+      const next = saveSettings(patch);
+      if (patch && 'autoLaunch' in patch) {
+        const actual = applyAutoLaunch(next.autoLaunch);
+        if (actual !== next.autoLaunch) return saveSettings({ autoLaunch: actual });
+      }
+      return next;
+    }),
   );
 
   /* ---------------- 自绘标题栏配色（v1.1.3） ---------------- */

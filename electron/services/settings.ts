@@ -27,6 +27,8 @@ const DEFAULTS: AppSettings = {
   recordDir: '',
   pullDir: '',
   logcatExportDir: '',
+  // 开机自启动默认关（不擅自往用户的开机项里加东西）
+  autoLaunch: false,
   // 在线更新：默认不配置更新源 —— 服务器就绪前「检查更新」提示「更新源未配置」是正常状态
   updateBaseUrl: 'https://buddybase-d8g4m4rz6306e4648-1485935404.tcloudbaseapp.com/adb-assistant/',
   updateChannel: 'stable',
@@ -96,6 +98,7 @@ function defaultDirs(): AppSettings {
      * D 盘不存在时由 logcat-export 侧回落，不在这里判断（这里只负责给值）。
      */
     logcatExportDir: 'D:\\adblogs',
+    autoLaunch: false,
     updateBaseUrl: 'https://buddybase-d8g4m4rz6306e4648-1485935404.tcloudbaseapp.com/adb-assistant/',
     updateChannel: 'stable',
     autoCheckUpdate: true,

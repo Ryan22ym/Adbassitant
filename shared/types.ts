@@ -994,6 +994,13 @@ export interface AppSettings {
   logcatExportDir: string;
   /** 默认目标设备序列号 */
   defaultSerial?: string;
+  /**
+   * 开机自启动（v1.1.7）。
+   *
+   * 值由主进程写注册表后**回读校正**（见 services/auto-launch.ts）——
+   * 界面上勾了不代表注册表真写成，所以设置里存的始终是「系统实际状态」。
+   */
+  autoLaunch: boolean;
   /*
    * 在线更新（v1.0.22）。服务器就绪前 updateBaseUrl 一直是空串 ——
    * 此时「检查更新」提示「更新源未配置」是**正常状态**，不是错误。
