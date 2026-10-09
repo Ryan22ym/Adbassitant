@@ -58,6 +58,21 @@
    */
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
+  /*
+   * 收起 / 展开靠改宽度实现（见下面的 .sidebar.collapsed）。
+   * 过渡放在宽度上，内容区（flex:1）会跟着一起被推开，不用另外动 main。
+   */
+  transition: width var(--t-base);
+}
+
+/*
+ * 收起态（v1.1.8）：侧栏变窄，导航只留图标、文字标签全部隐藏。
+ *
+ * 判断依据是 .sidebar 上的 collapsed 类（由 Sidebar 组件按 store.sidebarCollapsed 挂上），
+ * 不是媒体查询 —— 这是用户主动选的形态，跟窗口宽窄无关。
+ */
+.sidebar.collapsed {
+  width: var(--sidebar-w-collapsed);
 }
 
 .sidebar-brand {
@@ -95,6 +110,60 @@
 .brand-text span {
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+/* 收起态：品牌行只剩居中的应用图标 */
+.sidebar.collapsed .sidebar-brand {
+  justify-content: center;
+  gap: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .brand-text {
+  display: none;
+}
+
+/*
+ * 收起 / 展开开关所在的一行。
+ *
+ * 恒占一行、两种状态下高度一致 —— 切换时除了宽度没有任何元素跳动，
+ * 品牌区高度也继续和右侧顶栏对齐（.sidebar-brand 的高度没被改过）。
+ * 按钮放这里而不是品牌行内，是因为 56px 的收起态塞不下「应用图标 + 按钮」两个元素。
+ */
+.sidebar-toggle-row {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 10px 2px;
+}
+
+.sidebar.collapsed .sidebar-toggle-row {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar-toggle {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  flex: none;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.sidebar-toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.sidebar-toggle:hover {
+  background: var(--bg-sidebar-hover);
+  color: var(--text-primary);
 }
 
 .sidebar-nav {
@@ -177,6 +246,51 @@
   margin-left: 2px;
 }
 
+/* ---- 收起态：导航只留图标 ---- */
+
+.sidebar.collapsed .sidebar-nav {
+  padding: 6px 8px;
+}
+
+.sidebar.collapsed .nav-item {
+  position: relative;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+
+/*
+ * 收起后文字标签直接不参与布局（display:none），图标才能落到正中。
+ * 用 opacity 之类的「隐形但仍占位」写法会让图标一直偏左，别改。
+ * 功能名由 NavLink 上的原生 title 提示补回。
+ */
+.sidebar.collapsed .nav-label {
+  display: none;
+}
+
+/*
+ * 设备数徽标：收起后没有文字可依附，改成压在图标右上角的小角标 ——
+ * 直接隐藏会丢掉「当前几台设备」这条一眼可见的信息。
+ */
+.sidebar.collapsed .nav-count {
+  position: absolute;
+  top: -1px;
+  right: 2px;
+  min-width: 15px;
+  padding: 0 4px;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+}
+
+/* 「有新版」小圆点同理，挪到收起态的右上角 */
+.sidebar.collapsed .nav-dot {
+  position: absolute;
+  top: 5px;
+  right: 8px;
+  margin-left: 0;
+}
+
 /*
  * 侧栏底部状态条：底色与侧栏**完全一致**（颜色打通，不做成独立的一档），
  * 只靠一条分割线分出来。
@@ -201,6 +315,29 @@
   right: 16px;
   height: 1px;
   background: var(--border);
+}
+
+.foot-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 收起态：底栏只剩一个居中的在线状态圆点（文字由 title 提示补回） */
+.sidebar.collapsed .sidebar-foot {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .foot-text {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-foot::before {
+  left: 10px;
+  right: 10px;
 }
 
 .status-dot {

@@ -23,6 +23,8 @@ function defaultPackageRoot(): string {
 const DEFAULTS: AppSettings = {
   theme: 'light',
   accent: 'cangqiong',
+  // 左侧功能栏默认展开（新装的用户先看到带文字的完整导航）
+  sidebarCollapsed: false,
   screenshotDir: '',
   recordDir: '',
   pullDir: '',
@@ -88,6 +90,7 @@ function defaultDirs(): AppSettings {
   return {
     theme: 'light',
     accent: 'cangqiong',
+    sidebarCollapsed: false,
     screenshotDir: join(pictures, 'ADB助手'),
     recordDir: join(videos, 'ADB助手'),
     pullDir: join(downloads, 'ADB助手'),

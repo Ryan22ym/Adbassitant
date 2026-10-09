@@ -981,6 +981,14 @@ export interface AppSettings {
   theme: 'light' | 'dark' | 'system';
   /** 主题色（v1.1.2）。决定 --accent 及整套界面底色，见 AccentId */
   accent: AccentId;
+  /**
+   * 左侧功能栏是否收起（v1.1.8）。
+   *
+   * 收起后侧栏变窄、只显示各功能的图标并隐藏文字标签，展开后恢复。
+   * 与主题一样属于「界面偏好」，所以持久化在设置里 —— 下次启动保持用户上次的形态，
+   * 而不是每次都弹回展开。默认 false（展开）。
+   */
+  sidebarCollapsed: boolean;
   /** 截图默认保存目录 */
   screenshotDir: string;
   /** 录屏默认保存目录 */

@@ -161,6 +161,20 @@ export const Icon = {
     </svg>
   ),
   /**
+   * 侧栏收起 / 展开用的方向箭头（v1.1.8）。
+   * 与 up / down 同一套画法，只是换成左右指向 —— 收起时用左箭头、展开时用右箭头。
+   */
+  chevronLeft: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M14.5 5.5l-6.5 6.5 6.5 6.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  chevronRight: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M9.5 5.5l6.5 6.5-6.5 6.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  /**
    * 在下方插入：横线 + 加号。
    *
    * 刻意做成「一条线 + 一个加号」而不是单纯加号 —— 加号太通用（新建、添加都可能是它），

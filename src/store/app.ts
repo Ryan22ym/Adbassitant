@@ -144,6 +144,15 @@ interface AppState {
   accent: AccentId;
   applyAccent: (a: AccentId) => void;
 
+  /*
+   * 左侧功能栏收起状态（v1.1.8）。
+   *
+   * 与 theme / accent 同一个套路：真值持久化在主进程 settings.json 里，
+   * 这里只是界面上的那份缓存（启动读设置时同步，切换时写回）。
+   */
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: (v: boolean) => void;
+
   /* Toast */
   toasts: ToastItem[];
   toast: (tone: ToastItem['tone'], message: string, detail?: string) => void;
@@ -265,6 +274,13 @@ export const useApp = create<AppState>((set, get) => ({
     const a: AccentId = settings.accent || 'cangqiong';
     document.documentElement.setAttribute('data-accent', a);
     if (get().accent !== a) set({ accent: a });
+
+    /*
+     * 左侧功能栏的收起状态同样以主进程那份为准（老 settings.json 没这个字段，
+     * `!!undefined` 会落到展开，正好是想要的默认值）。
+     */
+    const collapsed = !!settings.sidebarCollapsed;
+    if (get().sidebarCollapsed !== collapsed) set({ sidebarCollapsed: collapsed });
   },
 
   /* ---------------- 主题 ---------------- */
@@ -281,6 +297,13 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().accent === accent) return;
     document.documentElement.setAttribute('data-accent', accent);
     set({ accent });
+  },
+
+  /* ---------------- 左侧功能栏收起 ---------------- */
+  sidebarCollapsed: false,
+  setSidebarCollapsed: (sidebarCollapsed) => {
+    if (get().sidebarCollapsed === sidebarCollapsed) return;
+    set({ sidebarCollapsed });
   },
 
   /* ---------------- Toast ---------------- */

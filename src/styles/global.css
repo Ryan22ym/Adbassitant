@@ -84,6 +84,12 @@
 
   /* 尺寸 */
   --sidebar-w: 208px;
+  /*
+   * 侧栏收起后的宽度（v1.1.8）：56px = 图标栏的常见宽度，
+   * 刚好容纳居中的 30px 应用图标 / 17px 导航图标 + 两侧留白。
+   * 收起态只显示图标、隐藏文字标签，切换见 layout.css 的 .sidebar.collapsed。
+   */
+  --sidebar-w-collapsed: 56px;
   --header-h: 56px;
   /*
    * 自绘标题栏高度：必须等于 shared/types.ts 的 TITLEBAR_HEIGHT，否则系统按钮会错位。

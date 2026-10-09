@@ -27,9 +27,27 @@ export function Sidebar() {
   const onlineCount = devices.filter((d) => d.state === 'device').length;
   // 在线更新：静默自检到有新版本就在「设置」上挂个点（不弹窗）
   const updateAvailable = useApp((s) => s.updateAvailable);
+  // 左侧功能栏收起状态（收起后只显示图标，见 layout.css 的 .sidebar.collapsed）
+  const collapsed = useApp((s) => s.sidebarCollapsed);
+  const setSidebarCollapsed = useApp((s) => s.setSidebarCollapsed);
+
+  /*
+   * 收起 / 展开左侧功能栏。
+   *
+   * 先改内存状态让界面立刻响应，再异步写回主进程做持久化 ——
+   * 不 await、也不因写入失败回滚：写不进去（磁盘只读等）最多是下次启动弹回展开，
+   * 不该让按钮点了没反应。
+   */
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    setSidebarCollapsed(next);
+    window.adbApi.setSettings({ sidebarCollapsed: next });
+  };
+
+  const statusText = onlineCount > 0 ? `${onlineCount} 台设备在线` : '未连接设备';
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-brand">
         {/*
           品牌标记直接用应用图标（src/assets/app-icon.png，由 scripts/make-icon.py 生成，
@@ -43,12 +61,30 @@ export function Sidebar() {
         </div>
       </div>
 
+      {/*
+        收起 / 展开开关。
+        单独占一行（而不是塞进品牌行或底栏）是有意的：这一行在两种状态下高度完全一致，
+        切换时除了宽度以外没有任何东西跳动；品牌区高度也才能继续和右侧顶栏对齐。
+      */}
+      <div className="sidebar-toggle-row">
+        <button
+          className="sidebar-toggle"
+          onClick={toggleCollapsed}
+          title={collapsed ? '展开功能栏' : '收起功能栏'}
+          aria-label={collapsed ? '展开功能栏' : '收起功能栏'}
+        >
+          {collapsed ? Icon.chevronRight : Icon.chevronLeft}
+        </button>
+      </div>
+
       <nav className="sidebar-nav">
         {NAV.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             end={item.exact}
+            /* 收起后文字标签不显示，用原生 tooltip 把功能名补回来 */
+            title={collapsed ? item.label : undefined}
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <span className="nav-icon">{item.icon}</span>
@@ -63,9 +99,10 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="sidebar-foot">
+      {/* 收起后只剩一个居中的在线状态圆点（文字由 title 补上） */}
+      <div className="sidebar-foot" title={statusText}>
         <span className={`status-dot ${onlineCount > 0 ? 'online' : ''}`} />
-        <span>{onlineCount > 0 ? `${onlineCount} 台设备在线` : '未连接设备'}</span>
+        <span className="foot-text">{statusText}</span>
       </div>
     </aside>
   );
