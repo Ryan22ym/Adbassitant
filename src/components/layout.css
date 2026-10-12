@@ -75,11 +75,28 @@
   width: var(--sidebar-w-collapsed);
 }
 
+/*
+ * 品牌行：应用图标 + 应用名 + 版本号。
+ *
+ * 🔴 两条对齐规则，都是「像素级」的，别凭手感改（改错了肉眼一眼就看出「没对齐」）：
+ *
+ * 1) 横向 —— logo 的**盒子中心**对齐导航图标列的中线，不是对齐左边缘。
+ *      导航图标列的中线 = .sidebar-nav 10px + .nav-item 10px + 半个图标盒 8.5px = 28.5px
+ *      ⇒ logo 左内边距 = 28.5 − 30/2 = 13.5px
+ *    为什么对中心：logo 是 30px 的方块、导航图标盒只有 17px，尺寸不同 —— 对中心才是
+ *    视觉上的「同一列」；而且**收起态（56px 里 logo 居中 = 13px）与展开态只差 0.5px**，
+ *    展开的一瞬间 logo 不跳。若改成对齐左边缘（20px），展开瞬间 logo 会横跳 7px。
+ *
+ * 2) 纵向 —— 上下不给内边距：高度就是 --header-h，30px 的 logo 正好居中
+ *    ⇒ 中心落在本行中线上，与右侧 .header 的标题中线**同一条水平线**（两者都紧贴标题栏下沿）。
+ *    旧值 `padding: 16px 16px 14px` 上下不对称，内容盒只剩 26px，30px 的 logo 溢出居中后
+ *    整块比行中心低 1px —— 这就是「左上角像是没对齐」的由来之一。
+ */
 .sidebar-brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 16px 14px;
+  padding: 0 16px 0 calc(10px + 10px + 17px / 2 - 30px / 2);
   height: var(--header-h);
 }
 
@@ -94,11 +111,37 @@
   box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
+/*
+ * 品牌文字（应用名 + 版本号）。
+ *
+ * 🔴 这里的两条是「展开/收起不抖」的全部要害（用户反馈：点击展开过程中文字
+ *    「一会双行、一会单行」）：
+ *
+ * 1) `white-space: nowrap` —— 任何宽度下都不许折行。
+ *    侧栏展开是 0.2s 的宽度过渡，中间那几十毫秒里可用宽度不够，
+ *    默认行为会把「ADB 助手」折成「ADB 助 / 手」，宽度长开后再折回一行 ——
+ *    一折一回就是用户看到的跳动。nowrap 之后窄的时候是**裁切**，
+ *    文字的排版宽度恒定，不再重排。
+ *
+ * 2) 收起态**不写 display:none**，改成 max-width:0 + opacity:0（见下面 .collapsed 那条）。
+ *    max-width 让它「宽归零」（logo 才能继续居中），同时 max-width / opacity / transform
+ *    都是可过渡属性 ⇒ 展开收起有淡入淡出 + 横向滑动，而不是硬闪一下。
+ *
+ * 时序是**不对称**的，这是刻意的：
+ *   · 展开（默认这条）：等宽度基本长开（延迟 0.14s）再淡入 —— 淡入时可用宽度已经
+ *     够放下整行文字，看不到「一边展开一边逐字挤出来」的裁切边。
+ *   · 收起（下面 .collapsed 那条）：立刻淡出（0.12s，无延迟）—— 等看不见了宽度才收，
+ *     全程不会出现「文字被挤成两行」。
+ */
 .brand-text {
   display: flex;
   align-items: baseline;
   gap: 6px;
   min-width: 0;
+  max-width: 200px; /* 与收起态的 0 成对，必须都是长度：0→百分比不可过渡 */
+  white-space: nowrap;
+  overflow: hidden;
+  transition: max-width var(--t-base), transform var(--t-base), opacity 0.14s ease 0.14s;
 }
 
 .brand-text strong {
@@ -120,8 +163,22 @@
   padding-right: 0;
 }
 
+/*
+ * 收起态：品牌文字宽归零 + 淡出 + 轻微左移。
+ *
+ * 🔴 必须是 max-width:0 而不是 display:none：
+ *    display 不能过渡（收起时文字会瞬间消失，没有「渐隐 + 滑动」）；
+ *    也不能只写 opacity:0 而不收宽度 —— 那样文字盒仍占 104px，56px 的收起态里
+ *    「logo + 文字盒」超出容器，居中（justify-content:center）会把 logo 顶得偏左，
+ *    和导航图标的中线错开。宽归零之后 logo 才是真正居中（= 导航图标的中线）。
+ */
 .sidebar.collapsed .brand-text {
-  display: none;
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-6px);
+  pointer-events: none;
+  /* 收起方向：先淡出（0.12s），宽度照旧走 0.2s 收掉 */
+  transition: max-width var(--t-base), transform var(--t-base), opacity var(--t-fast);
 }
 
 /*
