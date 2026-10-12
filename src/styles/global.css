@@ -37,6 +37,20 @@
    * 深浅两档方向一致（浅色下比内容区深、深色下比内容区亮），都是「介于两者之间」。
    */
   --bg-titlebar: color-mix(in srgb, var(--bg-sidebar) 45%, var(--bg-app));
+  /*
+   * 标题栏右上角那三个系统按钮的**符号色**（= titleBarOverlay.symbolColor，见 src/App.tsx）。
+   *
+   * 🔴 为什么必须单列一条、不能直接用 --text-primary：
+   *    --text-primary 是给**页面内容**配的（浅色主题下是深字、深色主题下是浅字），
+   *    而标题栏底色与内容区底色**不一定同明暗** ——
+   *    原神主题正是「米白内容区 + 深靛蓝标题栏」，此时 --text-primary(#403d37)
+   *    是给米白底配的深墨字，抄到深靛蓝标题栏上等于隐形（就是这么翻车的）。
+   *    所以符号色单列一条：谁家标题栏偏深，谁就自己往浅里调（如 theme-genshin.css）。
+   *
+   * 默认沿用正文色 —— 其余主题的标题栏都是 color-mix(侧栏 45%, 内容区)，
+   * 与内容区同明暗，直接沿用恰好是对的。
+   */
+  --titlebar-symbol: var(--text-primary);
   --bg-surface: #ffffff;
   --bg-surface-2: #f9fbff;
   --bg-hover: #e9eefb;

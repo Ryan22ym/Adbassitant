@@ -63,6 +63,7 @@
     "check:sidebar": "python scripts/run-electron.py scripts/check-sidebar.cjs --watch ui-shots/_sidebar.log --until \"SIDEBAR CHECK DONE\" --timeout 300",
     "check:genshin": "python scripts/run-electron.py scripts/check-genshin.cjs --watch ui-shots/_genshin.log --until \"GENSHIN CHECK DONE\" --timeout 300",
     "check:titlebar-scrim": "python scripts/run-electron.py scripts/check-titlebar-scrim.cjs --watch ui-shots/_titlebar-scrim.log --until \"TITLEBAR SCRIM CHECK DONE\" --timeout 240",
+    "check:titlebar-symbol": "python scripts/run-electron.py scripts/check-titlebar-symbol.cjs --watch ui-shots/_titlebar-symbol.log --until \"TITLEBAR SYMBOL CHECK DONE\" --timeout 300",
     "check:clicker": "python scripts/run-electron.py scripts/check-clicker.cjs --watch ui-shots/_clicker.log --until \"失败\" --timeout 300",
     "check:install-all": "python scripts/run-electron.py scripts/check-install-all-devices.cjs --watch ui-shots/_installall.log --until \"INSTALL ALL CHECK DONE\" --timeout 900",
     "check:touch-capture": "node scripts/check-touch-capture.cjs",

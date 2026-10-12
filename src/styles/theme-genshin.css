@@ -78,6 +78,17 @@
    */
   --bg-titlebar: #454c5c;
 
+  /*
+   * 🔴 右上角窗口按钮的符号色 = 主题衬色淡金（--g-gold #d3bc8e）。
+   *
+   * 不能沿用 global.css 的默认值（= --text-primary #403d37）：
+   * 那个色是给**米白内容区**配的深墨字，而标题栏是深靛蓝 ——
+   * 深字压深底，三个按钮肉眼基本看不见（用户截图反馈的正是这个）。
+   * 换成淡金后对比度 4.6:1，同时和品牌名的金是同一个色，视觉上也自洽。
+   * 与 --bg-titlebar 的对比度由 scripts/check-titlebar-symbol.cjs 钉住。
+   */
+  --titlebar-symbol: var(--g-gold);
+
   --border: #d9d0bb;
   --border-strong: #c4b798;
 

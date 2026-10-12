@@ -41,6 +41,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const goto = (win, hash) =>
   win.webContents.executeJavaScript(`location.hash = ${JSON.stringify('#' + hash)}`);
 
+/**
+ * 把「注入鼠标」挪到标题栏那条带子上（没有任何内容），让 :hover 状态变成确定的。
+ *
+ * 🔴 为什么必须做：这个脚本用的是 show:true 的真实窗口，而**用户的光标停在哪儿是随机的**。
+ *    卡片头是整块可点区域，鼠标压在上面时 `.card-title` 会变成 --accent
+ *    （ui.css：`.card-head-toggle:hover .card-title`）。曾经因此报「卡片标题 = 白」FAIL ——
+ *    实际读到的是原神下的金色 --accent，去查主题变量查了半天，其实是光标正好停在那行标题上。
+ *    断言要测的是「深色容器里的正文色」，跟光标无关，所以先把它钉住。
+ *    （另有兜底：下面 insertCSS 把这条 hover 规则改成不变量，见 app.whenReady 里。）
+ */
+async function parkMouse(win) {
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: 2, y: 2 });
+  await sleep(40);
+}
+
 /** 点设置页某个字段里的某个分段选项 */
 function clickSeg(win, fieldText, optionText) {
   return win.webContents.executeJavaScript(`
@@ -58,7 +73,8 @@ function clickSeg(win, fieldText, optionText) {
 }
 
 /** 读一次当前外观的关键形态 */
-function readGenshin(win) {
+async function readGenshin(win) {
+  await parkMouse(win);
   return win.webContents.executeJavaScript(`
     (() => {
       const root = document.documentElement;
@@ -251,6 +267,18 @@ app.whenReady().then(async () => {
    */
   await win.webContents.insertCSS(
     '*, *::before, *::after { transition: none !important; animation: none !important; }',
+  );
+  /*
+   * 🔴 兜底：把「卡片头 hover 就变主题色」这条规则钉成不变量。
+   *
+   * 卡片头（.card-head-toggle）是整块可点区域，鼠标压在上面时
+   * `.card-title` 会变成 --accent —— 原神下那正好是淡金，于是
+   * 「卡片标题 = 白 #fdfcf8」这条断言会随**用户光标位置**随机 FATL。
+   * 它测的是「深色容器里的正文色」，与光标无关，所以在断言期间按住它。
+   * 真正的 hover 行为不缺这一条覆盖（那是交互态，不是配色态）。
+   */
+  await win.webContents.insertCSS(
+    '.card-head-toggle:hover .card-title { color: var(--text-primary) !important; }',
   );
   await sleep(1500);
 

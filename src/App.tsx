@@ -261,13 +261,26 @@ export default function App() {
    * 而元素的 backgroundColor 是浏览器算完的色（可能长成 `color(srgb 0.9 …)`），
    * 还要再经 toHexColor 归一成 #rrggbb —— 主进程只认这一种写法。
    * 配色表的唯一来源仍然只有 src/styles/global.css。
+   *
+   * 🔴 符号色单独走 --titlebar-symbol，**不再直接用 --text-primary**：
+   * --text-primary 是给内容区配的，标题栏底色与内容区**不一定同明暗** ——
+   * 原神主题就是「米白内容区 + 深靛蓝标题栏」，拿内容区的深墨字去画窗口按钮
+   * 等于隐形（用户反馈「右上角那几个看不清」就是这个）。
+   * 该变量的默认值仍是 --text-primary，所以浅色/深色/各主题色行为不变。
    */
   useEffect(() => {
     const bar = document.querySelector('.titlebar') as HTMLElement | null;
     const cs = getComputedStyle(document.documentElement);
     const base = toHexColor(bar ? getComputedStyle(bar).backgroundColor : '');
     if (!/^#[0-9a-f]{6}$/.test(base)) return;
-    const symbolBase = toHexColor(cs.getPropertyValue('--text-primary').trim());
+    /*
+     * 两道兜底：新变量可能没定义（老版本 CSS），也可能定义成了不可解析的表达式。
+     * 无论哪种都退回 --text-primary —— 拿不到合法 #rrggbb 就绝不往下传，
+     * 主进程会整条 setTitleBarOverlay 抛错跳过，反而把按钮留在上一个主题的颜色上。
+     */
+    const fallback = cs.getPropertyValue('--text-primary').trim();
+    let symbolBase = toHexColor(cs.getPropertyValue('--titlebar-symbol').trim() || fallback);
+    if (!/^#[0-9a-f]{6}$/.test(symbolBase)) symbolBase = toHexColor(fallback);
 
     /*
      * 有全屏遮罩时，连右上角那块系统按钮区一起压暗。
