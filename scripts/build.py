@@ -69,6 +69,20 @@ def probe(url, timeout=3):
 
 
 def main():
+    # 本脚本要把子进程的输出原样打印出来（npm / electron-builder / prepare-jre …），
+    # 而 Windows 控制台默认是 cp936（GBK）：
+    #   - 子进程按 locale 编码输出（中文是 GBK 字节），这里却按 UTF-8 解 → 得到一堆
+    #     U+FFFD，再 print 回去时 GBK 编不出 U+FFFD → UnicodeEncodeError，整个打包
+    #     在第 119 行崩掉（实测：JRE 已就绪的那次就是这么挂的）；
+    #   - electron-builder 自带一堆 ✓/emoji，同样编不出来。
+    # 所以两头都固定成 UTF-8：自己这边 reconfigure，子进程那边给 PYTHONIOENCODING。
+    # 输出被重定向到日志文件时也照样正确。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:  # noqa: BLE001  （老 Python 没有 reconfigure，不影响打包）
+            pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument('--no-build', action='store_true', help='跳过编译，仅 electron-builder')
     ap.add_argument('--out', help='覆盖输出目录（用于绕开被锁定的旧目录）')
@@ -100,6 +114,9 @@ def main():
               'NPM_CONFIG_ELECTRON_BUILDER_BINARIES_MIRROR',
               'npm_config_electron_builder_binaries_mirror'):
         env[k] = base
+    # 子进程（prepare-jre / make-update / make-manifest）的输出统一按 UTF-8 回来，
+    # 与上面 stdout 的 reconfigure 配对；少一边就会解出 U+FFFD 再崩在 print 上。
+    env['PYTHONIOENCODING'] = 'utf-8'
     if args.out:
         print(f'[out] 输出目录覆盖为 {args.out}')
     npm = 'npm.cmd' if os.name == 'nt' else 'npm'
