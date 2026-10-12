@@ -2,11 +2,14 @@
  * Java 运行时探测。
  *
  * AAB 安装必须借助 Google 官方的 bundletool（一个 jar），而 jar 需要 Java。
- * 本程序自己不捆 JDK（体积与授权都不合适），所以策略是：
- *   1. 先找随包目录 `resources/bin/jre/`（用户手动放进去的便携 JRE，优先；
- *      放进去就能在完全没装 Java 的机器上用）；
- *   2. 再找 JAVA_HOME；
- *   3. 再看 PATH 里的 java；
+ * 为了「装完即可用」，程序**随包一份 Eclipse Temurin JRE**（bin/jre，由
+ * scripts/prepare-jre.py 部署，GPLv2 + Classpath Exception 允许再分发）。
+ * 那一份还自带 keytool，签名指纹（key hash）也一并解决。
+ *
+ * 探测顺序（先随包，再退到用户自己的环境）：
+ *   1. 随包目录 `resources/bin/jre/`（首选 —— 有它就在完全没装 Java 的机器上也能跑）；
+ *   2. JAVA_HOME；
+ *   3. PATH 里的 java；
  *   4. 最后扫几个常见安装位置（Oracle / Adoptium / Zulu / Android Studio 自带 JBR）。
  *
  * 找到之后缓存起来 —— 探测一次要跑好几个进程，不能每次安装都重来。
@@ -40,7 +43,8 @@ export function resetJavaCache(): void {
 function candidates(): { path: string; source: JavaInfo['source'] }[] {
   const out: { path: string; source: JavaInfo['source'] }[] = [];
 
-  /* 1. 随包 JRE：binDir() 是 resources/bin，找 jre/<...>/bin/java 与 jre/bin/java */
+  /* 1. 随包 JRE：binDir() 是 resources/bin，找 jre/<...>/bin/java 与 jre/bin/java。
+   *    正常安装一定有（scripts/prepare-jre.py 部署 + extraResources 打进包）。 */
   const bundled = join(binDir(), 'jre');
   out.push({ path: join(bundled, 'bin', JAVA_BIN), source: 'bundled' });
   if (existsSync(bundled)) {

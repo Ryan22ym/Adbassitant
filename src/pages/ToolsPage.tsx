@@ -1140,7 +1140,10 @@ function ApkPanel() {
 
 /**
  * AAB 安装依赖两样外部工具：Java 11+ 与 bundletool。
- * 都缺的时候直接告诉用户怎么补，而不是等他点了安装之后再报错。
+ *
+ * 这两样现在都随包（bin/jre、bin/bundletool），正常安装完就该看到「已就绪」。
+ * 所以这段提示只在**随包资源缺失或损坏**时出现，措辞要指向「随包的那份出了问题」，
+ * 而不是含糊地让用户自己去装 Java —— 后者会让人以为我们没带。
  */
 function AabEnvNotice() {
   const toast = useApp((s) => s.toast);
@@ -1239,8 +1242,16 @@ function AabEnvNotice() {
         )}
         {!env.javaOk && (
           <div className="text-dim" style={{ marginTop: 8 }}>
-            需要 Java 11 及以上。装好 JDK/JRE 后点「重新检测」；
-            也可以把便携版 JRE 解压到程序的 <span className="mono">bin\jre</span> 目录（免安装 Java）。
+            {env.javaBundled ? (
+              <>
+                随包 Java 运行时（<span className="mono">bin\jre</span>）存在但无法启动，
+                建议重新安装本程序。
+              </>
+            ) : (
+              <>随包 Java 运行时缺失，建议重新安装本程序。</>
+            )}{' '}
+            也可自行安装 Java 11 及以上后点「重新检测」，
+            或把便携版 JRE 解压到 <span className="mono">bin\jre</span>（免安装 Java）。
           </div>
         )}
       </Notice>

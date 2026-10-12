@@ -11,6 +11,16 @@ import {
   log,
 } from './adb';
 import type { MirrorOptions, MirrorStatus } from '../../shared/types';
+import { rememberMirroredSerial } from './auto-connect';
+
+/**
+ * 「这次投屏算成功了」的判定延时。
+ *
+ * scrcpy 起来后一两秒内自己退出是常见失败（设备紧接着拔了、编码器不支持、
+ * 屏幕尺寸被 override 成怪值等），spawn 成功不等于投屏成功。
+ * 熬过这个稳定期的才记进「可自动投屏」白名单（见 services/auto-connect.ts）。
+ */
+const MIRROR_OK_DELAY_MS = 3000;
 
 let current: {
   child: ChildProcess;
@@ -108,8 +118,18 @@ export async function startMirror(options: MirrorOptions): Promise<MirrorStatus>
   };
   current = handle;
 
+  /*
+   * 熬过稳定期就认为「这台设备在本机投屏成功过」，记进自动投屏白名单。
+   * 这是 v1.1.9 那个开关唯一会更新白名单的地方 —— 用户手动投成功过，才允许自动投。
+   */
+  const confirmTimer = setTimeout(() => {
+    if (current !== handle) return;
+    rememberMirroredSerial(serial);
+  }, MIRROR_OK_DELAY_MS);
+
   // 仅当句柄仍是本次启动的实例时才清理，避免误杀后续启动的投屏
   const clearIfCurrent = () => {
+    clearTimeout(confirmTimer);
     if (current === handle) {
       current = null;
       emitStatus();

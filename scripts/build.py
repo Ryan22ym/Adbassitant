@@ -108,6 +108,18 @@ def main():
     log = os.path.join(ROOT, 'e2e-tmp', 'build.log')
     os.makedirs(os.path.dirname(log), exist_ok=True)
 
+    # 随包 JRE：AAB 安装依赖 Java，必须保证它真的落在 bin/jre 里。
+    # 漏了这一步不会报错，只会打出一个「在没装 Java 的机器上装不了 AAB」的包
+    # —— 属于静默失效，所以在这里硬卡一道。
+    print()
+    print('[jre] 准备随包 Java 运行时（bin/jre）…')
+    jr = subprocess.run(
+        [sys.executable, os.path.join(ROOT, 'scripts', 'prepare-jre.py')],
+        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    print(jr.stdout.decode('utf-8', errors='replace'))
+    if jr.returncode != 0:
+        sys.exit('随包 JRE 未就绪，已中止打包（否则会发布一个装不了 AAB 的包）')
+
     eb = [npm, 'exec', '--', 'electron-builder']
     if args.out:
         eb.append(f'--config.directories.output={args.out}')

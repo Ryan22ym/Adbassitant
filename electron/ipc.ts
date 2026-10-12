@@ -197,6 +197,20 @@ function send(channel: string, payload: any) {
   }
 }
 
+/**
+ * 设置落盘后的副作用钩子（v1.1.9）。
+ *
+ * 目前只有一个用途：`autoMirrorOnConnect` 决定托盘图标要不要存在，
+ * 而托盘的创建/销毁在 main.ts（那里才拿得到主窗口）。用注入而不是
+ * `ipc.ts` 直接 import `main.ts` —— 那会形成 main → ipc → main 的循环依赖。
+ */
+type SettingsChangedHook = (next: AppSettings) => void;
+let settingsChangedHook: SettingsChangedHook | null = null;
+
+export function setSettingsChangedHook(fn: SettingsChangedHook) {
+  settingsChangedHook = fn;
+}
+
 export function registerIpc() {
   /* ---------------- 日志推送管道 ---------------- */
 
@@ -1156,10 +1170,20 @@ export function registerIpc() {
   ipcMain.handle(
     IPC.SETTINGS_SET,
     wrap((_e, patch: Partial<AppSettings>) => {
-      const next = saveSettings(patch);
+      let next = saveSettings(patch);
       if (patch && 'autoLaunch' in patch) {
         const actual = applyAutoLaunch(next.autoLaunch);
-        if (actual !== next.autoLaunch) return saveSettings({ autoLaunch: actual });
+        if (actual !== next.autoLaunch) next = saveSettings({ autoLaunch: actual });
+      }
+      /*
+       * ⚠️ 这里刻意**不提前 return**（旧写法是 `return saveSettings(...)`）。
+       * 提前返回会让下面的钩子被跳过 —— 而钩子要处理的是同一个 patch 里的
+       * 其它字段（托盘跟随 autoMirrorOnConnect），跳过就会出现「开关关了托盘还在」。
+       */
+      try {
+        settingsChangedHook?.(next);
+      } catch {
+        /* 钩子只是副作用（同步托盘），它出错不该让「保存设置」这一步报错 */
       }
       return next;
     }),

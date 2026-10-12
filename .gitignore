@@ -19,6 +19,11 @@ android/**/local.properties
 *.apk
 *.aab
 
+# 随包 JRE 的下载缓存（prepare-jre.py）
+# ⚠️ 只忽略缓存 zip，不是 bin/jre/ —— bin/ 整目录本就在上面被忽略，
+#    但 JRE 必须留在 bin/jre/ 里才会被 extraResources 打进安装包。
+.jre-cache/
+
 # 打包产物
 dist-release/
 dist-release-broken-*/

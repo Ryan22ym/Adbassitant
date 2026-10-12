@@ -1,18 +1,12 @@
 import type { MirrorOptions } from '@shared/types';
+import { MIRROR_DEFAULTS } from '@shared/mirror-defaults';
 
-/**
- * 投屏参数默认值 —— 投屏页与「快速投屏」按钮共用同一份，避免两处默认值漂移。
- * 改动这里，两处同时生效。
+/*
+ * 默认值本体已搬到 @shared/mirror-defaults（v1.1.9）：
+ * 主进程的「插入自动投屏」也要用它，放在 src/ 下面主进程读不到。
+ * 这里转出去只为不打断既有引用（MirrorPage / DevicePage 仍从 @/lib/mirror 取）。
  */
-export const MIRROR_DEFAULTS: Omit<MirrorOptions, 'serial'> = {
-  maxSize: 1440,
-  bitRateMbps: 8,
-  maxFps: 60,
-  noAudio: true,
-  stayAwake: true,
-  alwaysOnTop: false,
-  keyboard: 'sdk',
-};
+export { MIRROR_DEFAULTS };
 
 const LS_KEY = 'adb-assistant:last-mirror-options';
 

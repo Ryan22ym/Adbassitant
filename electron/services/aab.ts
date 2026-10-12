@@ -36,8 +36,9 @@
  *
  * 工具链
  * ---------------------------------------------------------------
- * 需要 java 11+ 与 bundletool-all-<ver>.jar。两者本程序都不预装，
- * 由用户点「一键下载」（只下 jar）或自己放到 resources/bin/jre/，
+ * 需要 java 11+ 与 bundletool-all-<ver>.jar。两者本程序都随包
+ * （bin/jre 与 bin/bundletool/），新用户装完即可直接用；
+ * jar 万一缺失还能点「一键下载」补，JRE 缺失则提示重装或自行安装。
  * 缺哪一样都会给出明确的、可照做的提示。
  */
 import { spawn } from 'child_process';
@@ -148,8 +149,9 @@ export async function resolveAabRuntime(force = false): Promise<AabRuntime> {
       jar,
       ready: false,
       reason:
-        'AAB 安装需要 Java 运行时（bundletool 是 Java 程序），本机没找到。' +
-        '可以安装 Java 11 及以上，或把便携版 JRE 放到程序的 bin\\jre 目录。',
+        '随包 Java 运行时缺失（程序目录下的 bin\\jre，安装包可能不完整）。' +
+        '建议重新安装本程序；也可自行安装 Java 11 及以上，' +
+        '或把便携版 JRE 放到 bin\\jre 目录后点「重新检测」。',
     };
     return runtimeCache;
   }

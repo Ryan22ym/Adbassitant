@@ -372,8 +372,12 @@ adb-assistant-v0.9/
 │   ├── lib/                   # ipc 封装、格式化工具
 │   └── styles/global.css      # 设计系统变量（浅/深色）
 │
-├── bin/                       # adb / scrcpy 等二进制（运行时资源）
-└── scripts/prepare-bin.mjs    # 从原项目复制二进制
+├── bin/                       # adb / scrcpy / bundletool / jre 等运行时资源
+│   ├── bundletool/            # bundletool-all-<ver>.jar + 随包 debug.keystore
+│   └── jre/                   # 随包 Java 运行时（scripts/prepare-jre.py 部署）
+└── scripts/
+    ├── prepare-bin.mjs        # 从原项目复制 adb / scrcpy 等二进制
+    └── prepare-jre.py         # 下载并展开随包 JRE（缺则联网，已有则跳过）
 ```
 
 ### 设计要点
@@ -409,8 +413,9 @@ adb-assistant-v0.9/
 # 1. 安装依赖
 npm install
 
-# 2. 从原项目复制 adb / scrcpy 二进制到 bin/
-node scripts/prepare-bin.mjs
+# 2. 准备运行时资源
+node scripts/prepare-bin.mjs      # adb / scrcpy 等二进制（从原项目复制）
+python scripts/prepare-jre.py     # 随包 Java 运行时（AAB 安装用）
 
 # 3. 启动开发环境（Vite + Electron 同时起）
 npm run dev
@@ -418,6 +423,15 @@ npm run dev
 
 > 若 `bin/` 为空，请把 `adb.exe`、`scrcpy.exe`、`scrcpy-server` 及配套 DLL
 > 手动放入 `bin/` 目录，或在 `vendor/` 放一份后重跑复制脚本。
+
+> **随包 JRE（v1.1.10 起）**：AAB 安装依赖 Java（bundletool 是 Java 程序），
+> 而这台机器上不一定装了。`scripts/prepare-jre.py` 会下载一份 Eclipse Temurin JRE 17
+> 解压到 `bin/jre/`（约 42 MB 下载 / 125 MB 展开），`extraResources` 的 `bin/**/*`
+> 会把它一并打进安装包 —— 新用户装完就能装 AAB，不需要自己装 Java。
+> 它**自带 keytool**，所以签名指纹（key hash）也不再依赖用户装 JDK。
+> 已经就绪时脚本秒退；zip 缓存在 `.jre-cache/`（在 `bin/` 之外，不会被打进包）。
+> `scripts/build.py` 在调 electron-builder 之前会强制跑一次这一步 ——
+> 漏了它不会报错，只会打出「装不了 AAB」的静默失效包。
 
 ## 打包
 

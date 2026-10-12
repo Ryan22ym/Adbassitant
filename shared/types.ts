@@ -1047,6 +1047,32 @@ export interface AppSettings {
   packageFilters: PackageFilters;
   /** 手动标签（按文件名），自动识别判错时用户钉死的值 */
   packageOverrides: PackageOverrideMap;
+  /*
+   * 插入即自动投屏（v1.1.9）
+   */
+  /**
+   * USB 设备插入时自动把主窗口唤到前台并开始投屏。
+   *
+   * 触发门槛有三重（全中才动手，见 services/auto-connect.ts）：
+   *   1. USB 连接的真机（排除模拟器与 TCP 设备）
+   *   2. 已授权（state = device）
+   *   3. 该设备**曾在本机手动投屏成功过**（见 mirroredSerials）
+   * 所以它不是「插上就投」，而是「插上你已经信任的那台就投」。
+   *
+   * 默认 **false**：与 autoLaunch 一个调性 —— 不擅自改变用户机器的行为。
+   * 开启后关闭窗口会改成**最小化到托盘**（否则进程退出、没人监听，功能等于没有），
+   * 这一点在设置页的说明里必须写清楚。
+   */
+  autoMirrorOnConnect: boolean;
+  /**
+   * 「曾投屏成功过」的设备序列号白名单（v1.1.9）。
+   *
+   * 由主进程在 scrcpy 稳定运行后自动写入，不是用户手填的。
+   * 用 serial 而不是机型名：USB 设备的 serial 是稳定的（如 `aaab4f58`），
+   * 而无线设备的 serial 是 `ip:port` 会变 —— 所以这个白名单天然只对 USB 有意义，
+   * 正好和「只针对 USB 真机」的边界对上。
+   */
+  mirroredSerials: string[];
 }
 
 /* ------------------------------------------------------------------ */

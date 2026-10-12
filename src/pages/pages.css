@@ -2124,3 +2124,37 @@
   font-size: 13px;
   color: var(--text-primary);
 }
+
+/* 充当卡片标题的单行标签（目前只有「开机自启动」这一张无 title 的卡片）。
+ * 值必须跟 ui.css 的 .card-title 保持一致，否则和上面几张卡片的标题对不齐。
+ * 只放在需要的标签上 —— .setting-line-label 本身不动。 */
+.setting-line-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* 单行设置项下面的一句解释（v1.1.9，插入自动投屏）。
+ * 规则有三重门槛，光靠一个开关名字说不清，必须补一行说明。 */
+.setting-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 说明行里的次要操作（如「清除记录」）。刻意做成无边框文字按钮 ——
+ * 它不该和页面主操作抢注意力。 */
+.setting-link {
+  border: 0;
+  background: none;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.setting-link:hover {
+  color: var(--text-primary);
+}

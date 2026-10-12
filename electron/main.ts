@@ -1,17 +1,28 @@
-import { app, BrowserWindow, nativeTheme, shell, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, nativeTheme, shell, Menu, nativeImage, Tray } from 'electron';
 import type { NativeImage } from 'electron';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { registerIpc } from './ipc';
+import { registerIpc, setSettingsChangedHook } from './ipc';
 import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
+import { startMirror } from './services/mirror';
+import { getSettings } from './services/settings';
+import { pickAutoConnectTarget } from './services/auto-connect';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
 import { refreshShortcutIcons } from './services/shortcuts';
 import { syncAutoLaunch } from './services/auto-launch';
 import { IPC, TITLEBAR_HEIGHT } from '../shared/types';
+import { MIRROR_DEFAULTS } from '../shared/mirror-defaults';
 
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
+
+/** 托盘图标：只在「插入自动投屏」开着的时候存在，见 trayEnabled() */
+let tray: Tray | null = null;
+/** 「已收进托盘」的气泡只提示一次，免得每次关窗都弹 */
+let trayHintShown = false;
+/** 应用是否正在退出 —— 退出流程中不能再把 close 拦成「收进托盘」 */
+let appQuitting = false;
 
 /** 与 electron-builder.json 的 appId 一致；任务栏分组与通知归属都靠它 */
 const APP_USER_MODEL_ID = 'com.xiaoyang.adbassistant';
@@ -48,6 +59,117 @@ if (!gotLock) {
       mainWindow.focus();
     }
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* 插入自动投屏（v1.1.9）：托盘 + 前台唤起                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 托盘只在「插入自动投屏」开启时存在。
+ *
+ * 这样开关没开的用户**完全感知不到程序多了一个托盘图标** —— 关闭窗口照旧退出，
+ * 与以前一模一样。开了开关的用户等于接受了一个交换：程序常驻后台，
+ * 换取「插上手机就自动打开并投屏」。
+ */
+function trayEnabled(): boolean {
+  return !!getSettings().autoMirrorOnConnect;
+}
+
+/**
+ * 把主窗口带到前台。
+ *
+ * ⚠️ Windows 有前台锁（Foreground Lock）：后台进程直接调 SetForegroundWindow
+ * 会被系统**静默拒绝**，现象是「任务栏闪一下、窗口不弹出来」。
+ * Electron 的 show() + focus() 走的正是这条链路，所以**不保证成功**。
+ *
+ * 实测成功率最高的组合是「临时置顶再撤掉」：置顶期间窗口必然可见，
+ * 800ms 后撤掉，用户不会觉得有个窗口莫名其妙压在别人上面。
+ * 若还是没抢到前台也不做更多挣扎 —— 托盘气泡已经给过提示了，够用。
+ */
+function bringToFront() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.setAlwaysOnTop(true);
+  mainWindow.focus();
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(false);
+  }, 800);
+}
+
+function buildTray() {
+  if (tray) return;
+  try {
+    tray = new Tray(appIcon() ?? nativeImage.createEmpty());
+  } catch (e) {
+    log('warn', '系统', `托盘创建失败：${(e as Error).message}`);
+    return;
+  }
+  tray.setToolTip('ADB 桌面助手');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '显示主窗口', click: () => bringToFront() },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          appQuitting = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+  tray.on('click', () => bringToFront());
+  log('info', '系统', '已启用托盘常驻（插入自动投屏开启期间）');
+}
+
+function destroyTray() {
+  if (!tray) return;
+  tray.destroy();
+  tray = null;
+  trayHintShown = false;
+  log('info', '系统', '已退出托盘常驻');
+}
+
+/** 供回归脚本查询托盘是否存在（Tray 没有全局枚举 API，只能自己暴露一个） */
+export function isTrayActive(): boolean {
+  return !!tray;
+}
+
+/**
+ * 设置变化后调用，让托盘状态跟上开关。由 ipc.ts 的 settingsChangedHook 触发。
+ * 导出是为了能被 check-auto-mirror-tray.cjs 直接驱动（不必绕一圈去点界面）。
+ */
+export function syncTray() {
+  if (trayEnabled()) {
+    buildTray();
+    return;
+  }
+  const wasHidden = !!mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible();
+  destroyTray();
+  // 开关关掉的瞬间如果窗口正被藏在托盘里，得把它放出来，否则用户找不到程序了
+  if (wasHidden) mainWindow?.show();
+}
+
+/**
+ * 「插入自动投屏」真正动手的地方：先把助手唤到前台，再起投屏。
+ *
+ * 顺序是先窗口后投屏 —— scrcpy 会自己抢焦点，于是最终停在用户眼前的是投屏窗口，
+ * 这正是他要的；助手窗口在下面等着，切回去就能用。
+ *
+ * ⚠️ 全程静默失败：投屏起不来只记日志，不弹对话框。用户此刻多半不在电脑前，
+ * 弹一个「投屏失败」只会在他回来时添乱（而且失败原因通常就是设备又被拔了）。
+ */
+async function fireAutoConnect(device: { serial: string; model?: string }) {
+  const label = device.model ? `${device.model}（${device.serial}）` : device.serial;
+  log('info', '投屏', `检测到 ${label} 插入，自动打开助手并开始投屏`);
+  bringToFront();
+  try {
+    await startMirror({ serial: device.serial, ...MIRROR_DEFAULTS });
+  } catch (e) {
+    log('warn', '投屏', `自动投屏未启动：${(e as Error).message}`);
+  }
 }
 
 function createWindow() {
@@ -98,6 +220,32 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
+  });
+
+  /*
+   * 「插入自动投屏」开启时，关闭窗口 = 收进托盘，而不是退出。
+   *
+   * 这是该功能能成立的前提：进程一退就没人监听 USB 插入了，
+   * 所谓「插上手机自动打开」根本无从发生。所以这是一次**有代价的行为交换**，
+   * 代价（关窗不退出）在设置页的说明里写明了，用户开了开关就等于接受它。
+   *
+   * 开关关着时这里直接放行 —— 行为与 v1.1.8 完全一致（关窗即退出）。
+   */
+  mainWindow.on('close', (e) => {
+    if (appQuitting || !trayEnabled()) return;
+    e.preventDefault();
+    mainWindow?.hide();
+    if (!trayHintShown && tray) {
+      trayHintShown = true;
+      try {
+        tray.displayBalloon({
+          title: 'ADB 助手仍在后台运行',
+          content: '插入手机将自动打开并投屏。双击托盘图标可重新打开窗口。',
+        });
+      } catch {
+        /* 系统不支持气泡通知时忽略：托盘图标本身还在，用户能自己找到 */
+      }
+    }
   });
 
   mainWindow.on('closed', () => {
@@ -167,7 +315,14 @@ app.whenReady().then(() => {
   }
 
   registerIpc();
+
+  // 设置一变就同步托盘：开关就是「程序要不要常驻」的开关，必须立刻生效
+  setSettingsChangedHook(() => syncTray());
+
   createWindow();
+
+  // 开机时开关可能已经是开的（上次开过），托盘要在窗口出现之前就位
+  syncTray();
 
   // 首屏之后做一次设备扫描，让 UI 快速有数据
   mainWindow?.webContents.once('did-finish-load', () => {
@@ -191,16 +346,33 @@ app.whenReady().then(() => {
     }, 300);
   });
 
-  // 周期扫描设备变化
+  /*
+   * 周期扫描设备变化 —— 同时是「插入自动投屏」的触发源（v1.1.9）。
+   *
+   * 相比 v1.1.8 的两处调整：
+   *   · 不再以「窗口存在」为前提。收进托盘时窗口只是 hide（对象还在），
+   *     这条其实照跑；但去掉这个前置判断，语义上也就不会和托盘状态耦合。
+   *   · 间隔 5s → 2s。插上线最多等 2 秒就弹投屏，体感差别很明显。
+   *     `adb devices -l` 是本地 adb server 调用，开销毫秒级，2 秒一次可以忽略；
+   *     加 in-flight 保护，避免 adb 卡住时请求越堆越多。
+   */
+  let scanning = false;
   setInterval(async () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (scanning) return;
+    scanning = true;
     try {
       const ds = await listDevices(false);
-      mainWindow.webContents.send(IPC.PUSH_DEVICE_CHANGED, ds);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.PUSH_DEVICE_CHANGED, ds);
+      }
+      const target = pickAutoConnectTarget(ds);
+      if (target) await fireAutoConnect(target);
     } catch {
       /* ignore */
+    } finally {
+      scanning = false;
     }
-  }, 5000);
+  }, 2000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -222,6 +394,17 @@ app.on('window-all-closed', () => {
  *
  * 这里阻塞一次退出，等清理完成再真正退出。
  */
+/*
+ * 标记「正在退出」。
+ *
+ * 窗口的 close 拦截（见 createWindow）靠它放行，否则「退出」会被自己拦成「收进托盘」，
+ * 程序永远退不掉。刻意用 before-quit 而不是复用下面 will-quit 的 `quitting` ——
+ * 那个是弱网清理的哨兵，要到更晚才会置位，而 close 在它之前就发生了。
+ */
+app.on('before-quit', () => {
+  appQuitting = true;
+});
+
 let quitting = false;
 app.on('will-quit', (e) => {
   if (quitting || !hasActiveWeakNetSession()) return;

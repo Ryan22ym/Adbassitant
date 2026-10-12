@@ -49,6 +49,11 @@ const DEFAULTS: AppSettings = {
   packageFilters: DEFAULT_PACKAGE_FILTERS,
   // 手动标签：对象默认给空的一份（与上面几个对象字段同理，别共享引用）
   packageOverrides: {},
+  // 插入即自动投屏（v1.1.9）：默认关 —— 和 autoLaunch 一个调性，
+  // 不擅自改变用户机器的行为（开启后关窗会最小化到托盘，属于可见的行为变化）
+  autoMirrorOnConnect: false,
+  // 「曾投屏成功过」的设备白名单，由主进程写入；数组同样别共享引用
+  mirroredSerials: [],
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -121,6 +126,9 @@ function defaultDirs(): AppSettings {
     packageFilters: { ...DEFAULT_PACKAGE_FILTERS },
     // 手动标签默认空表（每次都给一份新对象）
     packageOverrides: {},
+    autoMirrorOnConnect: false,
+    // 白名单默认空数组（每次都给一份新实例）
+    mirroredSerials: [],
   };
 }
 

@@ -62,6 +62,10 @@ const ACCENTS: {
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.10':
+    '内置 Java 运行环境：装好即可直接安装 AAB，不必再自己装 Java；顺带把设置页「开机自启动」标题的字号与其它卡片对齐。',
+  '1.1.9':
+    '新增「插入手机自动投屏」开关：开启后，插上曾在本机投屏成功过的 USB 真机就自动打开助手并开始投屏；开启期间关闭窗口改为最小化到托盘，默认关闭。',
   '1.1.8':
     '左侧功能栏支持收起与展开：收起后只显示各功能图标、鼠标悬停显示名称，展开后恢复，收起状态下次启动仍然保持；修复弹窗变暗时右上角窗口按钮区仍是一块亮色的问题。',
   '1.1.7':
@@ -180,6 +184,9 @@ export default function SettingsPage() {
       </Card>
     );
   }
+
+  /* 老版本 settings.json 里没有这个字段，运行期兜一层，避免白屏 */
+  const mirroredCount = settings.mirroredSerials?.length ?? 0;
 
   return (
     <>
@@ -362,7 +369,10 @@ export default function SettingsPage() {
       */}
       <Card>
         <div className="setting-line">
-          <span className="setting-line-label">开机自启动</span>
+          {/* 这张卡片没有 title，这个标签本身就充当卡片标题 —— 用 setting-line-title
+              对齐 .card-title（14px/600），否则和上面几张卡片的标题对不齐、看着别扭。
+              注意别改 .setting-line-label 本身：「启用」是普通设置项标签，不该跟着变粗。 */}
+          <span className="setting-line-label setting-line-title">开机自启动</span>
           <span className="spacer" />
           <Switch
             checked={!!settings.autoLaunch}
@@ -370,6 +380,41 @@ export default function SettingsPage() {
             aria-label="开机自启动"
           />
         </div>
+      </Card>
+
+      {/*
+        插入自动投屏（v1.1.9）。
+        和上面的「开机自启动」是同一类东西（都在改变程序自身的运行方式），所以紧挨着放，
+        但这一张**需要解释**：三重门槛（USB 真机 / 已授权 / 曾投屏成功过）和一个副作用
+        （关窗改为最小化到托盘）都不是一个开关名字能装下的，所以带标题 + 说明、不做折叠。
+      */}
+      <Card title="插入手机自动投屏" subtitle="插上 USB 就自动打开助手并投屏">
+        <div className="setting-line">
+          <span className="setting-line-label">启用</span>
+          <span className="spacer" />
+          {mirroredCount > 0 && (
+            <button
+              type="button"
+              className="setting-link"
+              title="清空后，各设备都需要再手动投屏成功一次才会被自动投屏"
+              onClick={() => update({ mirroredSerials: [] })}
+            >
+              清除已记录设备（{mirroredCount}）
+            </button>
+          )}
+          <Switch
+            checked={!!settings.autoMirrorOnConnect}
+            onChange={(v) => update({ autoMirrorOnConnect: v })}
+            aria-label="插入手机自动投屏"
+          />
+        </div>
+        <p className="setting-note">
+          只对同时满足三条的设备生效：USB 连接的真机、已授权、且曾在本机手动投屏成功过。
+          {mirroredCount > 0
+            ? `当前已记录 ${mirroredCount} 台。`
+            : '目前还没记录到设备 —— 先手动投屏成功一次，那台设备才会进入自动投屏范围。'}{' '}
+          开启后关闭窗口会改为最小化到托盘（否则程序退出后没人监听插入），双击托盘图标可重新打开。
+        </p>
       </Card>
     </>
   );
