@@ -1,0 +1,362 @@
+/* ==================================================================
+   主题 —— 「原神」（v1.1.11）
+   ==================================================================
+
+   它是**一个主题**，和「浅色」「深色」同一级（<html data-theme="genshin">），
+   不是第 6 个主题色。区别：
+     主题色（data-accent）只换一组颜色，界面骨架 / 质感 / 形状全不变；
+     主题=原神 换的是整套视觉方案 —— 配色 + 描边 + 角饰 + 圆角尺度。
+
+   它**没有深色变体**：选中就锁定下面这一套（米白纸 + 深靛蓝 + 淡金），
+   不参与浅/深切换。所以本文件里**只有一份变量块**，
+   没有任何 [data-theme='dark'] 的覆盖 —— 别照抄别的主题去补深色。
+
+   ------------------------------------------------------------------
+   配色来源：按用户提供的三张原神实机截图逐点取样（Pillow 读像素），
+   不是凭印象调的。关键实测值（取众数 / 区域极值，抗 JPEG 噪声）：
+
+     #ece5db #ede5d8   图3 外框与卡片间隙        → 米白底
+     #50586b           图3 卡片底（占比 77%）     → 深靛蓝（卡片）
+     #4f515d           图3 左侧功能栏            → 深靛蓝（侧栏，略暗略紫）
+     #d3bd8f #d2bc8a   图3 左栏图标              → 淡金（衬色）
+     #ede5d8           图3 卡片图标              → 卡片上的米白
+     #fffdfb           图2 分组标题「控制」       → 深色底上的白字
+     #ccbd9e           图2 条目右侧装饰纹         → 淡金（次级）
+
+   注：#d3bd8f 与米哈游官方 design token `--color-menu: #D3BC8E` 几乎重合，
+   所以这里的金直接取 **#d3bc8e**，保证与游戏本体一致。
+
+   ------------------------------------------------------------------
+   结构：三色分工（用户要求「米白为底、淡黄为衬、字体为白」）
+     · 米白 #ece5da  = 内容区底色（`.header` /.page 一路铺开）
+     · 深靛蓝 #50586b = 承载内容的容器（卡片 / 侧栏 / 标题栏）
+     · 淡金 #d3bc8e  = 衬托色（图标 / 描边 / 角饰 / 选中 / 主按钮）
+     · 白 #fdfcf8    = 深色容器上的正文
+
+   ⚠️ 实现要点：深色容器里的文字**不是**逐个元素去改颜色，
+   而是在容器（.card / .sidebar）上**重新定义一整套变量**，
+   后代靠 CSS 变量继承自动翻白。加新组件时只要它用 var(--text-*)，
+   就自动跟着变 —— 别再往这个文件里堆具体选择器。
+
+   ------------------------------------------------------------------
+   ⚠️ 优先级：本文件必须在 global.css **之后** 加载（见 main.tsx 的 import 顺序）。
+   因为 global.css 里的 [data-accent] 变量块和本文件的变量块是**同级**选择器
+   （都是 :root + 一个属性 = 0,2,0），只能靠源码顺序分胜负：
+     · :root[data-accent='x'] (0,2,0) vs :root[data-theme='genshin'] (0,2,0)
+       → 本文件在后，赢；
+     · 而 [data-theme='dark'] 之类 (0,1,0) 本来就比它低，且选中本主题时
+       data-theme 根本不是 'dark'，不会命中。
+   所以**别把本文件提到 global.css 前面**，否则原神主题会被主题色盖掉。
+
+   与主题色的关系：这里 `--accent` 被直接写死（淡金），
+   界面上的「主题色」入口由 SettingsPage 按 theme 换成一句说明 ——
+   金色是这套视觉的一部分，不是用户偏好，所以不给切。
+
+   ⚠️ 扩展位：以后加「崩铁」（紫调 + 机械几何）照抄本文件即可 ——
+   ① shared/types.ts 的 ThemeId 加一个 id；② 本文件改名换配色，
+   把角饰从「L 形回纹」换成「直角/电路几何」；③ SettingsPage 的 THEME_MODES 加一项。
+   不必动 global.css，也不会影响浅色/深色与其它主题。
+   ================================================================== */
+
+:root[data-theme='genshin'] {
+  /* ---- 米白纸：内容区底色（图3 外框实测 #ece5db / #ede5d8）---- */
+  --bg-app: #ece5da;
+  --bg-surface: #f7f2e6;
+  --bg-surface-2: #f2ecdf;
+  --bg-hover: #e3dac9;
+  --bg-active: #d9ceb9;
+  --bg-inset: #e6dece;
+
+  /* ---- 深靛蓝：侧栏与标题栏（图3 左栏实测 #4f515d）---- */
+  --bg-sidebar: #4f515d;
+  --bg-sidebar-hover: #5a5d6b;
+  --bg-sidebar-active: #62657a;
+  /*
+   * 标题栏不跟着 global.css 的 color-mix 走：那会混出一个灰米调，
+   * 和侧栏拼在一起像「掉色」。这里直接给比侧栏再深一档的靛蓝，
+   * 顶部压暗、边界用金线，才是图3 那种「深色外框包着米白纸」的关系。
+   */
+  --bg-titlebar: #454c5c;
+
+  --border: #d9d0bb;
+  --border-strong: #c4b798;
+
+  /* ---- 米白底上的文字：深靛蓝灰（与卡片同色族，整体才不散）---- */
+  --text-primary: #403d37;
+  --text-secondary: #6b6558;
+  --text-tertiary: #948c78;
+  --text-inverse: #fdfcf8;
+
+  /* 固定主题色：淡金。「不给切」是靠写死实现的，不是靠设置页藏入口 */
+  --accent: #a8853c;
+  --accent-hover: #8d6d2c;
+  --accent-soft: #efe5cd;
+  --accent-border: #d5c39a;
+
+  --success: #4f7a3a;
+  --success-soft: #eef4e4;
+  --warn: #b07a1e;
+  --warn-soft: #faf0dc;
+  --danger: #b0473c;
+  --danger-soft: #f8e8e5;
+
+  --code-bg: #3e4557;
+  --code-text: #ded7c5;
+
+  /*
+   * 主题局部变量（--g- = genshin）。
+   * 刻意不叫 --theme-*：它们是**本主题内部**的装饰用色，不参与全局设计系统，
+   * 别的主题可以完全无视这几个名字。
+   */
+  --g-paper: #ece5da;   /* 米白纸 */
+  --g-paper-2: #f7f2e6;
+  --g-ink: #50586b;     /* 深靛蓝（承载内容的容器） */
+  --g-ink-deep: #4f515d;
+  --g-ink-2: #576073;
+  --g-ink-3: #454c5c;
+  --g-gold: #d3bc8e;    /* 淡金（衬色）—— 与米哈游 --color-menu 一致 */
+  --g-gold-bright: #e4d2a6;
+  --g-gold-deep: #a8853c;
+  --g-on-ink: #fdfcf8;  /* 深色容器上的正文（白） */
+
+  --g-ornament: rgba(211, 188, 142, 0.62);
+  --g-gold-dim: rgba(211, 188, 142, 0.3);
+  --g-gold-soft: rgba(211, 188, 142, 0.1);
+
+  /*
+   * 圆角整体收小：原神的面板是「小圆角 + 硬边」，不是大圆角卡片。
+   * 图3 卡片的圆角在 1023px 宽的截图上只有 3~4px。
+   */
+  --r-sm: 2px;
+  --r-md: 4px;
+  --r-lg: 6px;
+}
+
+/* ==================================================================
+   深色容器 A：侧栏
+   —— 在容器上重定义一整套变量，后代自动翻成浅色（见文件头说明）
+   ================================================================== */
+:root[data-theme='genshin'] .sidebar {
+  --bg-sidebar-hover: #5a5d6b;
+  --bg-sidebar-active: #62657a;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(211, 188, 142, 0.14);
+  --border: rgba(211, 188, 142, 0.16);
+
+  --text-primary: #f2ede0;
+  --text-secondary: #b9b3a3;
+  --text-tertiary: #9e9888;
+
+  --accent: var(--g-gold);
+  --accent-hover: var(--g-gold-bright);
+  --accent-soft: rgba(211, 188, 142, 0.16);
+  --accent-border: rgba(211, 188, 142, 0.34);
+
+  /* 侧栏上的状态点（如「N 台设备在线」）压深靛蓝，语义色要提亮 */
+  --success: #8fc97a;
+  --warn: #e6b96f;
+  --danger: #e08a7e;
+
+  /*
+   * 🔴 必须显式写 color，不能只靠上面重定义变量。
+   * 颜色是**继承已计算值**的属性：祖先（body）的 color 已经算成根级的
+   * --text-primary（米白底用的深灰），子孙继承到的是那个**具体颜色**，
+   * 不会拿本容器里重定义过的 --text-primary 再算一次 —— 只有**自己声明了
+   * color: var(--text-primary)** 的元素（如 .nav-item）才会跟着翻白。
+   * 漏掉这一条时，凡是没自己声明颜色的文字（典型就是品牌名）在深色侧栏上
+   * 仍是近黑色，看着像「主题没适配到」，实际是继承链没参与重算。
+   */
+  color: var(--text-primary);
+}
+
+/* ==================================================================
+   深色容器 B：卡片 / 面板
+   ================================================================== */
+:root[data-theme='genshin'] .card {
+  --bg-surface: var(--g-ink);
+  --bg-surface-2: var(--g-ink-2);
+  --bg-hover: #5b6579;
+  --bg-active: #636d82;
+  --bg-inset: var(--g-ink-3);
+
+  --border: var(--g-gold-dim);
+  --border-strong: rgba(211, 188, 142, 0.42);
+
+  --text-primary: var(--g-on-ink);
+  --text-secondary: #d8d2c2;
+  /*
+   * tertiary 在项目里兼职两件事：说明文字 + ::placeholder（ui.css 写的就是
+   * var(--text-tertiary)）。深卡上 #a49c88 对输入框底（--bg-inset #454c5c）
+   * 只有 ~3.6:1，占位符几乎看不见 —— 所以这里必须比浅色主题下再提亮一档。
+   */
+  --text-tertiary: #b3ab9b;
+  --text-inverse: var(--g-ink-3);
+
+  --accent: var(--g-gold);
+  --accent-hover: var(--g-gold-bright);
+  --accent-soft: rgba(211, 188, 142, 0.16);
+  --accent-border: rgba(211, 188, 142, 0.34);
+
+  /*
+   * 语义色也得跟着换。
+   * --success-soft / --warn-soft 这类「浅底」在米白上没问题，搬到深卡上
+   * 就成了一块刺眼的浅绿/浅黄（浅底 + 深字），所以这里换成
+   * 「半透明语义色底 + 提亮的语义色文字」——既显眼又不炸。
+   * 别省这一步：badge / notice 到处都是，漏掉就是深底上糊一块白斑。
+   */
+  --success: #8fc97a;
+  --success-soft: rgba(143, 201, 122, 0.16);
+  --warn: #e6b96f;
+  --warn-soft: rgba(230, 185, 111, 0.16);
+  --danger: #e08a7e;
+  --danger-soft: rgba(224, 138, 126, 0.16);
+
+  /*
+   * 卡片本体：细金线包边 + 四角角饰。
+   *
+   * 角饰用 8 段 linear-gradient 背景拼出来（每角「一横一竖」两条 14px 短线），
+   * 而不是伪元素画框 —— 卡片尺寸是弹性的，用伪元素得给每个角单独定位，
+   * 背景图则天然贴着 border-box 的四个角走。
+   * 这一条是整套主题的辨识度核心：**去掉它，就只剩「又一个金色主题」**。
+   */
+  background-color: var(--g-ink);
+  background-image:
+    linear-gradient(var(--g-ornament), var(--g-ornament)),
+    linear-gradient(var(--g-ornament), var(--g-ornament)),
+    linear-gradient(var(--g-ornament), var(--g-ornament)),
+    linear-gradient(var(--g-ornament), var(--g-ornament)),
+    linear-gradient(var(--g-ornament), var(--g-ornament)),
+    linear-gradient(var(--g-ornament), var(--g-ornament)),
+    linear-gradient(var(--g-ornament), var(--g-ornament)),
+    linear-gradient(var(--g-ornament), var(--g-ornament));
+  background-repeat: no-repeat;
+  background-size:
+    14px 1.5px,
+    1.5px 14px,
+    14px 1.5px,
+    1.5px 14px,
+    14px 1.5px,
+    1.5px 14px,
+    14px 1.5px,
+    1.5px 14px;
+  background-position:
+    5px 5px,
+    5px 5px,
+    calc(100% - 5px) 5px,
+    calc(100% - 5px) 5px,
+    calc(100% - 5px) calc(100% - 5px),
+    calc(100% - 5px) calc(100% - 5px),
+    5px calc(100% - 5px),
+    5px calc(100% - 5px);
+  background-origin: border-box;
+  border-color: var(--g-gold-dim);
+  /* 原神的面板靠描边分层，不靠投影 */
+  box-shadow: none;
+  color: var(--g-on-ink);
+}
+
+/* ==================================================================
+   质感层
+   ================================================================== */
+
+/*
+ * 品牌行：名字点金。
+ * 它是侧栏里唯一没有自己声明颜色的文字（见上面 .sidebar 的注释），
+ * 现在虽然靠容器的 color 兜住了，但视觉上它该是「金色的应用名」——
+ * 和侧栏图标、选中态同一个金。版本号保持 tertiary，
+ * 姓名/版本之间仍有层级，不至于两行都抢眼。
+ */
+:root[data-theme='genshin'] .brand-text strong {
+  color: var(--g-gold);
+}
+
+/* 卡片标题：左侧一枚金色菱形 —— 比色块克制，又有装饰性 */
+:root[data-theme='genshin'] .card-title {
+  position: relative;
+  padding-left: 13px;
+  letter-spacing: 0.02em;
+}
+
+:root[data-theme='genshin'] .card-title::before {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  background: var(--g-gold);
+  transform: rotate(45deg);
+}
+
+/* 顶栏标题用淡金，标题栏与内容区之间也换成金线 */
+:root[data-theme='genshin'] .header-title {
+  color: var(--accent);
+}
+
+:root[data-theme='genshin'] .header {
+  border-bottom-color: var(--g-ornament);
+}
+
+:root[data-theme='genshin'] .titlebar {
+  border-bottom-color: var(--g-ornament);
+}
+
+/* 侧栏与内容区之间同样换成金线 */
+:root[data-theme='genshin'] .sidebar {
+  border-right: 1px solid var(--g-gold-dim);
+}
+
+/*
+ * 侧栏选中项：淡金文字 + 左侧一道金条。
+ * 用 inset box-shadow 而不是 border-left，避免选中时整条导航横向抖一下。
+ */
+:root[data-theme='genshin'] .nav-item.active {
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--g-gold);
+}
+
+/* 侧栏图标：默认压在暗靛蓝上要够亮，选中时点金（图3 左栏图标就是淡金） */
+:root[data-theme='genshin'] .nav-icon {
+  color: var(--g-gold);
+  opacity: 0.78;
+}
+
+:root[data-theme='genshin'] .nav-item:hover .nav-icon,
+:root[data-theme='genshin'] .nav-item.active .nav-icon {
+  opacity: 1;
+}
+
+/* 设备数徽标：淡金底 + 深靛蓝字（默认的 #fff 落在金底上对比不够） */
+:root[data-theme='genshin'] .nav-count {
+  background: var(--g-gold);
+  color: var(--g-ink-3);
+}
+
+/*
+ * 主按钮：淡金底 + 深靛蓝字。
+ * 这里必须用 --text-inverse 而不是写死颜色 —— 它在卡片内被重定义成深靛蓝、
+ * 在米白底上是白，这样同一个按钮规则能同时适配两种上下文。
+ */
+:root[data-theme='genshin'] .btn-primary {
+  color: var(--text-inverse);
+  box-shadow: inset 0 0 0 1px rgba(69, 76, 92, 0.18);
+}
+
+/*
+ * 分段控件：选中项做成「淡金底 + 深字」，是整套主题里最直白的一处衬色用法
+ * （对应图2 里那些被选中的高亮点位）。
+ *
+ * ⚠️ **不能**用 --accent-soft 当选中底色 —— 分段控件自己的容器底是 --bg-inset，
+ * 两者明度接近，选中项等于没选中（实测放大截图才看得出来）。
+ * 直接用饱和的 --accent 实心填充，对比最强。
+ */
+:root[data-theme='genshin'] .segmented {
+  border-color: var(--g-gold-dim);
+}
+
+:root[data-theme='genshin'] .segmented-item.active {
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: none;
+}

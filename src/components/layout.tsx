@@ -4,6 +4,11 @@ import { useApp } from '@/store/app';
 import { Badge } from './ui';
 import { Icon } from './icons';
 import brandIcon from '@/assets/app-icon.png';
+/*
+ * 「原神」主题专用的品牌标记（同形换色，见 scripts/make-logo-genshin.py）。
+ * 只在应用界面里按主题切换，exe / 任务栏 / 快捷方式仍用 app-icon.png。
+ */
+import brandIconGenshin from '@/assets/logo-genshin.png';
 import './layout.css';
 
 /* ------------------------------------------------------------------ */
@@ -30,6 +35,9 @@ export function Sidebar() {
   // 左侧功能栏收起状态（收起后只显示图标，见 layout.css 的 .sidebar.collapsed）
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useApp((s) => s.setSidebarCollapsed);
+  // 当前主题：原神主题要用配套的那枚 logo（冷色图标压在暖调侧栏上很突兀）
+  const theme = useApp((s) => s.theme);
+  const brandMark = theme === 'genshin' ? brandIconGenshin : brandIcon;
 
   /*
    * 收起 / 展开左侧功能栏。
@@ -50,11 +58,13 @@ export function Sidebar() {
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-brand">
         {/*
-          品牌标记直接用应用图标（src/assets/app-icon.png，由 scripts/make-icon.py 生成，
+          品牌标记：默认用应用图标（src/assets/app-icon.png，由 scripts/make-icon.py 生成，
           与 exe / 任务栏 / 快捷方式用的那份同源）—— 以前这里是个写死的字母 A，
           换图标时永远漏掉它。
+          「原神」主题下换成配套的同形换色版（brandMark，见上面 theme 那段）：
+          图标本身是冷色的，压在暖调侧栏上会突兀，但**形状一个字都不改**。
         */}
-        <img className="brand-mark" src={brandIcon} alt="ADB 助手" draggable={false} />
+        <img className="brand-mark" src={brandMark} alt="ADB 助手" draggable={false} />
         <div className="brand-text">
           <strong>ADB 助手</strong>
           <span>v{__APP_VERSION__}</span>

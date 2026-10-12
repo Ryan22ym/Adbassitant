@@ -74,14 +74,28 @@ ELECTRON = os.path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe'
 
 BAD = re.compile(r'\b(FAIL|FATAL|ERROR|ERRORS)\b')
 
+# 🔴 本机控制台（PowerShell / cmd，代码页 936）打印不了 emoji 和部分中文，
+#    print() 会抛 UnicodeEncodeError —— 表现是「断言全 PASS、退出码却是 1」，
+#    而且异常信息还被埋在输出里，非常容易误判成功能失败。这里强制 UTF-8 兜底。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 
 def _snapshot(paths):
+    """文件指纹 = (体积, mtime)。
+
+    ⚠️ 只记体积会漏掉「被重写成同样长度」——见 _collect 的注释。
+    """
     st = {}
     for p in paths:
         try:
-            st[p] = os.path.getsize(p)
+            s = os.stat(p)
+            st[p] = (s.st_size, s.st_mtime)
         except OSError:
-            st[p] = -1
+            st[p] = None
     return st
 
 
@@ -101,12 +115,16 @@ def _collect(paths, before):
             size = os.path.getsize(p)
         except OSError:
             continue
-        start = before.get(p, -1)
-        # start<0：启动前不存在；size<start：期间被脚本清空重建（很多脚本开头会
-        # `fs.writeFileSync(LOG,'')`）——两种都从 0 读，否则会读到 EOF 之后什么都拿不到。
-        if start < 0 or size < start:
+        b = before.get(p)
+        start = b[0] if b else -1
+        # start<0：启动前不存在；size<=start：期间被清空重建（很多脚本开头会
+        # `fs.writeFileSync(LOG,'')`）。
+        # 🔴 判据必须是 `<=` 而不是 `<`：两次运行的日志**长度完全相同**时，
+        #    用 `<` 会被判成「日志没有新内容」，于是一个 35/35 全 PASS 的运行
+        #    返回 1（实测踩过，白查了半天）。
+        if start < 0 or size <= start:
             start = 0
-        if size <= start:
+        if size <= 0:
             continue
         with open(p, 'r', encoding='utf-8', errors='replace') as fh:
             fh.seek(start)
@@ -193,9 +211,10 @@ def main() -> int:
                 return 124
             if not fired and watches:
                 now = _snapshot(watches)
-                # 注意用 `!=` 而不是 `>`：脚本常在一开始清空自己的日志，
-                # 此时体积会**变小**，用 `>` 判断会永远等不到"变化"（白等到超时强杀）。
-                if any(now[p] != before.get(p, -1) for p in watches):
+                # 指纹是 (体积, mtime) 整体比较 —— 脚本常在一开始清空自己的日志，
+                # 此时体积会**变小**，用 `>` 判断会永远等不到"变化"（白等到超时强杀）；
+                # 而「重写成同样长度」又会让纯体积比较失效，所以必须带上 mtime。
+                if any(now.get(p) != before.get(p) for p in watches):
                     if not until_res or _matches(watches, before, until_res):
                         fired = True
                         fire_at = time.time()

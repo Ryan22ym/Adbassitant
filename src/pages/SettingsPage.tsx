@@ -53,6 +53,24 @@ const ACCENTS: {
 ];
 
 /**
+ * 主题模式清单（v1.1.11 起三选一，同一级）。
+ *
+ * 「原神」和浅色/深色是**平级**的第三个选项，不是主题色、也不是浅/深的下级：
+ * 它是一整套自成一体、且**没有深色变体**的视觉方案
+ * （配色 + 描边 + 角饰 + 圆角尺度，见 shared/types.ts 的 ThemeId）。
+ *
+ * ⚠️ 主题自带固定配色（原神就是暖金），所以它生效时主题色那一行换成一句说明 ——
+ *    不给入口，但要让用户知道为什么没有，否则会以为是坏了。
+ *
+ * ⚠️ 扩展位：加「崩铁」这类主题时，这里加一项 + 建一个 theme-<id>.css 即可。
+ */
+const THEME_MODES: { value: 'light' | 'dark' | 'genshin'; label: string }[] = [
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+  { value: 'genshin', label: '原神' },
+];
+
+/**
  * 每个版本的一句话更新说明，key 为 package.json 的完整版本号。
  *
  * 写法约定（2026-09-30 定）：**一句话说清改了什么**就行 ——
@@ -62,6 +80,8 @@ const ACCENTS: {
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.11':
+    '新增「原神」主题：米白底、深靛蓝卡片、淡金衬色的整体外观，主题配色固定不提供切换；该主题下左侧功能栏换成配套的金色标志与金色应用名。',
   '1.1.10':
     '内置 Java 运行环境：装好即可直接安装 AAB，不必再自己装 Java；顺带把设置页「开机自启动」标题的字号与其它卡片对齐。',
   '1.1.9':
@@ -161,7 +181,7 @@ export default function SettingsPage() {
     }
   };
 
-  const changeTheme = (t: 'light' | 'dark') => {
+  const changeTheme = (t: 'light' | 'dark' | 'genshin') => {
     applyTheme(t);
     update({ theme: t });
   };
@@ -200,45 +220,55 @@ export default function SettingsPage() {
         <Field label="主题模式">
           <Segmented
             value={theme}
-            onChange={(v) => changeTheme(v as 'light' | 'dark')}
-            options={[
-              { value: 'light', label: '浅色' },
-              { value: 'dark', label: '深色' },
-            ]}
+            onChange={(v) => changeTheme(v as 'light' | 'dark' | 'genshin')}
+            options={THEME_MODES}
           />
         </Field>
 
         {/*
-          主题色：色块就是该主题的主色（--accent）一个圆点。
-          故意不用 <Field>（它渲染的是 <label>）—— 里面放 <button> 会让点击被 label
-          再触发一次，所以这里手写同样的 .field / .field-label 结构。
+          主题色那一行按主题分两种形态：
+          · 浅色 / 深色 → 原来的 5 色圆点，随便切；
+          · 原神 → 配色是它世界观的一部分（暖金），**不提供切换入口**，
+            换成一句说明。整行直接消失会让人以为界面坏了，所以留个交代。
         */}
-        <div className="field accent-field">
-          <span className="field-label">主题色</span>
-          <div className="accent-picker">
-            {ACCENTS.map((a) => {
-              const color = theme === 'dark' ? a.dark : a.light;
-              const active = accent === a.id;
-              return (
-                <button
-                  key={a.id}
-                  type="button"
-                  className={`accent-chip${active ? ' active' : ''}`}
-                  data-accent-id={a.id}
-                  aria-pressed={active}
-                  title={a.name}
-                  onClick={() => changeAccent(a.id)}
-                >
-                  <span
-                    className="accent-swatch"
-                    style={{ '--swatch': color } as CSSProperties}
-                  />
-                  <span className="accent-name">{a.name}</span>
-                </button>
-              );
-            })}
+        {theme === 'genshin' ? (
+          <div className="field accent-field">
+            <span className="field-label">主题色</span>
+            <div className="text-dim">原神主题使用固定配色（米白 / 淡金），不提供主题色切换</div>
           </div>
-        </div>
+        ) : (
+          /*
+            主题色：色块就是该主题的主色（--accent）一个圆点。
+            故意不用 <Field>（它渲染的是 <label>）—— 里面放 <button> 会让点击被 label
+            再触发一次，所以这里手写同样的 .field / .field-label 结构。
+          */
+          <div className="field accent-field">
+            <span className="field-label">主题色</span>
+            <div className="accent-picker">
+              {ACCENTS.map((a) => {
+                const color = theme === 'dark' ? a.dark : a.light;
+                const active = accent === a.id;
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className={`accent-chip${active ? ' active' : ''}`}
+                    data-accent-id={a.id}
+                    aria-pressed={active}
+                    title={a.name}
+                    onClick={() => changeAccent(a.id)}
+                  >
+                    <span
+                      className="accent-swatch"
+                      style={{ '--swatch': color } as CSSProperties}
+                    />
+                    <span className="accent-name">{a.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card

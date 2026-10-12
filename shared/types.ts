@@ -977,8 +977,34 @@ export interface PackageOrganizeResult {
  */
 export type AccentId = 'cangqiong' | 'cloud' | 'mist' | 'ocean' | 'ink';
 
+/**
+ * 主题（v1.1.11 起是**三选一**，同一级；界面见 SettingsPage 的「主题模式」）。
+ *
+ *   'light'   浅色
+ *   'dark'    深色
+ *   'genshin' 原神 —— 一套**自成一体**的视觉方案：自带配色（暖金写死，不给切）、
+ *             描边、角饰、圆角尺度。它**没有深色变体**：选中即锁定这一套外观，
+ *             不参与浅/深切换（所以它和 light/dark 是并列关系，不是 light/dark 的下级）。
+ *
+ * 和「主题色」是两条**互相独立**的轴，别混：
+ *   accent（主题色）只换一组颜色，界面骨架、质感、形状全不变；
+ *   theme='genshin' 换的是整套视觉方案，并锁死 accent（金色是它世界观的一部分）。
+ *
+ * 实现方式：`<html data-theme="...">`，皮肤样式在 src/styles/theme-<id>.css 里，
+ * 由 main.tsx 在 global.css **之后**引入 —— 靠加载顺序压过 [data-accent] 的变量块
+ * （优先级算法见 theme-genshin.css 文件头）。
+ *
+ * 'system' 是早期遗留值（跟随系统），老 settings.json 里可能还有；
+ * 读到时按浅色处理（见 store/app.ts 的 setSettings）。
+ *
+ * ⚠️ 扩展位：以后要加「崩铁」（紫调 + 机械几何）这类主题，按同样的三步走 ——
+ *   ① 这里加一个 id；② 抄一份 theme-genshin.css 改名、换配色与装饰件；
+ *   ③ SettingsPage 的 THEME_MODES 数组加一项。不必动 global.css，也不会影响现有主题。
+ */
+export type ThemeId = 'light' | 'dark' | 'system' | 'genshin';
+
 export interface AppSettings {
-  theme: 'light' | 'dark' | 'system';
+  theme: ThemeId;
   /** 主题色（v1.1.2）。决定 --accent 及整套界面底色，见 AccentId */
   accent: AccentId;
   /**

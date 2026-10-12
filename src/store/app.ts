@@ -136,9 +136,16 @@ interface AppState {
   settings: AppSettings | null;
   setSettings: (s: AppSettings) => void;
 
-  /* 主题 */
-  theme: 'light' | 'dark';
-  applyTheme: (t: 'light' | 'dark') => void;
+  /*
+   * 主题（v1.1.11 起是三选一，同一级，见 shared/types.ts 的 ThemeId）。
+   *
+   * 'genshin' 不是「第 3 个主题色」，而是和浅色/深色平级的**另一套主题**：
+   * 它自带配色 + 描边 + 角饰 + 圆角尺度，并且**没有深色变体** ——
+   * 选中它就锁定这一套外观，不参与浅/深切换。
+   * 'system' 是早期遗留值，在 setSettings 里就已经解析成 light/dark，这里不出现。
+   */
+  theme: 'light' | 'dark' | 'genshin';
+  applyTheme: (t: 'light' | 'dark' | 'genshin') => void;
 
   /* 主题色（决定 --accent 与整套界面底色，见 shared/types.ts 的 AccentId） */
   accent: AccentId;
@@ -261,7 +268,9 @@ export const useApp = create<AppState>((set, get) => ({
   setSettings: (settings) => {
     set({ settings });
     // 同步主题到 DOM（不写回 settings，避免循环）
-    const t = settings.theme === 'dark' ? 'dark' : 'light';
+    // 'system'（只有老配置文件里才可能有）与任何未知值都按浅色处理
+    const t: 'light' | 'dark' | 'genshin' =
+      settings.theme === 'dark' ? 'dark' : settings.theme === 'genshin' ? 'genshin' : 'light';
     if (get().theme !== t) {
       document.documentElement.setAttribute('data-theme', t);
       set({ theme: t });
