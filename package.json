@@ -63,6 +63,7 @@
     "check:packages-ui": "python scripts/run-electron.py scripts/check-packages-ui.cjs --watch ui-shots/_packages-ui.log --until \"PACKAGES UI CHECK DONE\" --timeout 600",
     "check:sidebar": "python scripts/run-electron.py scripts/check-sidebar.cjs --watch ui-shots/_sidebar.log --until \"SIDEBAR CHECK DONE\" --timeout 300",
     "check:ui-conf": "python scripts/run-electron.py scripts/check-ui-conf.cjs --watch ui-shots/_ui-conf.log --until \"UI CONF CHECK DONE\" --timeout 300",
+    "check:ui-conf:installed": "python scripts/run-electron.py scripts/check-ui-conf.cjs --watch ui-shots/_ui-conf-installed.log --until \"UI CONF CHECK DONE\" --timeout 600 -- --installed",
     "check:genshin": "python scripts/run-electron.py scripts/check-genshin.cjs --watch ui-shots/_genshin.log --until \"GENSHIN CHECK DONE\" --timeout 300",
     "check:titlebar-scrim": "python scripts/run-electron.py scripts/check-titlebar-scrim.cjs --watch ui-shots/_titlebar-scrim.log --until \"TITLEBAR SCRIM CHECK DONE\" --timeout 240",
     "check:titlebar-symbol": "python scripts/run-electron.py scripts/check-titlebar-symbol.cjs --watch ui-shots/_titlebar-symbol.log --until \"TITLEBAR SYMBOL CHECK DONE\" --timeout 300",

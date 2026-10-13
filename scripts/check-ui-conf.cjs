@@ -27,7 +27,15 @@ const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'ui-shots');
-const LOG = path.join(OUT, '_ui-conf.log');
+/**
+ * 日志文件。**两种后端各写一个** —— package.json 里的 `check:ui-conf` 与
+ * `check:ui-conf:installed` 分别 watch 其中一个；写错了会表现为
+ * 「子进程退出码 0，但 run-electron 说日志没内容」的假失败。
+ */
+const LOG = path.join(
+  OUT,
+  process.argv.includes('--installed') ? '_ui-conf-installed.log' : '_ui-conf.log',
+);
 /** 开发期生效的配置目录就是仓库根的 Conf/（见 services/ui-conf.ts 的 activeConfDir） */
 const CONF = path.join(ROOT, 'Conf');
 const FILES = ['layout.json', 'panels.json', 'features.json'];
@@ -102,9 +110,13 @@ async function waitFor(win, expr, timeout = 5000) {
 const READ_NAV = `[...document.querySelectorAll('.nav-item .nav-label')].map(e => e.textContent.trim())`;
 const READ_TABS = `[...document.querySelectorAll('.tabs .tab')].map(e => e.textContent.trim())`;
 
+/*
+ * 下面三段表达式**两套后端共用**：开发态走 webContents.executeJavaScript，
+ * 安装版走 CDP 的 Runtime.evaluate。用例代码只有一份，避免两边断言漂移。
+ */
+
 /** 按标题前缀找一块 Card，读它的折叠形态 */
-function readCard(win, title) {
-  return win.webContents.executeJavaScript(`
+const CARD_EXPR = (title) => `
     (() => {
       const el = [...document.querySelectorAll('.card')].find((c) => {
         const h = c.querySelector('.card-title');
@@ -119,12 +131,10 @@ function readCard(win, title) {
         ariaHidden: body ? body.getAttribute('aria-hidden') : null,
       };
     })()
-  `);
-}
+  `;
 
 /** 点某个工具页标签 */
-function clickTab(win, label) {
-  return win.webContents.executeJavaScript(`
+const CLICK_TAB_EXPR = (label) => `
     (() => {
       const b = [...document.querySelectorAll('.tabs .tab')]
         .find((x) => x.textContent.trim() === ${JSON.stringify(label)});
@@ -132,7 +142,17 @@ function clickTab(win, label) {
       b.click();
       return true;
     })()
-  `);
+  `;
+
+/** 切换路由（HashRouter） */
+const GOTO_EXPR = (hash) => `window.location.hash = ${JSON.stringify(hash)}`;
+
+function readCard(win, title) {
+  return win.webContents.executeJavaScript(CARD_EXPR(title));
+}
+
+function clickTab(win, label) {
+  return win.webContents.executeJavaScript(CLICK_TAB_EXPR(label));
 }
 
 /** 切页（HashRouter，直接改 hash 即可） */
@@ -187,35 +207,374 @@ const MONKEY_TAB = 'Monkey 测试';
 const MONKEY_CARD = 'Monkey 稳定性测试';
 
 /* ------------------------------------------------------------------ */
+/* 安装版后端（CDP）                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 为什么必须单独验一遍安装版：
+ *   开发态读的是**仓库根的 Conf/**，安装版读的是 **exe 同级的 Conf/** ——
+ *   这是两条不同的路径分支（services/ui-conf.ts 的 activeConfDir）。
+ *   用户手改的、以及「首次启动从 resources/Conf 铺一份过来」的那份，
+ *   都是 exe 同级那个。开发态全绿完全不能证明这条链路通。
+ */
+const INSTALLED_EXE = path.join(
+  process.env.LOCALAPPDATA || '',
+  'Programs',
+  'ADBAssistant',
+  'ADB桌面助手.exe',
+);
+const INSTALLED_CONF = path.join(path.dirname(INSTALLED_EXE), 'Conf');
+const CDP_PORT = 9352;
+
+/** 安装版那份配置的原样备份（改动前先存，结束时写回） */
+const INSTALLED_ORIGINAL = {};
+let installedRestored = false;
+
+function backupInstalledConf() {
+  for (const name of FILES) {
+    const p = path.join(INSTALLED_CONF, name);
+    INSTALLED_ORIGINAL[name] = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+  }
+}
+
+function restoreInstalledConf() {
+  if (installedRestored) return;
+  if (Object.keys(INSTALLED_ORIGINAL).length === 0) return;
+  installedRestored = true;
+  for (const name of FILES) {
+    const p = path.join(INSTALLED_CONF, name);
+    try {
+      if (INSTALLED_ORIGINAL[name] === null) {
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+      } else {
+        fs.writeFileSync(p, INSTALLED_ORIGINAL[name]);
+      }
+    } catch (e) {
+      process.stderr.write(`restore installed ${name} failed: ${e.message}\n`);
+    }
+  }
+}
+process.on('exit', restoreInstalledConf);
+
+function writeInstalledConf(name, content) {
+  const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2) + '\n';
+  fs.writeFileSync(path.join(INSTALLED_CONF, name), text);
+}
+
+class Cdp {
+  constructor(url, errors) {
+    this.id = 0;
+    this.pending = new Map();
+    this.errors = errors || [];
+    this.ws = new WebSocket(url);
+    this.ready = new Promise((resolve, reject) => {
+      this.ws.addEventListener('open', () => resolve());
+      this.ws.addEventListener('error', (e) =>
+        reject(new Error('CDP 连接失败: ' + (e.message || 'unknown'))),
+      );
+    });
+    this.ws.addEventListener('message', (ev) => {
+      let msg;
+      try {
+        msg = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      /*
+       * 渲染层的 error 级日志：Log.entryAdded 与 console.error 走两条路。
+       * 安装版看不到 webContents 的 console-message 事件，只能从这里收。
+       */
+      if (msg.method === 'Log.entryAdded' && msg.params?.entry?.level === 'error') {
+        this.errors.push(msg.params.entry.text);
+      }
+      if (msg.method === 'Runtime.consoleAPICalled' && msg.params?.type === 'error') {
+        this.errors.push(
+          (msg.params.args || []).map((a) => a.value ?? a.description ?? '').join(' '),
+        );
+      }
+      if (msg.id && this.pending.has(msg.id)) {
+        const { resolve, reject, timer } = this.pending.get(msg.id);
+        clearTimeout(timer);
+        this.pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message));
+        else resolve(msg.result);
+      }
+    });
+  }
+  send(method, params) {
+    const id = ++this.id;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error('CDP timeout: ' + method));
+        }
+      }, 30000);
+      this.pending.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ id, method, params: params || {} }));
+    });
+  }
+  async eval(expr) {
+    const r = await this.send('Runtime.evaluate', {
+      expression: expr,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (r.exceptionDetails) {
+      throw new Error(r.exceptionDetails.exception?.description || 'eval 异常');
+    }
+    return r.result ? r.result.value : undefined;
+  }
+  close() {
+    try {
+      this.ws.close();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** 拉起安装版并连上它的调试端点；返回 { page, pid } */
+async function launchInstalled() {
+  const { spawn } = require('child_process');
+  const os = require('os');
+  const env = { ...process.env };
+  /* 被宿主设成 1 时 Electron 会退化成纯 Node，无参数静默退出 */
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  const child = spawn(
+    INSTALLED_EXE,
+    [`--remote-debugging-port=${CDP_PORT}`, '--remote-allow-origins=*'],
+    { env, detached: true, stdio: 'ignore', cwd: os.tmpdir() },
+  );
+  const pid = child.pid;
+  child.unref();
+
+  let target = null;
+  for (let i = 0; i < 60; i++) {
+    await sleep(1000);
+    target = await new Promise((resolve) => {
+      const req = require('http').get(`http://127.0.0.1:${CDP_PORT}/json/list`, (res) => {
+        let body = '';
+        res.on('data', (d) => (body += d));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body).find((t) => t.type === 'page' && t.webSocketDebuggerUrl));
+          } catch {
+            resolve(null);
+          }
+        });
+      });
+      req.on('error', () => resolve(null));
+      req.setTimeout(2000, () => {
+        req.destroy();
+        resolve(null);
+      });
+    });
+    if (target) break;
+  }
+  if (!target) throw new Error('安装版未能在 60s 内开出调试端点');
+
+  const errors = [];
+  const cdp = new Cdp(target.webSocketDebuggerUrl, errors);
+  await cdp.ready;
+  await cdp.send('Runtime.enable');
+  await cdp.send('Page.enable');
+  await cdp.send('Log.enable');
+
+  return { pid, errors, cdp, page: { evalJS: (e) => cdp.eval(e) } };
+}
+
+/** 结束安装版（含托盘常驻，关窗口不退出 → 必须按 pid 杀进程树） */
+async function killInstalled(pid) {
+  const { spawnSync } = require('child_process');
+  if (pid) {
+    try {
+      spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore' });
+    } catch {
+      /* ignore */
+    }
+  }
+  /* 等端口释放，否则下一次连到的还是刚退出的那个进程 */
+  for (let i = 0; i < 20; i++) {
+    await sleep(250);
+    const alive = await new Promise((resolve) => {
+      const req = require('http').get(`http://127.0.0.1:${CDP_PORT}/json/version`, (res) => {
+        res.resume();
+        resolve(true);
+      });
+      req.on('error', () => resolve(false));
+      req.setTimeout(1000, () => {
+        req.destroy();
+        resolve(false);
+      });
+    });
+    if (!alive) return;
+  }
+}
+
+/** 轮询一个表达式，直到拿到非空结果（安装版首屏比开发态慢） */
+async function waitForPage(page, expr, timeout = 20000) {
+  const t0 = Date.now();
+  let last;
+  while (Date.now() - t0 < timeout) {
+    try {
+      last = await page.evalJS(expr);
+    } catch {
+      last = undefined;
+    }
+    if (last && (!Array.isArray(last) || last.length > 0)) return last;
+    await sleep(300);
+  }
+  return last;
+}
+
+async function gotoPage(page, hash) {
+  await page.evalJS(GOTO_EXPR(hash));
+  await sleep(400);
+}
+
+/**
+ * 安装版主线：验「读的是 exe 同级 Conf/」+「改配置重启后界面真的变」。
+ *
+ * 折叠 / 显隐的三阶段矩阵在开发态已经验透了（那部分与目录无关），
+ * 这里只钉安装版**独有**的两件事，控制单次跑测时间 —— 安装版每次重启要十几秒。
+ */
+async function runInstalled() {
+  ok(fs.existsSync(INSTALLED_EXE), '安装版 exe 存在', INSTALLED_EXE);
+  const seeded = fs.existsSync(path.join(INSTALLED_CONF, 'features.json'));
+  ok(
+    seeded,
+    '🔴 exe 同级 Conf/ 已生成（首次启动从 resources/Conf 铺一份，用户改的就是这份）',
+    INSTALLED_CONF,
+  );
+  if (!seeded) return;
+
+  backupInstalledConf();
+
+  /* ---- 1. 出厂形态：安装版读 exe 同级那三份（此刻内容是出厂模板） ---- */
+  let s = await launchInstalled();
+  try {
+    const nav = await waitForPage(s.page, READ_NAV);
+    eq(nav, '安装版 出厂导航顺序 = 9 项', FACTORY_NAV);
+
+    await gotoPage(s.page, '/tools');
+    const tabs = await waitForPage(s.page, READ_TABS);
+    eq(tabs, '安装版 出厂「常用工具」标签顺序 = 7 项', FACTORY_TABS);
+  } finally {
+    s.cdp.close();
+    await killInstalled(s.pid);
+  }
+
+  /* ---- 2. 改 exe 同级 Conf/，重启后必须跟着变 ---- */
+  writeInstalledConf('layout.json', {
+    _说明: '自检脚本临时写入',
+    _enabled: true,
+    sidebar: { order: ['mirror', 'zzz-not-exist', 'clicker'], defaultCollapsed: false, rememberCollapsed: true },
+    toolTabs: { order: ['monkey'] },
+  });
+  writeInstalledConf('features.json', {
+    _说明: '自检脚本临时写入',
+    _enabled: true,
+    features: { nav: { weaknet: false } },
+  });
+  writeInstalledConf('panels.json', {
+    _说明: '自检脚本临时写入',
+    _enabled: true,
+    panels: { tools: { monkey: true } },
+  });
+
+  s = await launchInstalled();
+  try {
+    const nav = await waitForPage(s.page, READ_NAV);
+    eq(
+      nav,
+      '🔴 安装版 改 exe 同级 Conf/layout.json + features.json 后重启 → 顺序与显隐都变了',
+      ['投屏', '自动连点器', '设备', '常用工具', '应用管理', '实时 Logcat', '命令终端', '设置'],
+    );
+
+    await gotoPage(s.page, '/tools');
+    const tabs = await waitForPage(s.page, READ_TABS);
+    /* toolTabs.order 只写了 monkey → 它排首位，其余按出厂顺序接在后面 */
+    eq(tabs, '安装版 工具页标签按 toolTabs.order 把 Monkey 提到首位', [
+      'Monkey 测试',
+      '截图',
+      '录屏',
+      '分辨率',
+      '安装安装包',
+      '文件传输',
+      'Logcat 导出',
+    ]);
+
+    await s.page.evalJS(CLICK_TAB_EXPR(MONKEY_TAB));
+    await sleep(400);
+    const card = await s.page.evalJS(CARD_EXPR(MONKEY_CARD));
+    ok(
+      card && card.collapsible && !card.collapsed,
+      '🔴 安装版 改 Conf/panels.json 后该块默认展开（出厂是收起）',
+      JSON.stringify(card),
+    );
+
+    ok(
+      s.errors.length === 0,
+      '安装版渲染层无 error 级日志',
+      s.errors.slice(0, 3).join(' | ') || '(空)',
+    );
+  } finally {
+    s.cdp.close();
+    await killInstalled(s.pid);
+  }
+
+  restoreInstalledConf();
+}
+
+/* ------------------------------------------------------------------ */
 /* 主流程                                                              */
 /* ------------------------------------------------------------------ */
 
 let win = null;
 
+const INSTALLED = process.argv.includes('--installed');
+
 app.whenReady().then(async () => {
   fs.writeFileSync(LOG, '');
   if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
+  /*
+   * 安装版分支跑在 Electron 主进程里，而主进程没有全局 WebSocket
+   * （见 scripts/_ws-shim.cjs）；不打这个垫片，CDP 客户端会抛
+   * "WebSocket is not defined" —— 变成假失败。
+   */
+  if (INSTALLED) {
+    const patched = require('./_ws-shim.cjs').install();
+    log(`ws-shim: ${patched ? '已挂载' : '已存在（未覆盖）'}`);
+  }
+
   try {
-    await run();
+    if (INSTALLED) await runInstalled();
+    else await run();
   } catch (e) {
     log('=== 脚本异常 ===');
     log(String((e && e.stack) || e));
     restoreConf();
-    log('UI CONF CHECK DONE');
-    app.exit(1);
+    restoreInstalledConf();
+    finish(1);
     return;
   }
 
   restoreConf();
+  restoreInstalledConf();
+  finish();
+});
+
+function finish(forceFail) {
   log('=== UI CONF CHECK ===');
   for (const r of rows) log(r);
   log(errorsLine(rendererErrors));
   log('UI CONF CHECK DONE');
-
   if (win) win.hide();
-  app.exit(rows.some((r) => r.startsWith('FAIL')) ? 1 : 0);
-});
+  app.exit(forceFail || rows.some((r) => r.startsWith('FAIL')) ? 1 : 0);
+}
 
 const rendererErrors = [];
 
