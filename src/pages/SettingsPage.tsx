@@ -292,29 +292,6 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/*
-          界面配置入口。
-          放在「外观」而不是单开一张卡片：它和主题一样属于「界面长什么样」，
-          而且配置文件本来就是给愿意动手的人用的，不占主流程的注意力。
-        */}
-        <div className="field">
-          <span className="field-label">界面配置</span>
-          <div className="text-dim" style={{ marginBottom: 8 }}>
-            左侧功能栏顺序、各入口显隐、功能块默认展开收起，都可以在程序目录的
-            <span className="mono"> Conf\ </span>
-            里改，保存后重启程序生效（详见目录内的 README.md）。
-          </div>
-          <Button
-            size="sm"
-            variant="default"
-            onClick={async () => {
-              const r = await window.adbApi.uiConfDir();
-              if (r.ok && r.data) void window.adbApi.openPath(String(r.data));
-            }}
-          >
-            打开配置文件夹
-          </Button>
-        </div>
       </Card>
 
       <Card
@@ -504,6 +481,30 @@ export default function SettingsPage() {
         </p>
         </Card>
       )}
+
+      {/*
+        界面配置入口（v1.1.12）。
+        所有设置项的最下方、独立成一行：配置文件是给愿意动手的人用的，
+        不占主流程的注意力，所以既不放「外观」卡片里、也不加说明文字 ——
+        留一个按钮，谁需要谁认得出来。
+        与上面的「开机自启动」同一种形态：Card 不传 title，整张卡片只有一行内容。
+      */}
+      <Card>
+        <div className="setting-line">
+          <span className="setting-line-label setting-line-title">界面配置</span>
+          <span className="spacer" />
+          <Button
+            size="sm"
+            variant="default"
+            onClick={async () => {
+              const r = await window.adbApi.uiConfDir();
+              if (r.ok && r.data) void window.adbApi.openPath(String(r.data));
+            }}
+          >
+            打开配置文件夹
+          </Button>
+        </div>
+      </Card>
     </>
   );
 }
