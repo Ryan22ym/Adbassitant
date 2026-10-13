@@ -155,6 +155,18 @@ const IPC = {
   CONF_DIR: 'conf:dir',
   /* 窗口外观（v1.1.3）：自绘标题栏的底色 */
   WINDOW_SET_TITLEBAR: 'window:setTitlebar',
+  /* 透明玻璃主题（v1.1.13）：整窗 Acrylic 与自绘窗口按钮 */
+  WINDOW_SET_GLASS: 'window:setGlass',
+  /*
+   * 抓一张桌面壁纸（v1.1.13 修正）。
+   * 🔴 字面量必须与 shared/types.ts 的 IPC.WINDOW_GRAB_DESKTOP 一致 ——
+   *    preload 是独立打包的，不能 import shared，只能手抄一份（历史坑）。
+   */
+  WINDOW_GRAB_DESKTOP: 'window:grabDesktop',
+  WINDOW_MINIMIZE: 'window:minimize',
+  WINDOW_TOGGLE_MAX: 'window:toggleMax',
+  WINDOW_CLOSE: 'window:close',
+  WINDOW_IS_MAX: 'window:isMax',
 
   /* 增量更新（v1.0.7） */
   UPDATE_CONTEXT: 'update:context',
@@ -479,6 +491,26 @@ const api = {
   /* 自绘标题栏（v1.1.3）：把当前主题色下的顶栏底色交给主进程 */
   setTitlebar: (opts: { color: string; symbolColor?: string; height?: number }) =>
     invoke(IPC.WINDOW_SET_TITLEBAR, opts),
+
+  /*
+   * 透明玻璃主题（v1.1.13）。
+   * setGlass 切换整窗 Acrylic；其余四个是自绘交通灯按钮的回调 ——
+   * 玻璃主题无边框，系统窗口按钮不存在，只能由渲染层画、主进程执行。
+   */
+  setGlass: (on: boolean) => invoke(IPC.WINDOW_SET_GLASS, on),
+  /**
+   * 抓一张桌面壁纸当「模拟玻璃」的底图（v1.1.13 修正）。
+   *
+   * ⚠️ 返回的是 **IPC 信封** `{ ok, data, error }`（与其它通道一致），
+   *    真实 data URL 在 `res.data`；抓失败时 `res.data` 为 null。
+   *    调用方必须先判 `res.ok` 再取 `res.data`（见 App.tsx 的用法）。
+   */
+  grabDesktop: () => invoke(IPC.WINDOW_GRAB_DESKTOP),
+  winMinimize: () => invoke(IPC.WINDOW_MINIMIZE),
+  winToggleMax: () => invoke(IPC.WINDOW_TOGGLE_MAX),
+  winClose: () => invoke(IPC.WINDOW_CLOSE),
+  /** 窗口当前是否最大化（自绘按钮据此切换「最大化 / 还原」的图标） */
+  winIsMax: () => invoke(IPC.WINDOW_IS_MAX),
 
   /* 增量更新（v1.0.7） */
   updateContext: () => invoke(IPC.UPDATE_CONTEXT),

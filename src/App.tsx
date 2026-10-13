@@ -80,6 +80,12 @@ export default function App() {
   const accent = useApp((s) => s.accent);
   // 当前页面上有没有全屏遮罩（弹窗变暗时右上角系统按钮区要跟着一起压暗）
   const [scrimActive, setScrimActive] = useState(false);
+  /*
+   * 玻璃主题的「壁纸底图」（data URL）。
+   * 由下面那个 effect 从主进程抓一张真实桌面塞进来（见注释）。
+   * null = 还没抓到 / 抓失败 → CSS 退回纯色底。
+   */
+  const [glassWall, setGlassWall] = useState<string | null>(null);
 
   /* 初始化：读取设置、订阅推送（仅执行一次） */
   useEffect(() => {
@@ -316,15 +322,116 @@ export default function App() {
     void window.adbApi.setTitlebar({ color, symbolColor });
   }, [theme, accent, scrimActive]);
 
+  /*
+   * 透明玻璃主题：抓桌面壁纸 + 铺到页面最底层（v1.1.13，2026-10-13 修正）。
+   *
+   * 🔴🔴 为什么不再走系统 Acrylic（这一版改动的核心）：
+   *    原方案指望 `backgroundMaterial:'acrylic'` 让真实桌面透上来并被系统磨砂。
+   *    但 Electron 在 **Windows 10 上不渲染 Acrylic**（上游 issue #48440，内部用的是
+   *    Win11 接口、没有 Win10 回落）；而一旦窗口 transparent:true，
+   *    CSS 的 backdrop-filter 也会一起失效（页面背后是空的，没东西可采样）。
+   *    ⇒ 两套模糊全死：壁纸原样清晰透出，模糊滑杆怎么拖都没反应。
+   *
+   *    现改为「模拟玻璃」：主进程抓一张**真实桌面**（IPC.WINDOW_GRAB_DESKTOP），
+   *    铺成本页面最底层的 `.glass-backdrop`。于是：
+   *      · 壁纸仍是用户自己的桌面（观感目标不变，不是编造的假图）；
+   *      · backdrop-filter 背后有实底 ⇒ 模糊滑杆真正生效；
+   *      · 不依赖系统私有接口，Win10 / Win11 表现一致。
+   *
+   * ⚠️ 时序：必须**先**把壁纸铺好、再让面板去糊它。这里用一个 state（glassWall）
+   *    控制挂载，抓到就渲染、抓不到就退回纯色（不阻塞界面、也不白屏）。
+   * 🔴 只抓一次：每次切主题都重抓会让切主题明显卡顿（截图本身要几百毫秒）。
+   *    桌面换了怎么办？下次启动会重新抓 —— 这是可接受的代价。
+   */
+  useEffect(() => {
+    // 主进程那边只负责窗口底色的明暗（Acrylic 已移除），幂等，随手同步即可
+    void window.adbApi?.setGlass(theme === 'glass');
+    if (theme !== 'glass') return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        /*
+         * 🔴 返回值是 { ok, data, error } 信封（ipc.ts 的 wrap()），必须取 .data。
+         *    漏了这层会导致把整个信封对象当 data URL 用 —— 表现为
+         *    `url.slice is not a function`，且 .glass-backdrop 背景是 none（一片空）。
+         */
+        const res = await window.adbApi?.grabDesktop?.();
+        const url = res && res.ok ? res.data : null;
+        if (!cancelled && typeof url === 'string' && url) setGlassWall(url);
+      } catch {
+        /* 抓不到就保持 null，CSS 会退回纯色底，不影响使用 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [theme]);
+
+  /*
+   * 玻璃主题下窗口是无边框的，系统标题栏与它自带的最小化/最大化/关闭按钮
+   * **全部消失** —— 右上角那三个 macOS 风格圆点由渲染层自绘（见下面的
+   * .window-lights），点击后回调主进程执行真实动作。
+   *
+   * 只在玻璃主题渲染它们：普通主题仍用系统按钮，多画三个圆点是多余的。
+   */
+  const isGlass = theme === 'glass';
+
   return (
     <div className="app-shell">
+      {/*
+        玻璃主题的「壁纸层」—— 页面内最底的一张真实桌面截图（v1.1.13 修正）。
+
+        🔴 它是整个玻璃效果的地基，位置和层级都不能动：
+          · `position:fixed; inset:0` → 铺满视口，不受任何容器滚动影响；
+          · `z-index:-1` → 压在 .app-shell 的所有内容之下，但它们仍能 backdrop-filter 到它；
+          · 它**必须是页面内的真实 DOM 元素**，不能是 CSS background-image：
+            backdrop-filter 只能采样「页面内、自己背后的像素」，CSS 背景图不算。
+
+        ⚠️ 抓到之前（glassWall === null）不渲染它 —— 此时窗口底色是深色
+           （见主进程 applyGlassWindow），不会闪白。
+      */}
+      {isGlass && glassWall && (
+        <div
+          className="glass-backdrop"
+          style={{ backgroundImage: `url(${glassWall})` }}
+          aria-hidden="true"
+        />
+      )}
+
       {/*
         自绘标题栏。窗口已经没有系统标题栏了，这一条既提供底色（跟着主题色走），
         也是拖窗口 / 双击最大化的地方（-webkit-app-region: drag 在 CSS 里）。
         整条同色、内部不放任何元素 —— 原来那两段（侧栏宽的一段 + 剩余一段）
         是为了让侧栏竖线通到窗口顶，现在不需要了，竖线留着反而像多出来的分割线。
       */}
-      <div className="titlebar" />
+      <div className="titlebar">
+        {isGlass && (
+          <div className="window-lights">
+            <button
+              type="button"
+              className="window-light min"
+              title="最小化"
+              aria-label="最小化"
+              onClick={() => void window.adbApi?.winMinimize()}
+            />
+            <button
+              type="button"
+              className="window-light max"
+              title="最大化"
+              aria-label="最大化"
+              onClick={() => void window.adbApi?.winToggleMax()}
+            />
+            <button
+              type="button"
+              className="window-light close"
+              title="关闭"
+              aria-label="关闭"
+              onClick={() => void window.adbApi?.winClose()}
+            />
+          </div>
+        )}
+      </div>
 
       <div className="app-body">
         <Sidebar />

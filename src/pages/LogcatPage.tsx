@@ -73,6 +73,8 @@ export default function LogcatPage() {
   pausedRef.current = paused;
   /* 暂停期间累计的行，恢复时一次性合并 */
   const heldRef = useRef<LogcatLine[]>([]);
+  /* 上次生效的设备序列号，用来区分「首次挂载」与「真的切设备」 */
+  const prevSerialRef = useRef<string | undefined>(undefined);
 
   /* ---------- 推送订阅 ---------- */
   useEffect(() => {
@@ -225,8 +227,38 @@ export default function LogcatPage() {
 
   /* 设备切换时重置 */
   useEffect(() => {
+    const serial = current?.serial;
+    const prev = prevSerialRef.current;
+    prevSerialRef.current = serial;
+
     setProcs([]);
     setProcFilter('');
+
+    // 首次挂载（prev 未初始化）或设备没变时，不动抓取会话与界面日志。
+    // 挂载时不动作很重要：离开页面再回来会重新挂载，此时主进程的抓取仍在跑，
+    // 不能因为「重新挂载」就把后台的抓取停掉。
+    if (prev === undefined || serial === prev) return;
+
+    /*
+     * 设备真的切走了：主进程里那个抓取会话还绑在旧设备上，会继续往这里推
+     * 旧设备的行，而「保存为文件」导出的也是旧设备会话的 buffer —— 这就是
+     * 用户看到的「切了设备导出还是旧设备日志」。必须先停掉旧会话再清空界面。
+     *
+     * 先停后清：stopLogcat 会把最后一波 pending 行 flush 过来，等它返回再清，
+     * 才不会让那最后一波又把界面填回旧设备的内容。
+     */
+    let cancelled = false;
+    (async () => {
+      await call(() => window.adbApi.stopLogcat(), { silent: true });
+      if (cancelled) return;
+      setLines([]);
+      heldRef.current = [];
+      setRunning(false);
+      setStatus(null);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [current?.serial]);
 
   /* 前端二次过滤（关键字/TAG 变动时立即生效，不必重启抓取） */

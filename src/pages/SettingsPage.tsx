@@ -7,6 +7,7 @@ import {
   Field,
   Input,
   Segmented,
+  Slider,
   Switch,
   Progress,
   Notice,
@@ -64,11 +65,16 @@ const ACCENTS: {
  *    不给入口，但要让用户知道为什么没有，否则会以为是坏了。
  *
  * ⚠️ 扩展位：加「崩铁」这类主题时，这里加一项 + 建一个 theme-<id>.css 即可。
+ *
+ * 「透明玻璃」（v1.1.13）和原神同类（都是自成一套的主题），但改造范围更大：
+ * 它还要**窗口本身**透明无边框（主进程配合），并自带两个可调参数 ——
+ * 见下面 theme === 'glass' 那两个滑杆。
  */
-const THEME_MODES: { value: 'light' | 'dark' | 'genshin'; label: string }[] = [
+const THEME_MODES: { value: 'light' | 'dark' | 'genshin' | 'glass'; label: string }[] = [
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' },
   { value: 'genshin', label: '原神' },
+  { value: 'glass', label: '透明玻璃' },
 ];
 
 /**
@@ -81,6 +87,8 @@ const THEME_MODES: { value: 'light' | 'dark' | 'genshin'; label: string }[] = [
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.13':
+    '新增「玻璃」主题：整窗透明磨砂玻璃效果，透明度与模糊程度可在设置里调节；修复实时 Logcat 切换设备后「保存为文件」导出仍是旧设备日志的问题；投屏键盘输入改为 UHID 模式，数字、英文、中文输入法都能直接输入。',
   '1.1.12':
     '新增界面配置文件：程序目录下的 Conf 文件夹可直接调整左侧功能栏顺序、各功能块默认展开还是收起、以及单独开关某个功能入口，改完重启生效；在线更新不会覆盖你改过的配置，改坏了删掉对应文件即可恢复出厂。设置页底部的「打开配置文件夹」可直达该目录。',
   '1.1.11':
@@ -167,6 +175,10 @@ export default function SettingsPage() {
   const applyTheme = useApp((s) => s.applyTheme);
   const accent = useApp((s) => s.accent);
   const applyAccent = useApp((s) => s.applyAccent);
+  /* 透明玻璃主题的两个参数（v1.1.13）—— 拖动实时写 DOM，松手才落盘 */
+  const glassOpacity = useApp((s) => s.glassOpacity);
+  const glassRoughness = useApp((s) => s.glassRoughness);
+  const paintGlass = useApp((s) => s.paintGlass);
   const toast = useApp((s) => s.toast);
 
   const [env, setEnv] = useState<EnvCheckResult | null>(null);
@@ -198,9 +210,25 @@ export default function SettingsPage() {
     }
   };
 
-  const changeTheme = (t: 'light' | 'dark' | 'genshin') => {
+  const changeTheme = (t: 'light' | 'dark' | 'genshin' | 'glass') => {
     applyTheme(t);
     update({ theme: t });
+  };
+
+  /*
+   * 玻璃主题的两个参数（v1.1.13）。
+   *
+   * 两条路分开（见 ui.tsx 的 Slider 注释）：
+   *   · 拖动中 onInput → paintGlass：只写 DOM 变量，画面立刻跟手，不落盘；
+   *   · 松手 onCommit → setGlass + update：写 DOM 的同时把值存进 settings.json。
+   * 拖动时每像素都落盘会同步刷爆磁盘（settings 那条是同步 IPC），必须分开。
+   */
+  const onGlassInput = (opacity: number, roughness: number) => {
+    paintGlass(opacity, roughness);
+  };
+
+  const commitGlass = (opacity: number, roughness: number) => {
+    update({ glassOpacity: opacity, glassRoughness: roughness });
   };
 
   const changeAccent = (a: AccentId) => {
@@ -242,7 +270,7 @@ export default function SettingsPage() {
         <Field label="主题模式">
           <Segmented
             value={theme}
-            onChange={(v) => changeTheme(v as 'light' | 'dark' | 'genshin')}
+            onChange={(v) => changeTheme(v as 'light' | 'dark' | 'genshin' | 'glass')}
             options={THEME_MODES}
           />
         </Field>
@@ -257,6 +285,16 @@ export default function SettingsPage() {
           <div className="field accent-field">
             <span className="field-label">主题色</span>
             <div className="text-dim">原神主题使用固定配色（米白 / 淡金），不提供主题色切换</div>
+          </div>
+        ) : theme === 'glass' ? (
+          /*
+            透明玻璃主题：主色固定（参考图那支蓝），同样不给切。
+            这里换成它**专属的两个参数**，只在选中该主题时出现 ——
+            别的主题下这两条滑杆没有意义（CSS 只认 data-theme='glass'）。
+          */
+          <div className="field accent-field">
+            <span className="field-label">主题色</span>
+            <div className="text-dim">透明玻璃主题使用固定配色（白色磨砂 + 蓝），不提供主题色切换</div>
           </div>
         ) : (
           /*
@@ -288,6 +326,42 @@ export default function SettingsPage() {
                   </button>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/*
+          透明玻璃的两个专属参数（v1.1.13）。
+          只在选中玻璃主题时出现 —— 它们改的是玻璃那层皮的质感，
+          其余主题下没有对象可调。
+        */}
+        {theme === 'glass' && (
+          <div className="glass-tune">
+            <Field label="不透明度" hint="数值越小越通透，越大越实">
+              <Slider
+                value={glassOpacity}
+                onInput={(v) => onGlassInput(v, glassRoughness)}
+                onCommit={(v) => commitGlass(v, glassRoughness)}
+              />
+            </Field>
+
+            <Field label="模糊程度" hint="数值越大桌面磨得越糊（只剩色块）；0 为不模糊">
+              <Slider
+                value={glassRoughness}
+                onInput={(v) => onGlassInput(glassOpacity, v)}
+                onCommit={(v) => commitGlass(glassOpacity, v)}
+              />
+            </Field>
+
+            {/*
+              一句必要的提醒：这里说的是**两个滑杆的关系**，以及滑杆管不到的那部分。
+              不写清楚的话，用户在浅色壁纸上把模糊拉满却觉得「本来就挺清楚」，
+              会以为滑杆坏了。
+            */}
+            <div className="text-dim glass-tune-hint">
+              模糊程度决定「看得见多少细节」：45 左右桌面只剩柔和的色块（默认）；
+              调到 20 以下会重新认出图标和文字轮廓；拉到 0 则完全清晰。
+              桌面那一层的磨砂同样由系统提供，需 Windows 10 1809 及以上版本。
             </div>
           </div>
         )}

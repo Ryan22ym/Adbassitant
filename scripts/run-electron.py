@@ -138,6 +138,137 @@ def _matches(paths, before, patterns):
     return any(re.search(p, text) for p in patterns)
 
 
+# ---------------------------------------------------------------------
+# PrintWindow 抓窗口（给 --grab 用）
+# ---------------------------------------------------------------------
+def _grab_window(pid: int, out_png: str, want_w: int = 0, want_h: int = 0) -> str:
+    """
+    用 PrintWindow(PW_RENDERFULLCONTENT) 抓「该 pid 的顶层可见窗口」的合成像素。
+
+    🔴 为什么不是 BitBlt / desktopCapturer：
+        BitBlt 抓的是**屏幕**，被遮挡/后台就抓不到，也拿不到 Acrylic 的合成结果；
+        desktopCapturer 依赖 DXGI Desktop Duplication，本机它会间歇性失效
+        （`DxgiDuplicatorController failed to capture desktop`），
+        返回一张过期空白帧 —— 表现为「截出来是纯色」，极易误判成功能坏了。
+        PrintWindow + PW_RENDERFULLCONTENT 走窗口自己的 WM_PRINT，
+        能拿到 DWM 合成后的内容（含系统 Acrylic 模糊），且不受遮挡/复制失效影响。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+
+    # --- 枚举该 pid 的顶层窗口 ---
+    # 🔴 选窗口的判据不能是「面积最大」：预览脚本里还有一张**铺满屏幕的假壁纸**
+    #    底层窗口，它面积最大，会被选中 —— 抓出来是一张未模糊的原图，
+    #    看起来像「玻璃完全没生效」。
+    #     判据改成：优先取**尺寸最接近用户给的期望值**的那个；
+    #     没给期望值就取「面积最小但 > 200x200」的那个（玻璃窗总比满屏壁纸小）。
+    class RECT(ctypes.Structure):
+        _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                    ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+    cands = []
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(hwnd, _):
+        wpid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+        if wpid.value != pid:
+            return True
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        r = RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(r)):
+            return True
+        w, h = r.right - r.left, r.bottom - r.top
+        if w > 200 and h > 200:
+            cands.append({'hwnd': hwnd, 'w': w, 'h': h,
+                          'x': r.left, 'y': r.top, 'area': w * h})
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(cb), 0)
+    if not cands:
+        return 'GRAB FAIL: 没找到 pid=%d 的可见窗口' % pid
+
+    if want_w and want_h:
+        # 取尺寸最接近期望的（窗口边框会让实际值差几个像素，所以比「最接近」而非「相等」）
+        cands.sort(key=lambda c: abs(c['w'] - want_w) + abs(c['h'] - want_h))
+    else:
+        cands.sort(key=lambda c: c['area'])   # 取最小的那个大窗口 = 玻璃窗
+    best = cands[0]
+    hwnd, rw, rh = best['hwnd'], best['w'], best['h']
+    wx, wy = best['x'], best['y']
+    PW_RENDERFULLCONTENT = 0x00000002
+
+    # ---------------------------------------------------------------
+    # 🔴 抓图方式必须用 BitBlt 抓「屏幕对应区域」，不能用 PrintWindow。
+    #
+    # 实测（2026-10-13）：
+    #   · PrintWindow(PW_RENDERFULLCONTENT) 对**透明窗口**返回**全黑** ——
+    #     它走的是窗口自己的 WM_PRINT，而透明窗口没有可绘制的背景像素，
+    #     系统 Acrylic 的模糊结果也不在这条路径上。
+    #   · BitBlt 从屏幕 DC 取像素，拿到的是 **DWM 合成后的最终画面**，
+    #     包含 Acrylic 模糊 + 桌面透出 —— 这才是肉眼看到的东西。
+    #
+    # 前提：抓的瞬间窗口必须在最前且未被遮挡（预览脚本里它就在最上层）。
+    # 取舍：BitBlt 需要窗口可见；PrintWindow 不需要但抓不到玻璃。玻璃主题只能 BitBlt。
+    # ---------------------------------------------------------------
+    SRCCOPY = 0x00CC0020
+    hdc = user32.GetDC(0)
+    mdc = gdi32.CreateCompatibleDC(hdc)
+    bmp = gdi32.CreateCompatibleBitmap(hdc, rw, rh)
+    gdi32.SelectObject(mdc, bmp)
+    ok = gdi32.BitBlt(mdc, 0, 0, rw, rh, hdc, wx, wy, SRCCOPY)
+
+    class BMIH(ctypes.Structure):
+        _fields_ = [('biSize', wintypes.DWORD), ('biWidth', ctypes.c_long),
+                    ('biHeight', ctypes.c_long), ('biPlanes', wintypes.WORD),
+                    ('biBitCount', wintypes.WORD), ('biCompression', wintypes.DWORD),
+                    ('biSizeImage', wintypes.DWORD), ('biXPelsPerMeter', ctypes.c_long),
+                    ('biYPelsPerMeter', ctypes.c_long), ('biClrUsed', wintypes.DWORD),
+                    ('biClrImportant', wintypes.DWORD)]
+
+    bi = BMIH()
+    bi.biSize = ctypes.sizeof(BMIH)
+    bi.biWidth = rw
+    bi.biHeight = -rh          # 负数 = top-down，省得后面翻行
+    bi.biPlanes = 1
+    bi.biBitCount = 32
+    bi.biCompression = 0       # BI_RGB
+
+    buf = ctypes.create_string_buffer(rw * rh * 4)
+    got = gdi32.GetDIBits(mdc, bmp, 0, rh, buf, ctypes.byref(bi), 0)
+    gdi32.DeleteObject(bmp)
+    gdi32.DeleteDC(mdc)
+    user32.ReleaseDC(0, hdc)
+
+    if not got:
+        return 'GRAB FAIL: GetDIBits 返回 0'
+
+    # BGRA -> RGBA（PIL 需要 RGBA；不引入 numpy，纯字节重排）
+    raw = bytearray(buf.raw)
+    raw[0::4], raw[2::4] = raw[2::4], raw[0::4]   # 交换 B/R
+    raw[3::4] = b'\xff' * (rw * rh)               # alpha 全不透明
+
+    try:
+        from PIL import Image
+        img = Image.frombytes('RGBA', (rw, rh), bytes(raw))
+        img.convert('RGB').save(out_png)
+    except ImportError:
+        # 没 Pillow 就落 BMP（自己写头，Windows 下所有看图器都能开）
+        import struct
+        hdr = b'BM' + struct.pack('<IHHI', 14 + 40 + len(raw), 0, 0, 54)
+        info = struct.pack('<IiiHHIIiiII', 40, rw, rh, 1, 32, 0, len(raw), 0, 0, 0, 0)
+        # BMP 是 bottom-up，得翻行
+        rows = [raw[y * rw * 4:(y + 1) * rw * 4] for y in range(rh)][::-1]
+        open(out_png, 'wb').write(hdr + info + b''.join(rows))
+
+    return 'GRAB OK hwnd=%d pid=%d %dx%d at(%d,%d) bitblt=%s -> %s' % (
+        hwnd, pid, rw, rh, wx, wy, ok, out_png)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument('script', help='要运行的 Electron 脚本（相对项目根或绝对路径）')
@@ -150,6 +281,22 @@ def main() -> int:
     ap.add_argument('--user-data', default=None, help='自定义 user-data-dir')
     ap.add_argument('--out', default=None, help='子进程 stdout/stderr 落盘路径')
     ap.add_argument('--raw', action='store_true', help='不做 PASS/FAIL 判定')
+    # ---------------------------------------------------------------
+    # --grab：在执行 Electron 脚本期间，由**本进程**去抓那个窗口。
+    #
+    # 🔴 为什么不由 Electron 脚本自己抓：
+    #    在 Electron 主进程里 spawn 第二个 python 会 EBUSY（本机实测），
+    #    而 desktopCapturer 又会因 DXGI 失效拿到空白帧。
+    #    本进程是「旁观者」，PID 拿到手就能用 PrintWindow 抓窗口自身合成像素，
+    #    不受 DXGI 影响，也不需要往目标进程里塞代码。
+    # 取值：`<pid文件>:<输出图片>` —— 脚本退出前把 pid 写进 pid 文件。
+    # ---------------------------------------------------------------
+    ap.add_argument('--grab', default=None,
+                    help='抓窗口：--grab=<pid文件>:<输出png>（脚本需先写出自己的 pid）')
+    ap.add_argument('--grab-size', default=None,
+                    help='期望的窗口尺寸 WxH（用来在多个窗口里挑玻璃窗，避免抓到满屏壁纸）')
+    ap.add_argument('--grab-delay', type=float, default=1.0,
+                    help='读到 pid 后再等几秒让窗口稳定，默认 1.0')
 
     # ★ 这里**绝对不要**给脚本参数声明 `nargs=argparse.REMAINDER`。
     #   REMAINDER 会把命令里它之后的**一切**都收走，包括本工具自己的
@@ -197,6 +344,18 @@ def main() -> int:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env,
                                 stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT)
 
+        # --grab 的解析：<pid文件>:<输出图>
+        grab_pidfile = grab_out = None
+        if args.grab:
+            if ':' not in args.grab:
+                print('[run-electron] --grab 格式应为 <pid文件>:<输出图>')
+                proc.kill(); _reap(proc)
+                return 2
+            grab_pidfile, grab_out = args.grab.split(':', 1)
+            if not os.path.isabs(grab_pidfile):
+                grab_pidfile = os.path.join(ROOT, grab_pidfile)
+        grabbed = False
+
         fired = False
         fire_at = 0.0
         while True:
@@ -209,6 +368,27 @@ def main() -> int:
                 _reap(proc)
                 print('[run-electron] 兜底超时 %.0fs，已强杀 (pid=%d)' % (args.timeout, proc.pid))
                 return 124
+            # 窗口一出现就立刻抓 —— 必须在子进程还活着的时候
+            if grab_pidfile and not grabbed and os.path.isfile(grab_pidfile):
+                try:
+                    gp = int(open(grab_pidfile).read().strip())
+                except Exception:
+                    gp = 0
+                if gp:
+                    time.sleep(args.grab_delay)
+                    gw = gh = 0
+                    if args.grab_size and 'x' in args.grab_size:
+                        try:
+                            gw, gh = (int(v) for v in args.grab_size.lower().split('x'))
+                        except Exception:
+                            gw = gh = 0
+                    print('[run-electron] %s' % _grab_window(gp, grab_out, gw, gh))
+                    grabbed = True
+                    # 🔴 抓完立刻延长「完成后的等待」，否则 --until 的 settle(默认1.5s)
+                    #    可能在抓图之前就把子进程杀了 —— 表现为 GRAB 一行都没有，
+                    #    看起来像抓图功能坏了。
+                    if fired:
+                        fire_at = time.time()
             if not fired and watches:
                 now = _snapshot(watches)
                 # 指纹是 (体积, mtime) 整体比较 —— 脚本常在一开始清空自己的日志，

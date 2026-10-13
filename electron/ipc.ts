@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron';
+import { ipcMain, dialog, shell, BrowserWindow, app, desktopCapturer, screen } from 'electron';
 import { existsSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import {
@@ -196,6 +196,28 @@ function send(channel: string, payload: any) {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send(channel, payload);
   }
+}
+
+/**
+ * 主窗口（可能已销毁 / 还没建）。
+ * 自绘窗口按钮用它执行最小化 / 最大化 / 关闭 —— 那些动作属于 BrowserWindow。
+ */
+function win(): BrowserWindow | null {
+  const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed());
+  return w ?? null;
+}
+
+/*
+ * 「切换整窗 Acrylic」的实现由 main.ts 注入（v1.1.13）。
+ *
+ * 与上面 settingsChangedHook 同一个理由，不直接 import main.ts ——
+ * 那会形成 main → ipc → main 的循环依赖。
+ */
+type GlassWindowHook = (on: boolean) => void;
+let glassWindowHook: GlassWindowHook | null = null;
+
+export function setGlassWindowHook(fn: GlassWindowHook) {
+  glassWindowHook = fn;
 }
 
 /**
@@ -1239,8 +1261,88 @@ export function registerIpc() {
     }),
   );
 
-  /* ---------------- 增量更新（v1.0.7） ---------------- */
+  /*
+   * 透明玻璃主题（v1.1.13）：切换整窗 Acrylic。
+   *
+   * 为什么要走主进程而不是纯 CSS：CSS 的 backdrop-filter 只能模糊**渲染层
+   * 看得见的像素**，看不见桌面壁纸。参考图那种「后面就是桌面、还被磨砂糊住」
+   * 的效果只有系统级 backgroundMaterial:'acrylic' 能给。
+   *
+   * 由 main.ts 的 applyGlassWindow 实现（那里写了「单向可逆但不对称」的约束：
+   * 退出玻璃时 transparent/frame 改不回去，只能靠不透明背景色拉回观感）。
+   */
+  ipcMain.handle(
+    IPC.WINDOW_SET_GLASS,
+    wrap((_e, on: boolean) => {
+      glassWindowHook?.(!!on);
+      return true;
+    }),
+  );
 
+  /*
+   * 自绘窗口按钮（v1.1.13）。
+   *
+   * 玻璃主题是无边框窗口，系统标题栏连带它自带的三个按钮一起没了 ——
+   * 渲染层画三个 macOS 风格圆点，点下去调这三个通道执行真实动作。
+   * 普通主题下系统按钮仍在，这些通道不会被调用（调了也无害）。
+   */
+  ipcMain.handle(IPC.WINDOW_MINIMIZE, wrap(() => win()?.minimize() ?? false));
+  ipcMain.handle(
+    IPC.WINDOW_TOGGLE_MAX,
+    wrap(() => {
+      const w = win();
+      if (!w) return false;
+      if (w.isMaximized()) w.unmaximize();
+      else w.maximize();
+      return w.isMaximized();
+    }),
+  );
+  ipcMain.handle(IPC.WINDOW_CLOSE, wrap(() => win()?.close() ?? false));
+  ipcMain.handle(IPC.WINDOW_IS_MAX, wrap(() => win()?.isMaximized() ?? false));
+
+  /*
+   * 抓一张桌面壁纸（v1.1.13 修正：「模拟玻璃」的底图来源）。
+   *
+   * 背景与取舍见 shared/types.ts 里 WINDOW_GRAB_DESKTOP 的注释。要点：
+   *   · Electron 在 Windows 10 上**不渲染 Acrylic**（上游 #48440），
+   *     transparent:true 的结果是「全透明 + 零模糊」，而 CSS backdrop-filter
+   *     在透明窗口里也采不到东西 —— 两套模糊全死。
+   *   · 所以改由主进程抓一张真实桌面，交给渲染层当页面内的「壁纸层」，
+   *     backdrop-filter 背后有实底，模糊才真正生效。
+   *
+   * 实现细节：
+   *   · 按**屏幕逻辑尺寸 × scaleFactor** 取图，保证与 CSS 像素一一对应
+   *     （本机 scaleFactor=1.25，取逻辑尺寸会得到模糊的缩略图）。
+   *   · 失败重试 3 次、间隔 300ms：DXGI Desktop Duplication 偶发失败，
+   *     单次失败不代表不可用。
+   *   · 全部失败回 null，渲染层退回纯色背景 —— 不能因为抓不到壁纸就白屏。
+   */
+  ipcMain.handle(
+    IPC.WINDOW_GRAB_DESKTOP,
+    wrap(async () => {
+      const d = screen.getPrimaryDisplay();
+      const w = Math.round(d.size.width * d.scaleFactor);
+      const h = Math.round(d.size.height * d.scaleFactor);
+      for (let i = 0; i < 3; i++) {
+        try {
+          const srcs = await desktopCapturer.getSources({
+            types: ['screen'],
+            thumbnailSize: { width: w, height: h },
+          });
+          const shot = srcs[0]?.thumbnail;
+          if (shot && !shot.isEmpty()) {
+            return shot.toDataURL();
+          }
+        } catch {
+          /* 单次失败继续重试 */
+        }
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      return null;
+    }),
+  );
+
+  /* ---------------- 增量更新（v1.0.7） ---------------- */
   ipcMain.handle(IPC.UPDATE_CONTEXT, wrap(() => getUpdateContext()));
 
   ipcMain.handle(

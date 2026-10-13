@@ -2,7 +2,7 @@ import { app, BrowserWindow, nativeTheme, shell, Menu, nativeImage, Tray } from 
 import type { NativeImage } from 'electron';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { registerIpc, setSettingsChangedHook } from './ipc';
+import { registerIpc, setSettingsChangedHook, setGlassWindowHook } from './ipc';
 import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
 import { startMirror } from './services/mirror';
@@ -12,6 +12,7 @@ import { pickAutoConnectTarget } from './services/auto-connect';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
 import { refreshShortcutIcons } from './services/shortcuts';
 import { syncAutoLaunch } from './services/auto-launch';
+import { syncGlassCorners, resetGlassCornerCache } from './services/win-corners';
 import { IPC, TITLEBAR_HEIGHT } from '../shared/types';
 import { MIRROR_DEFAULTS } from '../shared/mirror-defaults';
 
@@ -173,6 +174,76 @@ async function fireAutoConnect(device: { serial: string; model?: string }) {
   }
 }
 
+/**
+ * 启动时是否直接以「透明玻璃」形态建窗。
+ *
+ * 读的是上次落盘的设置 —— 用户上次选了玻璃主题，这次就该直接以玻璃形态出现，
+ * 而不是先建一个不透明窗口再切换（那会先闪一下深色底）。
+ * 读设置失败时按 false（普通窗口），启动不能因为这个挂掉。
+ */
+function startInGlass(): boolean {
+  try {
+    return getSettings().theme === 'glass';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 运行期切换「透明玻璃」窗口形态（v1.1.13，2026-10-13 修正为「模拟玻璃」）。
+ *
+ * 🔴🔴 为什么不再用 Acrylic（这一版的关键决定）：
+ *    原本的计划是 `backgroundMaterial:'acrylic'` 让**真实桌面**透上来并被系统磨砂，
+ *    这是最理想的形态。但两条实测把它否掉了：
+ *      ① Electron 在 **Windows 10 上根本不渲染 Acrylic** —— 它内部调的是 Win11 的
+ *         `DwmSetWindowAttribute` 系接口，没有回落到 Win10 的
+ *         `SetWindowCompositionAttribute`（上游 issue #48440，报告环境就是
+ *         Win10 22H2 build 19045，与本机一致）。表现：窗口透明了，但**零模糊**。
+ *      ② 一旦 `transparent:true`，CSS 的 `backdrop-filter` 也**一起失效** ——
+ *         它只能模糊「页面内、自己背后的像素」，而透明窗口背后在页面看来是空的。
+ *      ⇒ 结果就是「两套模糊全死、壁纸原样清晰」，滑杆怎么拖都没反应。
+ *
+ * 现在的做法 = **模拟玻璃**：
+ *    · 窗口**不透明**（transparent:false），但保留 `frame:false` 无边框 +
+ *      渲染层自绘交通灯（外观不变）。
+ *    · 页面最底层铺一张 `.glass-backdrop` —— 内容是主进程抓来的**真实桌面截图**
+ *      （IPC.WINDOW_GRAB_DESKTOP）。壁纸仍是用户自己的桌面，不是编造的。
+ *    · 面板的 `backdrop-filter` 背后终于有实底 ⇒ **模糊滑杆真正生效**。
+ *    · 跨 Win10 / Win11 表现一致，不依赖任何系统级私有接口。
+ *
+ * ⚠️ 这个函数现在只负责「窗口底色的明暗」—— Acrylic 那部分已移除。
+ *    保留函数与调用点是为了不改 IPC 契约（渲染层仍会调 setGlass）。
+ *
+ * 🔴 托盘 / 投屏子窗口不受影响：本函数只动 mainWindow。
+ */
+function applyGlassWindow(on: boolean): void {
+  const w = mainWindow;
+  if (!w || w.isDestroyed()) return;
+  try {
+    if (on) {
+      /*
+       * 玻璃主题：窗口保持不透明，底色给一个中性深色 —— 它会被页面里的
+       * .glass-backdrop 完全盖住，只在「壁纸还没抓回来」的短暂瞬间露一下。
+       * 用深色而不是白色：首帧闪白比闪深色刺眼得多。
+       */
+      w.setBackgroundColor('#101319');
+    } else {
+      // 退出玻璃：换回不透明的主题底色（与建窗时的首帧色一致）
+      const dark = nativeTheme.shouldUseDarkColors;
+      w.setBackgroundColor(dark ? '#161b28' : '#f5f8fe');
+    }
+  } catch {
+    /* 系统不支持时静默跳过：界面 CSS 那层玻璃照样在 */
+  }
+  /*
+   * 圆角区域跟着一起切（v1.1.13）。
+   * 🔴 必须在这里调：玻璃主题是**唯一**无边框的主题，也就只有它需要
+   *    用 SetWindowRgn 补圆角（roundedCorners 在 Windows 上不生效，见 win-corners.ts）。
+   *    退出玻璃主题时传 false → 清掉区域，让系统边框窗口自己管。
+   */
+  syncGlassCorners(w, on);
+}
+
 function createWindow() {
   /*
    * 标题栏改成自绘（v1.1.3）。
@@ -191,8 +262,24 @@ function createWindow() {
    * 🔴 而且它**不能小于系统标题栏高度**，否则按钮退回系统高度、在右上角糊出台阶 ——
    *    约束与实测数字见 shared/types.ts 里 TITLEBAR_HEIGHT 的注释。真要做更薄，
    *    得放弃系统按钮、改成自绘（那时 titleBarOverlay 整个去掉）。
+   *
+   * 🔴 玻璃主题下走的是**另一套**（见下面的 glass 分支）：无系统边框、无 overlay，
+   *    窗口按钮由渲染层自绘成 macOS 三色圆点。两套不能同时存在。
    */
   const dark = nativeTheme.shouldUseDarkColors;
+  /*
+   * 透明玻璃主题（v1.1.13）：窗口创建时就得按它来。
+   *
+   * 🔴 为什么透明/无边框必须在**创建时**定，而不能事后改：
+   *    `transparent` 是窗口创建参数，`setBackgroundMaterial` 也要求窗口本来就是
+   *    透明+无边框的（否则系统不给画 Acrylic）。所以启动时先读一次设置：
+   *    如果上次退出时是玻璃主题，这次就直接以玻璃形态建窗，避免先闪一下不透明窗口。
+   *
+   * 退出玻璃主题时（运行时切换）反向操作：frame/transparent 这些创建参数**改不回去**，
+   * 只能靠 setBackgroundMaterial('none') + setBackgroundColor(不透明) 把观感拉回来，
+   * 并让渲染层不再设 roundedCorners（见 applyGlassWindow 的注释）。
+   */
+  const glass = startInGlass();
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -201,14 +288,40 @@ function createWindow() {
     minHeight: 640,
     title: 'ADB 桌面助手',
     icon: appIcon(),
-    // 首帧（页面还没画出来）的底色，尽量贴近默认主题色，避免闪一下别的颜色
-    backgroundColor: dark ? '#161b28' : '#f5f8fe',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: dark ? '#161b28' : '#f5f8fe',
-      symbolColor: dark ? '#e8ebf4' : '#1a1d29',
-      height: TITLEBAR_HEIGHT,
-    },
+    // 首帧（页面还没画出来）的底色，尽量贴近默认主题色，避免闪一下别的颜色。
+    backgroundColor: glass ? '#101319' : dark ? '#161b28' : '#f5f8fe',
+    /*
+     * 玻璃主题：**无边框**，但**不再透明**（2026-10-13 修正为「模拟玻璃」）。
+     *
+     * 🔴 为什么去掉 transparent + backgroundMaterial:'acrylic'：
+     *    ① Electron 在 Windows 10 上不渲染 Acrylic（上游 #48440，用的 Win11 API，
+     *       没有 Win10 回落）→ 透明了但零模糊；
+     *    ② 而 transparent:true 会让 CSS 的 backdrop-filter 一起失效
+     *       （页面背后是空的，没东西可采样）→ 两套模糊全死。
+     *    现在改成：窗口不透明，页面自己用 .glass-backdrop 铺一张真实桌面截图，
+     *    面板的 backdrop-filter 糊它 —— 跨 Win10/Win11 稳定生效。
+     *
+     * ⚠️ 保留 frame:false：玻璃主题仍要渲染层自绘交通灯（见 App.tsx 的 window-lights）。
+     *
+     * 🔴🔴 圆角**不能靠 roundedCorners**（2026-10-13 修正）：
+     *    `roundedCorners: true` 是 **macOS only** 的参数，Windows 上完全无效 ——
+     *    无边框窗口在 Win10 上就是方角。Win11 有 DWM 圆角可用，但本机是 Win10。
+     *    ⇒ 圆角必须用 Win32 的 SetWindowRgn 自己裁（见 services/win-corners.ts），
+     *      由下面「建窗后」那段统一设置 + 跟随 resize / 最大化重设。
+     *      这里刻意**不写 roundedCorners** —— 留着它只会让人以为 Windows 上也生效。
+     */
+    ...(glass
+      ? {
+          frame: false,
+        }
+      : {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: {
+            color: dark ? '#161b28' : '#f5f8fe',
+            symbolColor: dark ? '#e8ebf4' : '#1a1d29',
+            height: TITLEBAR_HEIGHT,
+          },
+        }),
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -219,9 +332,78 @@ function createWindow() {
     },
   });
 
+  /*
+   * ⚠️ 这里原本有一句「玻璃主题下把窗口背景设成全透明」
+   *    （`setBackgroundColor('#00000000')`），它是给系统 Acrylic 铺路的。
+   *    2026-10-13 改成「模拟玻璃」后**必须删掉**：窗口要保持不透明，
+   *    背景透明会重新把页面下方暴露成空，backdrop-filter 又会失效。
+   */
+
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
   });
+
+  /*
+   * 玻璃主题的窗口圆角（v1.1.13）。
+   *
+   * 🔴 为什么要在建窗后单独设一次、还要盯着几个事件：
+   *    SetWindowRgn 设的是**那一刻**的窗口区域，它**不会**跟着窗口尺寸自动更新 ——
+   *    窗口一变大，新长出来的那块区域就是方的（圆角消失，下边两角变直角）。
+   *    所以要在这几个时刻重设：
+   *      · 建窗后（首次）
+   *      · 最大化 / 还原 / 进全屏 —— 而且**最大化时必须清掉区域**，
+   *        否则最大化后四角仍被裁，会露出桌面，像窗口缺了四个角
+   *      · resize：`resize` 用 debounce（一次拖动触发几十次），
+   *        再补一个 `resized`（Electron 在**尺寸真正改变后**才发）兜底。
+   *
+   * ⚠️ 用建窗时读到的 glass（局部变量）而不是再调 startInGlass()：
+   *    那个函数每次都要读一遍 settings.json，而 resize 每秒能触发几十次。
+   *
+   * 🔴🔴 「下边两角仍是直角」的根因复盘（2026-10-13 第二次反馈）：
+   *    一开始事件挂得很全，但 win-corners.ts 里的去重 key **只含半径和窗口 id**
+   *    （`r15/${id}`）—— 用户把窗口拉大后，resize → syncGlassCorners →
+   *    key 与上次相同 ⇒ **直接被跳过**，region 还是拉大前的小尺寸。
+   *    ⇒ 修法是让 key 带上窗口尺寸（见 win-corners.ts），这里的事件只是触发器。
+   *
+   * 🔴 「边界一直卡在这里」的根因复盘（2026-10-13 第三次反馈）：
+   *    key 带上尺寸还不够 —— win-corners 里 `execFile('powershell.exe')` 是**异步**的，
+   *    拖边框时几十个 PowerShell 并发跑、**完成顺序乱**，最后落地的是中间尺寸，
+   *    而 lastKey 已是最新 ⇒ 永不重设。⇒ 修法是串行队列（见 win-corners.ts）。
+   *
+   * 🔴🔴 为什么还必须监听 `move`（2026-10-13 实测发现）：
+   *    `SetWindowRgn` 设的区域**并非在所有情况下都稳**—— 实测把运行中的窗口
+   *    单独 `SetWindowPos` 挪个位置（尺寸不变）之后，`GetWindowRgn` 读回来是
+   *    **type=0（区域整个没了）**，四角瞬间变方。
+   *    原因不明（可能是 Chromium/Electron 在移动时重建了 native window），
+   *    但现象是稳定的 ⇒ 这里加 `move` 兜底重设。
+   *    ⚠️ `move` 在拖动窗口时也每秒几十次，所以同样 debounce；
+   *    而且 key 不含位置（region 用的是**窗口相对坐标**，移动不需要重设），
+   *    所以正常情况下 move 会被 key 去重直接跳过，只有像上面这种
+   *    「区域真的丢了」的情况才会因为 key 被 reset 而真正重设。
+   */
+  const syncCorners = () => syncGlassCorners(mainWindow, glass);
+  syncCorners();
+
+  let cornerTimer: NodeJS.Timeout | null = null;
+  const debouncedSync = () => {
+    if (cornerTimer) clearTimeout(cornerTimer);
+    cornerTimer = setTimeout(syncCorners, 120);
+  };
+  mainWindow.on('resize', debouncedSync);
+  /* `resized` 在尺寸真正定下来后触发，作为 debounce 的第二道保险 */
+  mainWindow.on('resized', syncCorners);
+  /* 🔴 移动后区域可能整个丢失（实测 type=0），必须**强制**重设。
+   *    强制 = 清掉去重 key；因为 region 用窗口相对坐标、尺寸没变，
+   *    不清 key 的话 syncGlassCorners 会认为「没变化」直接跳过。 */
+  mainWindow.on('move', () => {
+    resetGlassCornerCache();
+    debouncedSync();
+  });
+  mainWindow.on('maximize', syncCorners);
+  mainWindow.on('unmaximize', syncCorners);
+  mainWindow.on('enter-full-screen', syncCorners);
+  mainWindow.on('leave-full-screen', syncCorners);
+  mainWindow.on('restore', syncCorners);
 
   /*
    * 「插入自动投屏」开启时，关闭窗口 = 收进托盘，而不是退出。
@@ -251,6 +433,11 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    /*
+     * 🔴 圆角缓存是模块级单例，窗口换了（退出重进 / macOS 的 activate 重建）
+     *    必须清掉，否则新窗口沿用旧 key，圆角会被「跳过设置」而消失。
+     */
+    resetGlassCornerCache();
   });
 
   // 外部链接用系统浏览器打开
@@ -338,6 +525,12 @@ app.whenReady().then(() => {
 
   // 设置一变就同步托盘：开关就是「程序要不要常驻」的开关，必须立刻生效
   setSettingsChangedHook(() => syncTray());
+
+  /*
+   * 玻璃主题的窗口切换钩子（v1.1.13）：渲染层点了「透明玻璃」就切整窗 Acrylic。
+   * 注入而不是让 ipc.ts import main.ts，避免循环依赖（同 setSettingsChangedHook）。
+   */
+  setGlassWindowHook(applyGlassWindow);
 
   createWindow();
 

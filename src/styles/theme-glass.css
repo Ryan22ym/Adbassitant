@@ -1,0 +1,672 @@
+/* ==================================================================
+   主题 —— 「透明玻璃」（v1.1.12）
+   ==================================================================
+
+   它和「原神」同一级（<html data-theme="glass">），是一整套视觉方案，
+   不是第 6 个主题色。同样**没有深色变体**：选中即锁定这一套外观。
+
+   ------------------------------------------------------------------
+   和别的主题最大的不同：**它要一张桌面壁纸**。
+
+   🔴🔴 2026-10-13 定案：这条路走的是「**模拟玻璃**」，不是系统 Acrylic。
+
+   原本的方案（已废）：窗口 transparent + backgroundMaterial:'acrylic'，
+     指望系统把真实桌面透上来并磨砂。**实测不成立**：
+       · Electron 在 **Windows 10 上不渲染 Acrylic** —— 它内部调的是 Win11 的
+         接口，没有回落到 Win10 的 SetWindowCompositionAttribute
+         （上游 issue #48440，报告环境就是 Win10 22H2 build 19045，与本机一致）；
+       · 而且一旦窗口 transparent:true，CSS 的 backdrop-filter 也**一起失效** ——
+         它只能采样「页面内、自己背后的像素」，而透明窗口在页面看来背后是空的。
+     ⇒ 两套模糊全死：壁纸原样清晰透出，模糊滑杆怎么拖都没反应。
+
+   现在的方案（本文件按这套写）：
+     主进程：**不透明**窗口 + frame:false（无边框，自绘交通灯）
+             + 提供 IPC.WINDOW_GRAB_DESKTOP 抓一张真实桌面
+     本文件：把那张桌面铺成最底层的 .glass-backdrop（页面内真实 DOM）
+             + 面板各自 backdrop-filter 去糊它 —— **滑杆由此真正生效**
+
+   ------------------------------------------------------------------
+   🔴 两个滑杆是「两轴」，不是「一条轴的两个名字」——
+
+     --glass-alpha   不透明度 0~1     ← settings.glassOpacity / 100
+       决定「**看得见多清楚**」：这层白纱盖得厚，看见的是模糊色块；
+       盖得薄，连桌面上的图标/窗口轮廓都能认出来。
+     --glass-blur    模糊半径 px      ← settings.glassRoughness × 0.6（上限 60）
+       决定「**看得见多糊**」：桌面颜色被高斯模糊到什么程度。
+       滑杆 0 = 完全清晰（能看清壁纸细节），100 = 一片色雾。
+       🔴 系数 0.6 / 上限 60 是 2026-10-13 修的：原来是 × 0.4 / 上限 48，
+         后 30 档（70~100）几乎推不动，是废的。
+
+   小杨 2026-10-13 的要求：「透明需要高斯模糊处理，能看到大致色彩，看不了这么清楚，
+   然后做成可调整模糊程度」—— 所以要的是「有色块、没细节」，两个轴各管一半。
+
+   ⚠️ 为什么两者都**必须**存在：只有 alpha 大、blur 小的时候，桌面是「清晰的、
+      只是被白纱冲淡了」→ 文字照样被壁纸细节吃掉；只有 blur 大、alpha 小的时候，
+      桌面糊了但底色太薄 → 文字压在一片浅色糊块上也难受。
+      把 blur 顶上去（默认 45 档 → 27px），细节就会被抹平成色块，这才是玻璃。
+
+   两个值由 store 里的 paintGlassVars() 写到 <html> 的 style 上（**内联变量**），
+   所以下面只给默认值、不写死具体数字 —— 用户拖滑杆时代码改的是内联值，
+   优先级天然压过这里的默认值。
+
+   ------------------------------------------------------------------
+   ⚠️ 优先级：本文件必须在 global.css **之后**加载（见 main.tsx import 顺序）。
+      理由同 theme-genshin.css：:root[data-theme='x'] 与 :root[data-accent='y']
+      同为 (0,2,0)，只能靠源码顺序分胜负。
+
+   ------------------------------------------------------------------
+   配色（**对着 iOS 26 控制中心实测取色**，不是拍脑袋定的）：
+     面板底        rgba(242,244,248, α)  ← 中性微暗灰，**不是纯白**
+                   纯白 α=0.30 实测亮度 158.7，目标 132.5 → 白纱会发亮发灰
+     卡片底        rgba(244,246,250, α+0.06)  ← 层差只给 +0.03~0.14（叠层会相乘）
+     描边          rgba(255,255,255, 0.36) 发丝高光
+     正文          #1f2430  ← 浅色玻璃上的深字
+     次级          #5a6272
+     交通灯        红 #ff5f57 / 黄 #febc2e / 绿 #28c840（macOS 标准色）
+   ================================================================== */
+
+:root[data-theme='glass'] {
+  /*
+   * 两个参数滑杆的默认值（= AppSettings 的出厂默认 20 / 45）。
+   * 🔴 这里只是「内联变量缺失时的兜底」：正常运行时 store 会把内联值写到
+   *    documentElement.style 上，那里的优先级更高。别把具体数字写进
+   *    下面任何一个规则里 —— 那样滑杆就拖不动了。
+   */
+  /*
+   * 默认 20 = 不透明度滑杆 20 档。
+   * 🔴 与 --glass-veil(0.16) 配合：max 之后实际基板 ≈ 0.20，
+   *    再叠侧栏/卡片的小层差，整体仍能看清壁纸颜色（不再是奶白板）。
+   */
+  --glass-alpha: 0.2;
+  /*
+   * 默认 27px = 模糊滑杆 45 档（45 × 0.6）。
+   *
+   * 🔴 这个值是对着小杨给的目标图**实测标定**的，不是拍的：
+   *    目标图（iOS 26 控制中心）在 546px 宽的截图上，用高斯模糊逐档逼近，
+   *    blur ≈ 12px 时细节量与目标最吻合（目标高频 1.23，12px 时 1.27）。
+   *    把 12px 从「546 截图像素」换算到「1184 CSS px 的窗口」：
+   *      12 × (1184 / 546) ≈ 26px  ⇒  滑杆 26 / 0.6 ≈ 43 档。
+   *
+   * ⚠️ 关键观感：这个档位的桌面是「**一团团柔和色块**」——
+   *    能看出「这边偏绿、那边偏蓝」的大色域，但**认不出任何图标或文字**。
+   *    这正是小杨要的：「能看到大致色彩，看不了这么清楚」。
+   *    再往上（>40px）会连色域的边界也糊掉，变成一整片单色，反而没层次。
+   */
+  --glass-blur: 27px;
+  /*
+   * 毛玻璃倍率 —— 一个自测出来的常数，把「一层 blur 能做到多少水感」标定下来。
+   *
+   * 🔴 为什么需要它（本次踩的坑）：
+   *    一开始只有 .app-body 一层 backdrop-filter。但同一时刻**视觉上真正被看见的
+   *    那层 blur 是 .main 那层**（main 是不透明的层叠顺序上更靠前），
+   *    而它拿到的是 blur × 0.7（当时写死在 .card 上）。
+   *    ⇒ 滑杆 0~100 里**相当一段区间是废的**：数值在变，画面几乎不变，
+   *      看起来就是「模糊程度调不动」。
+   *
+   *    把每一层都摆明白、并以「面板那层」为基准 ×1 之后，滑杆 1 格 ≈ 画面真变一格。
+   *    各层相对倍率：
+   *      .app-body ×1        ← 基准，滑杆直接映射到这里
+   *      .titlebar ×1.25     ← 比内容区糊一点（参考图里顶栏更「厚」）
+   *      .main     ×1        ← 真正的「大玻璃」，与基准等量
+   *      .card     ×0.8      ← 卡片离眼更近，稍微清晰一点点
+   *
+   * 这个值只用来做「层次对照」，改它 = 改所有层的相对关系，别再动。
+   */
+  --glass-scale: 1;
+  /*
+   * 「柔和度下限」——面板底色至少要有这么厚。
+   *
+   * 🔴 为什么不直接把 --glass-alpha 调大就完事：
+   *    --glass-alpha 是**用户滑杆**，决定「底色盖多厚」；用户把它拉到 5
+   *    的时候就该几乎全透。但如果基板真的只剩 0.05，压在花哨壁纸上
+   *    文字就没法读了。
+   *    所以拆成两层：alpha 给用户调（通透感），base 是**固定的可读性保底**
+   *    （用 max() 取二者较大值）——用户想更透可以，但不会透到看不清字。
+   *
+   * 🔴🔴 取值从 0.30 **降到 0.16**（2026-10-13 第二轮修正），原因是叠层问题：
+   *    面板不是一层 —— .app-body、.sidebar、.main、.card 会**层层叠加**，
+   *    每层各自半透 ≠ 整体半透，而是**越来越不透明**。
+   *    实测（玻璃 CSS 截图采样）：壁纸绿 (157,199,189) 一路叠完变成 (210,227,226)
+   *    ——**几乎变成中性灰**，壁纸的颜色被吃掉了，看起来像「奶白板」而不是玻璃。
+   *    复算：
+   *      app-body α=0.30  → 把绿壁纸推到 (182,212,207)
+   *      card     α=0.46  → 再推到 (210,227,226)   ← 只剩约 38% 的壁纸色
+   *    真正的玻璃只需要**一层半透底色**：外面那层负责「托住文字」，
+   *    里面的层应该更薄（+0.04 级差，而不是 +0.16）。
+   *
+   *    ⇒ 现在的分工：base 只在**最外层**（.app-body）兑现，其余层用小增量。
+   *      这样既保住「文字有底」，又让壁纸颜色真的透得上来。
+   */
+  --glass-veil: 0.16;
+  /* 玻璃上的发丝高光与投影，粗糙度越高越弱（磨砂会吃掉高光） */
+  --glass-hi: 0.55;
+  --glass-edge: rgba(255, 255, 255, 0.42);
+
+  /*
+   * 面板底：**中性微暗**的玻璃，不是白纱。
+   *
+   * 🔴🔴 这一条是 2026-10-13 对着小杨给的目标图（iOS 26 控制中心）实测改的，
+   *      改前是 `rgba(255,255,255, α)` —— **错的方向**。
+   *
+   * 实测依据（对目标图取统计特征）：
+   *   目标亮度 132.5 / 源图同区域 116.1   → 目标**更亮一点**，但不是靠白色堆出来的
+   *   目标饱和 40.2  / 源图同区域 68.1    → 目标饱和**明显更低**
+   *   ⇒ 关键：如果用白色做玻璃底，饱和度会被冲淡一点点，但亮度会**爆掉**
+   *     （实测白纱 0.30 时亮度 158.7，目标只有 132.5，偏亮 20%）。
+   *     正确的做法是**用接近中性灰的底**：既能拿掉饱和，又不会把画面刷白。
+   *
+   * 取色：#f2f4f8（比纯白冷一点的纸灰）。
+   *   不用纯白：纯白会把玻璃刷成「奶白板」，也会让文字底衬过亮发飘。
+   *   不用真灰(128)：那是「磨砂塑料」，不是玻璃，桌面颜色会被压死。
+   *   不用黑：黑色会把这层「纸灰玻璃」压成深色板，壁纸颜色被闷死。
+   *
+   * ⚠️ 想要「亮白玻璃」的用户（原参考图那种）可以调低不透明度 ——
+   *    alpha 越小，这层灰影响越弱，桌面本色越明显。
+   */
+  --g-panel: rgba(242, 244, 248, max(var(--glass-alpha), var(--glass-veil)));
+  --g-panel-2: rgba(244, 246, 250, calc(max(var(--glass-alpha), var(--glass-veil)) + 0.06));
+  --g-panel-deep: rgba(238, 241, 246, max(var(--glass-alpha), var(--glass-veil)));
+  --g-inset: rgba(240, 242, 247, calc(max(var(--glass-alpha), var(--glass-veil)) * 0.45));
+
+  /*
+   * 🔴 层差只能是**小增量**（+0.0x 级），不能是 +0.12 这种大跳。
+   *    这些层是**叠加**的：.app-body(底) → .sidebar/.main → .card，
+   *    每一层的 alpha 都会再乘一次「剩下的透明度」。
+   *    实测过 +0.16 的层差：壁纸绿一路被推到 (210,227,226)，色相基本消失。
+   *    现在侧栏/卡片只比面板厚 0.03~0.06，靠**模糊差 + 描边**分层，
+   *    而不是靠「谁的白色更厚」——后者叠两层就成奶白板了。
+   */
+  --bg-app: rgba(242, 244, 248, calc(max(var(--glass-alpha), var(--glass-veil)) * 0.7));
+  --bg-sidebar: rgba(243, 245, 249, calc(max(var(--glass-alpha), var(--glass-veil)) * 0.85));
+  --bg-sidebar-hover: rgba(248, 249, 252, calc(max(var(--glass-alpha), var(--glass-veil)) + 0.06));
+  --bg-sidebar-active: rgba(250, 251, 253, calc(max(var(--glass-alpha), var(--glass-veil)) + 0.12));
+
+  --bg-surface: rgba(244, 246, 250, calc(max(var(--glass-alpha), var(--glass-veil)) + 0.06));
+  --bg-surface-2: rgba(243, 245, 249, calc(max(var(--glass-alpha), var(--glass-veil)) + 0.03));
+  --bg-hover: rgba(248, 249, 252, calc(max(var(--glass-alpha), var(--glass-veil)) + 0.08));
+  --bg-active: rgba(250, 251, 253, calc(max(var(--glass-alpha), var(--glass-veil)) + 0.14));
+  --bg-inset: rgba(240, 242, 247, calc(max(var(--glass-alpha), var(--glass-veil)) * 0.5));
+
+  /* 描边：玻璃靠「半透明白边」分层，不靠实色线 */
+  --border: rgba(255, 255, 255, 0.36);
+  --border-strong: rgba(255, 255, 255, 0.54);
+
+  /*
+   * 文字：浅色玻璃上仍是深字。
+   *
+   * 🔴 但这里和「内建壁纸」时代有个本质区别：现在底下透的是**用户的真实桌面**，
+   *    什么颜色都可能有（实测这台机器上透上来的是紫粉色的游戏壁纸）。
+   *    深墨字压在深色壁纸上会糊 → 靠下面 --text-shadow 给一层极淡的白描边兜底。
+   */
+  --text-primary: #1b2029;
+  --text-secondary: #414a5c;
+  --text-tertiary: #5f6879;
+  --text-inverse: #ffffff;
+  /*
+   * 文字底衬：极淡的白色外发光。
+   * 不是装饰，是**可读性保障** —— 无论桌面是深是浅，字都还有一层亮底。
+   * 0.14 是实测下限：再小深色壁纸下就开始糊，再大字体边缘会发毛。
+   */
+  --text-shadow: 0 0 3px rgba(255, 255, 255, 0.14);
+
+  /*
+   * 标题栏符号色（普通主题下 = titleBarOverlay.symbolColor）。
+   * 玻璃主题**没有系统标题栏**（frame:false），这一条只用于 CSS 里
+   * 自绘交通灯之外的文字图标着色，保留它是为了让 App.tsx 那段回传逻辑
+   * 不因取不到值而报错（那里有兜底，但给个合理值更干净）。
+   */
+  --titlebar-symbol: var(--text-primary);
+
+  /* 主色：参考图里搜索框图标、按钮的蓝 */
+  --accent: #2f6ee0;
+  --accent-hover: #245bc4;
+  --accent-soft: rgba(47, 110, 224, 0.14);
+  --accent-border: rgba(47, 110, 224, 0.34);
+
+  --success: #1e9e4a;
+  --success-soft: rgba(30, 158, 74, 0.14);
+  --warn: #b97a10;
+  --warn-soft: rgba(185, 122, 16, 0.14);
+  --danger: #d33f38;
+  --danger-soft: rgba(211, 63, 56, 0.14);
+
+  --code-bg: rgba(30, 34, 42, 0.78);
+  --code-text: #d6deeb;
+
+  /*
+   * 阴影：玻璃悬浮在桌面上，投影要柔和且散得开（参考图面板四周有一圈淡淡的暗）。
+   * 玻璃主题的层次全靠这几档投影 + 白边，不能省。
+   */
+  --shadow-sm: 0 1px 2px rgba(20, 28, 44, 0.1);
+  --shadow-md: 0 4px 14px rgba(20, 28, 44, 0.14), 0 1px 3px rgba(20, 28, 44, 0.1);
+  --shadow-lg: 0 12px 34px rgba(20, 28, 44, 0.2);
+
+  /* 圆角：参考图的卡片是明显的圆角，比原神大得多 */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+
+  /* 玻璃局部变量（--g- = glass） */
+  --g-tl-red: #ff5f57;
+  --g-tl-yellow: #febc2e;
+  --g-tl-green: #28c840;
+}
+
+/* ==================================================================
+   窗口本体：圆角 + 壁纸层
+   ------------------------------------------------------------------
+   🔴 2026-10-13 修正为「模拟玻璃」，这里的分工变了：
+
+   旧方案（已废）：窗口 transparent + backgroundMaterial:'acrylic'，
+     指望系统把真实桌面透上来并磨砂。**Win10 上不成立** ——
+     Electron 不渲染 Acrylic（上游 #48440），且 transparent:true 会让
+     CSS backdrop-filter 一起失效（页面背后是空的）。结果两套模糊全死。
+
+   新方案：窗口**不透明**，页面自己在最底层铺一张真实桌面截图
+     （`.glass-backdrop`，由 App.tsx 从主进程抓来），面板 backdrop-filter 去糊它。
+   ================================================================== */
+
+:root[data-theme='glass'] html,
+:root[data-theme='glass'] body {
+  /*
+   * ⚠️ 这两层必须**透明**：窗口已经不透明了，真正提供底色的
+   *    是 .glass-backdrop。这里若给底色，会盖住壁纸层（它是 position:fixed + z-index:-1，
+   *    会落在 body 背景之下）。
+   */
+  background: transparent;
+}
+
+/*
+ * 壁纸层：页面内最底的真实桌面截图。
+ *
+ * 🔴 三条都不能动（任何一条破了，模糊就失效或壁纸被盖）：
+ *   · position:fixed + inset:0  → 铺满视口，不随页面滚动
+ *   · z-index:-1                  → 压在所有内容之下，但它们仍能 backdrop-filter 到它
+ *   · 必须是真实 DOM 元素          → backdrop-filter 只采样「页面内的像素」，
+ *                                   CSS 的 background-image 不算（这就是它不能用 CSS 底图的原因）
+ *
+ * background-size:cover 让图随窗口缩放自适应（截图按 屏幕物理分辨率 抓的）。
+ */
+:root[data-theme='glass'] .glass-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  pointer-events: none; /* 纯装饰，不能挡交互 */
+}
+
+:root[data-theme='glass'] .app-shell {
+  /*
+   * ⚠️ 这里**不给 z-index**：z-index 会创建独立的层叠上下文，
+   *    把 .glass-backdrop 的 z-index:-1 关在同一个上下文里比较，
+   *    反而更容易出层级问题（历史坑：壁纸层一度压住整个界面）。
+   *    分工：shell 只负责「裁切」，
+   *    底色与模糊交给 .app-body 与 .titlebar（见下）。
+   */
+  position: relative;
+  /*
+   * 外壳**透明**：壁纸层要能透上来。任何在这里铺底色（哪怕很淡）
+   * 都会削弱透视感，玻璃的「白」一律交给 .app-body / .titlebar / 卡片分层给出。
+   */
+  background: transparent;
+  /*
+   * 🔴 2026-10-14 起**方角**（小杨决定，不要圆角）：
+   *    · border-radius 必须一起去掉 —— 方窗口 + 圆内容会在四个角上
+   *      露出一小块 .glass-backdrop（桌面截图）的边缘，和周围真桌面
+   *      不连续，正是当初「圆角没处理干净」的由来；
+   *    · 窗口侧同样不设 region（win-corners.ts 的 GLASS_CORNER_RADIUS=0）。
+   *    想恢复圆角：这里写回 12px，并把那个常量改回 12，两边必须一致。
+   */
+  overflow: hidden;
+  /*
+   * 🔴 文字底衬（可读性保障）：整窗统一挂一层极淡白色外发光。
+   *    压在 .app-shell 上是让所有子孙文字继承 —— 底下现在是**用户真实桌面**，
+   *    颜色不可预知，没有这层兜底，深色壁纸下正文就糊了。
+   *    用 text-shadow 而不是给每块加底色，是为了不牺牲通透感。
+   */
+  text-shadow: var(--text-shadow);
+  /*
+   * 玻璃边缘的高光：一圈细白边 + 外侧淡投影，
+   * 让它看起来是一块「有厚度的板」而不是一张贴纸。
+   * 方角下这圈边是完整矩形，投影绕窗口一整圈（不再被 region 裁掉）。
+   */
+  box-shadow:
+    inset 0 0 0 1px var(--glass-edge),
+    var(--shadow-lg);
+}
+
+/*
+ * 玻璃面板的白色底与模糊，落在这一层（而不是 .app-shell）。
+ * .app-body 包着侧栏 + 内容区，是玻璃「板」的主体；
+ * 它半透 + backdrop-filter，壁纸就从下面透上来并被磨砂。
+ */
+:root[data-theme='glass'] .app-body {
+  position: relative;
+  z-index: 1;
+  /*
+   * 🔴🔴 这里**不能有背景色**（2026-10-13 修正的第二个要点）。
+   *
+   *    为什么：backdrop-filter 只模糊「自己**背后紧邻**的像素」。
+   *    .app-body 包着 .sidebar 与 .main，如果它自己铺一层灰底，
+   *    那么 .main 的 blur 采样到的就是**这层灰**（一层近乎纯色），
+   *    模糊一层纯色 = 看不出任何变化 —— 这正是「滑杆拖不动」的直接原因，
+   *    实测：把 .app-body 背景去掉前后，blur 27px 的画面**逐字节完全相同**。
+   *
+   *    ⇒ 正确分工：**模糊归 .app-body 这一层**（它直接贴着 .glass-backdrop），
+   *      **灰底归各面板自己**（.sidebar / .main / .card 的 background，
+   *      画在它们各自的 blur 之上）。这样「糊的是壁纸、盖的是灰」，两层不互相挡。
+   */
+  background: transparent;
+  /*
+   * 🔴 这里**不能加 saturate()**。
+   *    早前系统 Acrylic 已经做过一次饱和，再叠 saturate(150%) 会把桌面彩度放大
+   *    （实测原本偏灰的壁纸透上来变成明显的紫粉/冷蓝）。现在虽然不走 Acrylic 了，
+   *    但结论不变：目标图的饱和度本就**低于**源图，不需要任何 boost。
+   */
+  backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale)));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale)));
+}
+
+/* ==================================================================
+   标题栏：透明、无底色，右侧放自绘交通灯
+   ------------------------------------------------------------------
+   参考图的标题栏是**透明的**（壁纸直接透过来），只有内容浮在上面。
+   所以这里去掉 --bg-titlebar 的实色，只留一点底部发丝线。
+
+   🔴 高度**必须和普通主题一致**（都用 --titlebar-h = 25px），不能自己加高。
+   踩过的坑：这里一度写成 38px，结果整条标题栏把下面的 .header 往下推了 13px，
+   而左侧的 .sidebar-brand 是固定 --header-h(56px) —— 左右两侧的「第一行」
+   基线差出 13px，看起来就是「右侧顶部空着一块、和左边没对齐」。
+   左右对齐靠的是两边的行高严格相等，任何一侧私自加高都会破功。
+   ================================================================== */
+
+:root[data-theme='glass'] .titlebar {
+  /*
+   * 标题栏在 .app-body **之外**（它是 shell 的第一个 flex 子项），
+   * 所以拿不到 app-body 那层玻璃底 —— 必须自己给一份，
+   * 否则它会露出一条比下面更透的带子、和面板断开。
+   *
+   * 🔴🔴 2026-10-13 修正（小杨反馈「上方这一行太深黑了，和整个主题违和」）：
+   *    原来这里写的是「比面板稍实一点」= α × 0.92，但**方向错了**。
+   *    为什么错：标题栏是**唯一直接压在 .glass-backdrop 上、且没有被
+   *    .main 那层纸灰面板托着**的一条 —— 下面内容区看到的是
+   *    「壁纸 → .main 的纸灰(α≈0.20) → 卡片」，而标题栏看到的是
+   *    「壁纸 → 自己那层(α≈0.18)」。纸灰是**浅色**，α 越大越**亮**；
+   *    标题栏 α 越大 → 越接近壁纸本色（这台机器上是深紫粉游戏壁纸）
+   *    → 顶上压出一条**深带**，和下面被纸灰垫亮的浅色区断层。
+   *    实测截图：标题栏那条明显比内容区暗一大截，正是这个原因。
+   *
+   *    ⇒ 修法：不再用「× 系数」，而是**直接把 .main 的纸灰拿过来当底**
+   *      （--g-panel，α 与内容区面板**完全一致**）。这样标题栏与下面
+   *      同色同亮度，只在模糊程度上略有差别 —— 这才是「和下面协调」。
+   *      ⚠️ 别再退回系数写法：系数在「深壁纸」上必然偏暗，在「浅壁纸」
+   *        上又必然偏亮，都不如直接用面板色稳。
+   */
+  background: var(--g-panel);
+  /*
+   * 🔴 标题栏必须自己带一层 backdrop-filter。
+   *    它在 .app-body **之外**（shell 的第一个 flex 子项），拿不到那层的模糊；
+   *    不给的话，顶栏会是一条「清晰但薄白」的带子 —— 桌面细节从这条透上来，
+   *    夹在中间反而比内容区更扎眼。
+   *    ×1.25 让它比内容区略糊，观感上更像一块厚玻璃。
+   */
+  backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale) * 1.25));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale) * 1.25));
+  border-bottom: 1px solid var(--border);
+  /*
+   * 交通灯要贴右上角，给右侧留出按钮区。
+   * 22px ≈ 三个圆点(13×3) + 间距(8×2) + 右侧留白(14) − 一点余量。
+   */
+  padding-right: 76px;
+  position: relative;
+  z-index: 2;
+  height: var(--titlebar-h);
+}
+
+/*
+ * 交通灯三色圆点（macOS 风格）。
+ * 🔴 由 App.tsx 在玻璃主题下渲染 <div class="window-lights"> 三个 <button>。
+ *    玻璃主题无边框、系统按钮不存在，这三个就是唯一的窗口控制入口。
+ */
+:root[data-theme='glass'] .window-lights {
+  position: absolute;
+  top: 0;
+  right: 14px;
+  /* 跟着标题栏高度走（见上面那条注释：别写死） */
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag; /* 按钮要能点，不能当拖拽区 */
+}
+
+:root[data-theme='glass'] .window-light {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  padding: 0;
+  border: none;
+  cursor: pointer;
+  /* 未悬停时是实心圆点（参考图就是三个实心彩点，不显示符号） */
+  background: currentColor;
+  transition: filter var(--t-fast);
+  position: relative;
+}
+
+:root[data-theme='glass'] .window-light:hover {
+  filter: brightness(1.12);
+}
+
+:root[data-theme='glass'] .window-light:active {
+  filter: brightness(0.9);
+}
+
+/* 三种颜色（参考图顺序：红 / 黄 / 绿） */
+:root[data-theme='glass'] .window-light.min {
+  color: var(--g-tl-yellow);
+}
+:root[data-theme='glass'] .window-light.max {
+  color: var(--g-tl-green);
+}
+:root[data-theme='glass'] .window-light.close {
+  color: var(--g-tl-red);
+}
+
+/*
+ * 悬停时圆点里浮出符号（macOS 的行为：不悬停不显示符号）。
+ * 用 CSS 画而不是塞 svg，省得为三个小点引一堆图标。
+ */
+:root[data-theme='glass'] .window-light::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+:root[data-theme='glass'] .window-lights:hover .window-light::after {
+  opacity: 0.62;
+}
+/* 最小化：一横 */
+:root[data-theme='glass'] .window-light.min::after {
+  background: linear-gradient(#3a2800, #3a2800) center / 7px 1.6px no-repeat;
+}
+/* 最大化：一个「+」形的方框 */
+:root[data-theme='glass'] .window-light.max::after {
+  background: linear-gradient(#0a3a12, #0a3a12) center / 7px 1.6px no-repeat,
+    linear-gradient(#0a3a12, #0a3a12) center / 1.6px 7px no-repeat;
+}
+/* 关闭：一个「×」 */
+:root[data-theme='glass'] .window-light.close::after {
+  background:
+    linear-gradient(#4a0a06, #4a0a06) center / 7px 1.6px no-repeat,
+    linear-gradient(#4a0a06, #4a0a06) center / 1.6px 7px no-repeat;
+  transform: rotate(45deg);
+}
+
+/* ==================================================================
+   分层：侧栏 / 内容区 / 卡片
+   ------------------------------------------------------------------
+   玻璃的层次靠「白度递增」表达（越靠前的元素越白），而不是靠色相差别 ——
+   参考图里搜索框、卡片、面板就是三层不同白度的玻璃。
+   ================================================================== */
+
+:root[data-theme='glass'] .sidebar {
+  /*
+   * 侧栏比内容区略实一档（--bg-sidebar 的 α 比 --bg-panel 高），
+   * 靠「白度差」而不是色相差分层 —— 参考图里侧栏/内容区就是两层玻璃。
+   *
+   * ⚠️ 这里**不再叠一层 backdrop-filter**：父级 .app-body 已经对整个
+   *    面板做了 blur，嵌套 backdrop-filter 会让侧栏把自己的父背景再糊一遍，
+   *    既看不出差别又平白多一次 GPU 合成（玻璃主题本来就吃 GPU）。
+   *    「侧栏更糊」这个意图改由 .app-body 统一承担，层次靠底色差表达。
+   */
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  color: var(--text-primary); /* 继承链：见本文件配色注释 */
+}
+
+:root[data-theme='glass'] .header {
+  /*
+   * 顶栏给一层很薄的玻璃底（比内容区面板稍实一点点），不是纯透明。
+   *
+   * 🔴 为什么不能像原神那样直接 transparent：
+   *    页头文字（--text-primary 深墨）压在**真实桌面**上 —— 桌面什么颜色都有可能，
+   *    如果是深色壁纸，深墨字就彻底糊了。给一层极薄的白（≈0.06 实际值）之后，
+   *    文字有了稳定的底，同时桌面依然明确透得出来。
+   *    ⚠️ 这一层是「文字可读性的下限」，别再往下压 —— 深色壁纸下会糊。
+   */
+  background: rgba(242, 244, 248, calc(max(var(--glass-alpha), var(--glass-veil)) * 0.34));
+  border-bottom: 1px solid var(--border);
+}
+
+:root[data-theme='glass'] .main {
+  /*
+   * 🔴 这一层是「看得见的那块大玻璃」，**灰底 + 模糊都在这里**。
+   *
+   *    改前是 `background: transparent`：那是因为旧方案指望系统 Acrylic 提供
+   *    底色与模糊，渲染层只负责"别挡着"。改成「模拟玻璃」后，Acrylic 没了，
+   *    底色必须自己给 —— 否则壁纸直接透上来、面板一片透明，字也读不清。
+   *
+   *    用 --g-panel（中性纸灰 + 保底透明度），与卡片同族但更薄一档：
+   *    卡片离眼睛更近，理应更实（见 .card 的 --g-panel-2）。
+   */
+  background: var(--g-panel);
+  /*
+   * blur 与 .app-body 等量（×1）：它俩是同一块「大玻璃」的两层，
+   * 只不过 .app-body 负责糊、.main 负责盖。
+   * ⚠️ 两层 blur 是**累加**的，所以这里给满会显得比卡片糊 —— 这是对的，
+   *    卡片（×0.8）本来就该比周围略清晰（离眼近）。
+   */
+  backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale)));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale)));
+}
+
+/*
+ * 卡片：最白的一层玻璃（参考图里那三个功能块的底）。
+ * 白度比面板高 0.14，边上一圈白高光，四角大圆角。
+ */
+:root[data-theme='glass'] .card {
+  background: var(--g-panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    var(--shadow-md);
+  /*
+   * 卡片自己也来一层（×0.8）：它是「更靠近眼睛的一层玻璃」，
+   * blur 比大玻璃略轻 —— 桌面细节到这里已经是大色块，卡片里可以稍微清楚些。
+   * ⚠️ 别再加大：卡片叠在 .main 的 blur 之上，两层一叠是**累加**效果，
+   *    给大了卡片内部反而比周围糊，层次会反过来。
+   */
+  backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale) * 0.8));
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * var(--glass-scale) * 0.8));
+  color: var(--text-primary);
+}
+
+/* 卡片标题：玻璃主题不做角饰，保持干净 */
+:root[data-theme='glass'] .card-title {
+  color: var(--text-primary);
+}
+
+/* 输入框 / 下拉：做成「凹进去的玻璃槽」 */
+:root[data-theme='glass'] .input,
+:root[data-theme='glass'] .select,
+:root[data-theme='glass'] .textarea,
+:root[data-theme='glass'] .device-select {
+  background: var(--g-inset);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+:root[data-theme='glass'] .input::placeholder,
+:root[data-theme='glass'] .textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* 侧栏导航项：悬停/选中是一层更白的玻璃，选中项左侧一道蓝条 */
+:root[data-theme='glass'] .nav-item:hover {
+  background: var(--bg-hover);
+}
+
+:root[data-theme='glass'] .nav-item.active {
+  background: var(--bg-active);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+:root[data-theme='glass'] .nav-icon {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+:root[data-theme='glass'] .nav-item:hover .nav-icon,
+:root[data-theme='glass'] .nav-item.active .nav-icon {
+  opacity: 1;
+}
+
+/* 设备数徽标：蓝底白字 */
+:root[data-theme='glass'] .nav-count {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 品牌名用主色，和参考图的标题着色呼应 */
+:root[data-theme='glass'] .brand-text strong {
+  color: var(--text-primary);
+}
+
+/* 顶栏页面标题 */
+:root[data-theme='glass'] .header-title {
+  color: var(--text-primary);
+}
+
+/* 分段控件：选中项蓝底白字 */
+:root[data-theme='glass'] .segmented {
+  background: var(--g-inset);
+  border-color: var(--border-strong);
+}
+
+:root[data-theme='glass'] .segmented-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 主按钮沿用主色 */
+:root[data-theme='glass'] .btn-primary {
+  color: #fff;
+}
+
+/*
+ * 滚动条：玻璃主题下用半透明白，实色会切成一条硬边。
+ */
+:root[data-theme='glass'] ::-webkit-scrollbar-thumb {
+  background: rgba(120, 132, 152, 0.42);
+  background-clip: content-box;
+}
+
+:root[data-theme='glass'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 132, 152, 0.62);
+  background-clip: content-box;
+}

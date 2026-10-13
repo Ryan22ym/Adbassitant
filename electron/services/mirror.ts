@@ -77,8 +77,10 @@ export async function startMirror(options: MirrorOptions): Promise<MirrorStatus>
   // 音频
   if (options.noAudio !== false) args.push('--no-audio');
 
-  // 输入：sdk 键盘模式 + 文本优先，兼容中文输入法
-  const keyboard = options.keyboard ?? 'sdk';
+  // 输入：默认 uhid（模拟真实 HID 键盘）—— sdk 模式只支持 ASCII、过不了设备
+  // 的中文输入法（IME 组合），uhid 才能数字 / 英文 / 中文 IME 全都能输。
+  // --prefer-text 只在 sdk 模式下有意义（把字母当文本事件注入），uhid 下不加。
+  const keyboard = options.keyboard ?? 'uhid';
   args.push('--keyboard', keyboard);
   if (keyboard === 'sdk') args.push('--prefer-text');
 

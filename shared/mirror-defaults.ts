@@ -17,5 +17,10 @@ export const MIRROR_DEFAULTS: Omit<MirrorOptions, 'serial'> = {
   noAudio: true,
   stayAwake: true,
   alwaysOnTop: false,
-  keyboard: 'sdk',
+  /*
+   * 默认用 uhid：scrcpy 的 sdk 模式只能注入 ASCII、走不了设备的中文输入法
+   * （IME 组合字符），uhid 模拟真实 HID 键盘，数字 / 英文 / 中文 IME 都能输。
+   * 少数老设备若 uhid 权限受限，可在投屏页改回「标准 SDK」。
+   */
+  keyboard: 'uhid',
 };

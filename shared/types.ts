@@ -1000,8 +1000,14 @@ export type AccentId = 'cangqiong' | 'cloud' | 'mist' | 'ocean' | 'ink';
  * ⚠️ 扩展位：以后要加「崩铁」（紫调 + 机械几何）这类主题，按同样的三步走 ——
  *   ① 这里加一个 id；② 抄一份 theme-genshin.css 改名、换配色与装饰件；
  *   ③ SettingsPage 的 THEME_MODES 数组加一项。不必动 global.css，也不会影响现有主题。
+ *
+ * 'glass'（v1.1.13）：**透明玻璃**主题 —— 和 genshin 同一级，但改造范围比它大得多：
+ *   它不只换配色，还要求**窗口本身**透明无边框（整窗 Acrylic 磨砂），
+ *   所以除了 CSS，主进程也要配合（见 electron/main.ts 的 applyGlassWindow）。
+ *   两个专属参数（glassOpacity / glassRoughness）存在 AppSettings 里。
+ *   它同样没有深色变体：选中即锁定这一套外观。
  */
-export type ThemeId = 'light' | 'dark' | 'system' | 'genshin';
+export type ThemeId = 'light' | 'dark' | 'system' | 'genshin' | 'glass';
 
 export interface AppSettings {
   theme: ThemeId;
@@ -1099,6 +1105,47 @@ export interface AppSettings {
    * 正好和「只针对 USB 真机」的边界对上。
    */
   mirroredSerials: string[];
+
+  /*
+   * 透明玻璃主题（v1.1.13）的两个专属参数。
+   *
+   * 它们是**主题的组成部分**（像原神的金色一样），只在 theme='glass' 时生效，
+   * 设置页也只在选中玻璃主题时才显示这两条滑杆。
+   *
+   * 存进 settings.json 而不是只放内存：调好一个手感不容易，下次启动必须还在。
+   */
+  /**
+   * 玻璃面板的不透明度（0~100，越大越实）。
+   *
+   * 它控制的是**渲染层自己画的那层半透明白底**（CSS 变量 --glass-alpha），
+   * 不是 Windows Acrylic 本身 —— Acrylic 的模糊是系统画的，透明度由窗口的
+   * backgroundMaterial 决定，页面改不了。两者叠加才是最终观感：
+   *   alpha 小 → 桌面透上来多，通透；alpha 大 → 面板偏实、字更清楚。
+   *
+   * ⚠️ 它只管「白纱多厚」，**不管「糊不糊」**；后者是 glassRoughness。
+   *    默认 20（小杨 2026-10-13 对着 iOS 26 控制中心目标图定稿）。
+   *    面板底是**中性纸灰 #f2f4f8**（不是纯白）——实测纯白 α=0.30 会把画面
+   *    刷到亮度 159，而目标只有 132，偏亮 20%；中性灰能在压饱和的同时不推高亮度。
+   */
+  glassOpacity: number;
+  /**
+   * 桌面的高斯模糊程度（0~100，越大越糊、越像毛玻璃）。
+   *
+   * 映射到渲染层的 `backdrop-filter: blur(Npx)`（CSS 变量 --glass-blur，
+   * 系数 0.6、上限 60px）。小杨的核心要求是「能看到大致色彩，看不了这么清楚」，
+   * 靠的就是这一项。
+   *
+   * 🔴 默认 **45**（≈27px）是对着目标图实测标定的，不是拍脑袋：
+   *    目标图（546px 宽的截图）用高斯模糊逐档逼近，blur ≈ 12px 时细节量与目标
+   *    最吻合（目标高频能量 1.23 vs 12px 时 1.27）。按 1184 CSS px 的窗口换算
+   *    → 约 26px → 滑杆 ≈ 43 档，取整 45。
+   *   · 45 左右 → 桌面是「一团团柔和色块」，看得出偏绿/偏蓝的大色域，认不出细节（默认）
+   *   · 20 以下 → 会重新认出桌面上的图标、文字轮廓
+   *   · 0      → 完全不模糊（清晰玻璃，另一种味道）
+   *   · 100    → 60px，连色域边界都糊掉，只剩一整片单色
+   * ⚠️ 它作用于**窗口合成的背景**，桌面最外层的那点磨砂仍由系统 Acrylic 提供。
+   */
+  glassRoughness: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1507,6 +1554,50 @@ export const IPC = {
 
   /* 窗口外观（v1.1.3）：标题栏是自绘的，底色要跟着主题色走 */
   WINDOW_SET_TITLEBAR: 'window:setTitlebar',
+  /*
+   * 透明玻璃主题（v1.1.13）：切换整窗的 Acrylic（毛玻璃）与透明形态。
+   *
+   * 为什么必须走主进程：CSS 的 backdrop-filter 只能模糊「渲染层看得见的像素」，
+   * **看不见桌面壁纸**。要做出参考图那种「后面就是桌面」的效果，只能靠系统级
+   * 的 backgroundMaterial:'acrylic'，而这个 API 属于 BrowserWindow。
+   */
+  WINDOW_SET_GLASS: 'window:setGlass',
+  /*
+   * 抓一张桌面壁纸（v1.1.13 修正）。
+   *
+   * 🔴 为什么需要它（2026-10-13 定案）：
+   *    原本指望系统级 `backgroundMaterial:'acrylic'` 把真实桌面透上来并磨砂。
+   *    但实测 + 上游 issue #48440 确认：**Electron 在 Windows 10 上不会渲染
+   *    Acrylic**（它内部调的是 Win11 的 API，没有回落到 Win10 的
+   *    SetWindowCompositionAttribute）。本机 Windows 10 build 19045 正是如此：
+   *    窗口 transparent:true 之后是**完全透明、零模糊**，壁纸原样清晰透出。
+   *
+   *    更糟的是 CSS 的 backdrop-filter 在透明窗口里也失效 —— 它只能模糊
+   *    「页面内、自己背后的像素」，而透明窗口背后是空的。于是**两套模糊全是死的**，
+   *    这就是「模糊滑杆怎么拖都没反应」的根本原因。
+   *
+   *    ⇒ 改成「模拟玻璃」：主进程用 desktopCapturer 抓一张真实桌面图，
+   *      交给渲染层铺在**页面内最底层**（.glass-backdrop）。这样：
+   *        · 壁纸仍然是用户真实桌面（不是编造的），观感目标不变；
+   *        · backdrop-filter 背后终于有「实底」，**滑杆立刻生效**；
+   *        · 不再依赖 Acrylic，Win10 / Win11 表现一致。
+   *      窗口同时改回**不透明**（transparent:false）—— 页面自己就画满了。
+   *
+   * 返回：data URL（PNG）。失败时回 null，渲染层退回纯色背景（不崩）。
+   */
+  WINDOW_GRAB_DESKTOP: 'window:grabDesktop',
+  /*
+   * 窗口控制（v1.1.13）：自绘的交通灯三个按钮用。
+   *
+   * 玻璃主题下窗口是无边框的（frame:false），系统标题栏与它自带的
+   * 最小化/最大化/关闭按钮**全部消失** —— 只能由渲染层画三个圆点，
+   * 再回调主进程执行真实动作。普通主题下系统按钮仍在，不会用到这三个。
+   */
+  WINDOW_MINIMIZE: 'window:minimize',
+  WINDOW_TOGGLE_MAX: 'window:toggleMax',
+  WINDOW_CLOSE: 'window:close',
+  /** 查询窗口是否最大化（自绘按钮要据此切换图标 / 行为） */
+  WINDOW_IS_MAX: 'window:isMax',
 
   /* 增量更新（v1.0.7） */
   UPDATE_CONTEXT: 'update:context',

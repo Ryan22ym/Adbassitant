@@ -13,6 +13,41 @@ import type {
 import { cloneDefaultUiConf, type UiConf } from '@shared/ui-conf';
 
 /* ------------------------------------------------------------------ */
+/* 透明玻璃主题的参数映射（v1.1.13）                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 把两个玻璃参数写到 <html> 的内联变量上。
+ *
+ * 🔴 为什么写内联 style 而不是加一个 class：
+ *    这是**连续可调**的值（滑杆），class 只能枚举有限档位。内联变量的优先级
+ *    高于 theme-glass.css 里 :root 上的默认值，所以一写就生效。
+ *
+ * 数值映射（两个滑杆都是 0~100 的整数，取值来自设置页）：
+ *
+ *   opacity → --glass-alpha  0.08 ~ 0.95
+ *     「白纱盖多厚」。不给 0：全透明时面板彻底消失，连字都看不见，用户会以为
+ *     界面坏了。不给 1：全不透明就不是玻璃了，那不是这个主题要的东西。
+ *
+ *   roughness → --glass-blur  0 ~ 60px
+ *     「高斯模糊多强」。系数 0.6 是对着小杨给的目标图**实测标定**出来的（2026-10-13）：
+ *       目标图是 iOS 26 控制中心，在 546px 宽的截图上 blur ≈ 12px，
+ *       换算到本机 1184 CSS px 的窗口 ≈ 26px —— 也就是滑杆 **43 档**。
+ *       所以默认取 45 档（27px），正落在目标观感上。
+ *     ⚠️ 之前是 `* 0.48` / 上限 48px：滑杆 100 → 48px 已经糊成一片纯色，
+ *        后段全是死区（拖了看不出变化）。改成 0.6 / 60px 后，
+ *        整条滑杆 0~100 都能看出渐变，且 100 档仍保留「完全糊掉」的用法。
+ *     ⚠️ 0 档 = 真的**零模糊**（清晰玻璃，能看到桌面图标，也保留这个用法）。
+ */
+function paintGlassVars(opacity: number, roughness: number): void {
+  const a = Math.min(0.95, Math.max(0.08, opacity / 100));
+  const blur = Math.min(60, Math.max(0, roughness * 0.6));
+  const el = document.documentElement;
+  el.style.setProperty('--glass-alpha', a.toFixed(3));
+  el.style.setProperty('--glass-blur', `${blur.toFixed(1)}px`);
+}
+
+/* ------------------------------------------------------------------ */
 /* 全局应用状态                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -155,8 +190,25 @@ interface AppState {
    * 选中它就锁定这一套外观，不参与浅/深切换。
    * 'system' 是早期遗留值，在 setSettings 里就已经解析成 light/dark，这里不出现。
    */
-  theme: 'light' | 'dark' | 'genshin';
-  applyTheme: (t: 'light' | 'dark' | 'genshin') => void;
+  theme: 'light' | 'dark' | 'genshin' | 'glass';
+  applyTheme: (t: 'light' | 'dark' | 'genshin' | 'glass') => void;
+
+  /*
+   * 透明玻璃主题的两个可调参数（v1.1.13）。
+   *
+   * 与 theme / accent 同一个套路：真值持久化在主进程 settings.json，
+   * 这里只是界面上的那份缓存。改的时候除了落盘，还要立刻写进 DOM ——
+   * 拖滑杆必须实时看到效果，等 IPC 往返就卡了。
+   *
+   * 玻璃主题生效时才有意义；其它主题下这两个值不参与渲染（CSS 只认
+   * data-theme='glass'），但**仍然保留**，这样来回切主题手感不丢。
+   */
+  glassOpacity: number;
+  glassRoughness: number;
+  /** 同时设置两个玻璃参数（滑杆拖动时用；写 DOM + 落盘由调用方决定） */
+  setGlass: (opacity: number, roughness: number) => void;
+  /** 只写 DOM 不落盘（拖动过程中用，松手才落盘，避免刷爆 settings.json） */
+  paintGlass: (opacity: number, roughness: number) => void;
 
   /* 主题色（决定 --accent 与整套界面底色，见 shared/types.ts 的 AccentId） */
   accent: AccentId;
@@ -280,11 +332,32 @@ export const useApp = create<AppState>((set, get) => ({
     set({ settings });
     // 同步主题到 DOM（不写回 settings，避免循环）
     // 'system'（只有老配置文件里才可能有）与任何未知值都按浅色处理
-    const t: 'light' | 'dark' | 'genshin' =
-      settings.theme === 'dark' ? 'dark' : settings.theme === 'genshin' ? 'genshin' : 'light';
+    const t: 'light' | 'dark' | 'genshin' | 'glass' =
+      settings.theme === 'dark'
+        ? 'dark'
+        : settings.theme === 'genshin'
+          ? 'genshin'
+          : settings.theme === 'glass'
+            ? 'glass'
+            : 'light';
     if (get().theme !== t) {
       document.documentElement.setAttribute('data-theme', t);
       set({ theme: t });
+    }
+    /*
+     * 透明玻璃主题：把落盘的两个参数写进 DOM，并让主进程切整窗 Acrylic。
+     *
+     * 🔴 这两件事必须在这里做（不能只在设置页做）：
+     *    启动时 App 拉一次 settings 就会走到这里，用户上次选的玻璃主题
+     *    要能「开箱即玻璃」；只在设置页做的话，别处切主题就漏了。
+     * 🔴 主进程那份由 App.tsx 的 effect 统一同步（它还要处理启动首帧），
+     *    这里只负责 DOM 变量。
+     */
+    const go = settings.glassOpacity ?? 20;
+    const gr = settings.glassRoughness ?? 45;
+    paintGlassVars(go, gr);
+    if (get().glassOpacity !== go || get().glassRoughness !== gr) {
+      set({ glassOpacity: go, glassRoughness: gr });
     }
     /*
      * 主题色同理：主进程持久化的那份才是真值。
@@ -322,6 +395,13 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().theme === theme) return;
     document.documentElement.setAttribute('data-theme', theme);
     set({ theme });
+    /*
+     * 透明玻璃主题要动**窗口本身**（无边框 + Acrylic），这只有主进程能做。
+     * 所以切主题时顺带通知一声：进玻璃开 Acrylic，离开玻璃关掉。
+     * ⚠️ 退出玻璃时窗口的 transparent/frame 改不回去（Electron 限制），
+     *    主进程那边用不透明背景色兜底，详见 electron/main.ts 的 applyGlassWindow。
+     */
+    void window.adbApi?.setGlass(theme === 'glass');
   },
 
   /* ---------------- 主题色 ---------------- */
@@ -330,6 +410,20 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().accent === accent) return;
     document.documentElement.setAttribute('data-accent', accent);
     set({ accent });
+  },
+
+  /* ---------------- 透明玻璃参数 ---------------- */
+  glassOpacity: 20,
+  glassRoughness: 45,
+
+  paintGlass: (opacity, roughness) => {
+    paintGlassVars(opacity, roughness);
+    set({ glassOpacity: opacity, glassRoughness: roughness });
+  },
+
+  setGlass: (opacity, roughness) => {
+    paintGlassVars(opacity, roughness);
+    set({ glassOpacity: opacity, glassRoughness: roughness });
   },
 
   /* ---------------- 左侧功能栏收起 ---------------- */

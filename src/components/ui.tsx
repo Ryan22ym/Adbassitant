@@ -306,6 +306,63 @@ export function Segmented<T extends string>({
 }
 
 /* ------------------------------------------------------------------ */
+/* Slider（v1.1.13，透明玻璃主题的参数滑杆）                            */
+/* ------------------------------------------------------------------ */
+
+interface SliderProps {
+  /** 当前值（整数） */
+  value: number;
+  /** 取值闭区间，默认 0~100 */
+  min?: number;
+  max?: number;
+  /** 步长，默认 1（两个玻璃参数都是整数百分比） */
+  step?: number;
+  /** 拖动过程中实时回调（写 DOM，让画面立刻跟手） */
+  onInput: (v: number) => void;
+  /**
+   * 松手（change）时回调 —— 落盘用它。
+   * 🔴 落盘和实时变更是**两条路**：拖动时每像素都写一次 settings.json
+   *    会把磁盘刷爆（而且是同步 IPC），所以拖动只写 DOM，松手才存。
+   */
+  onCommit?: (v: number) => void;
+  disabled?: boolean;
+}
+
+/**
+ * 一条原生 <input type="range">，外加右侧的数值读数。
+ *
+ * 用原生 range 而不是自绘：键盘可调、无障碍支持都是白送的，
+ * 而这个控件只需要「拖得动、看得见当前值」两件事。
+ */
+export function Slider({
+  value,
+  min = 0,
+  max = 100,
+  step = 1,
+  onInput,
+  onCommit,
+  disabled,
+}: SliderProps) {
+  return (
+    <div className={`slider ${disabled ? 'is-disabled' : ''}`}>
+      <input
+        className="slider-range"
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onInput(Number(e.target.value))}
+        onPointerUp={(e) => onCommit?.(Number((e.target as HTMLInputElement).value))}
+        onKeyUp={(e) => onCommit?.(Number((e.target as HTMLInputElement).value))}
+      />
+      <span className="slider-value">{value}</span>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Badge                                                               */
 /* ------------------------------------------------------------------ */
 

@@ -10,6 +10,11 @@ import './pages/pages.css';
  * 以后加新主题（比如崩铁）在下面接着排即可。
  */
 import './styles/theme-genshin.css';
+/*
+ * 透明玻璃主题（v1.1.13）：同样必须排在 global.css 之后，理由同上。
+ * 它与原神是两套互斥的 data-theme 值，谁后加载不影响对方（永远只有一个命中）。
+ */
+import './styles/theme-glass.css';
 
 // 首屏先按浅色初始化，避免主题属性缺失导致样式闪烁；
 // 随后 App 读取持久化设置再覆盖。

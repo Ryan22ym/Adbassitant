@@ -359,6 +359,89 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* ---------------- Slider ---------------- */
+
+/*
+ * 参数滑杆（v1.1.13，透明玻璃主题用）。
+ * 结构：一条 range 占满剩余宽度 + 右侧固定宽度的数值读数。
+ */
+.slider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /*
+   * 🔴 width:100% + min-width:0 两个都要：
+   *    .field 是 flex 列容器，子项默认 align-items:stretch 会撑满，但
+   *    <input type=range> 有一个**默认的固有宽度**（约 129px 起，随内容变化），
+   *    在 flex 行里它会把整行撑得比容器宽，把右侧的数值读数顶出卡片外。
+   *    width:100% 把整行的宽度钉死在容器上，min-width:0 允许 range 被压缩。
+   */
+  width: 100%;
+  min-width: 0;
+}
+
+.slider.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.slider-range {
+  /*
+   * flex:1 + width:0 才是「占满剩余空间」的正确写法：
+   * 只给 flex:1 时，range 的固有宽度会参与计算，结果还是撑破容器；
+   * 把基准宽度归零，它才会乖乖只吃剩下的部分（右侧读数的位置才稳）。
+   */
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 22px;
+  /* 去掉浏览器默认外观，轨道与滑块全部自己画（默认样式在各主题下都不搭） */
+  -webkit-appearance: none;
+  appearance: none;
+  background: none;
+  cursor: pointer;
+}
+
+/* 轨道：一条内凹的槽，用 --bg-inset 在不同主题下自动适配 */
+.slider-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+}
+
+/* 滑块：实心主色圆点 */
+.slider-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  /* 让圆点纵向居中于 4px 的轨道：-(15-4)/2 = -5.5px */
+  margin-top: -6px;
+  transition: transform var(--t-fast);
+}
+
+.slider-range:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+.slider-range:active::-webkit-slider-thumb {
+  transform: scale(1.04);
+}
+
+.slider-value {
+  flex: none;
+  min-width: 34px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
 /* ---------------- Badge ---------------- */
 
 .badge {
