@@ -293,14 +293,24 @@
   flex: none;
 }
 
-/* 有新版可更新时挂在「设置」上的小圆点（不打扰，只是提示） */
-.nav-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--r-full);
-  background: var(--danger, #e24b4a);
+/*
+ * 有新版可更新时挂在「设置」上的一枚红字「New」（v1.1.12）。
+ *
+ * 🔴 **就是纯文字，前面不带红点、自身不带底色**（用户两次明确要求：
+ * 「new只有字就行了，不要有白底」→「那不要红点吧」）。
+ * 所以：`padding` / `border-radius` / `background` / `border` 一律不加，
+ * 也**不要**再补一枚 `.nav-dot` —— 同一件事只说一遍，多一个圆点就是噪音。
+ *
+ * 用语义色变量，三套主题各自的深浅两档都已经调过，别写死颜色。
+ */
+.nav-new {
   flex: none;
-  margin-left: 2px;
+  margin-left: 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  color: var(--danger, #e24b4a);
 }
 
 /* ---- 收起态：导航只留图标 ---- */
@@ -340,12 +350,13 @@
   text-align: center;
 }
 
-/* 「有新版」小圆点同理，挪到收起态的右上角 */
-.sidebar.collapsed .nav-dot {
-  position: absolute;
-  top: 5px;
-  right: 8px;
-  margin-left: 0;
+/*
+ * 56px 的收起态放不下文字，New 直接不参与布局。
+ * ⚠️ 红点也去掉了（见上），所以**收起态下侧栏没有任何版本提示** —— 这是刻意的取舍：
+ * 宁可收起时安静，也不要为了「提示还在」再塞一枚圆点回去。
+ */
+.sidebar.collapsed .nav-new {
+  display: none;
 }
 
 /*

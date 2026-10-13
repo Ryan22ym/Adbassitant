@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Card, Button, Badge, Empty, Segmented, Input, Field, Select, Notice, Switch } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
+import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
 import type { LogcatFilter, LogcatLevel, LogcatLine, LogcatStatus } from '@shared/types';
 
@@ -51,7 +52,18 @@ export default function LogcatPage() {
   /* 视图 */
   const [lines, setLines] = useState<LogcatLine[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [showFilter, setShowFilter] = useState(false);
+  /*
+   * 界面配置（Conf/panels.json 的 logcat.*）：
+   *   stream —— 日志主体默认展开还是收起；
+   *   filter —— 过滤面板默认展不展开。
+   * 配置是启动后异步到位的，所以过滤面板这里要跟一次（useState 初值只取一次）。
+   */
+  const streamOpen = usePanelOpen('logcat', 'stream');
+  const filterConfOpen = usePanelOpen('logcat', 'filter');
+  const [showFilter, setShowFilter] = useState(filterConfOpen);
+  useEffect(() => {
+    setShowFilter(filterConfOpen);
+  }, [filterConfOpen]);
   const [paused, setPaused] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -259,6 +271,8 @@ export default function LogcatPage() {
   return (
     <>
       <Card
+        collapsible
+        defaultOpen={streamOpen}
         padding={false}
         title="实时 Logcat"
         subtitle="流式抓取设备日志，支持级别 / TAG / 关键字 / 进程过滤，可一键保存"

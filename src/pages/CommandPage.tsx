@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Card, Button, Input, Notice, Badge, Empty } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
+import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
 import type { CommandResult } from '@shared/types';
 
@@ -38,6 +39,11 @@ export default function CommandPage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const outRef = useRef<HTMLDivElement>(null);
+
+  /* 界面配置：三块功能块的默认展开态（Conf/panels.json 的 command.*） */
+  const inputOpen = usePanelOpen('command', 'input');
+  const commonOpen = usePanelOpen('command', 'common');
+  const outputOpen = usePanelOpen('command', 'output');
 
   const run = async (raw?: string) => {
     const command = (raw ?? cmd).trim();
@@ -92,6 +98,8 @@ export default function CommandPage() {
   return (
     <>
       <Card
+        collapsible
+        defaultOpen={inputOpen}
         title="命令输入"
         subtitle={
           current
@@ -122,7 +130,7 @@ export default function CommandPage() {
         </div>
       </Card>
 
-      <Card title="常用命令" subtitle="点击直接执行">
+      <Card collapsible defaultOpen={commonOpen} title="常用命令" subtitle="点击直接执行">
         <div className="quick-grid">
           {QUICK_COMMANDS.map((q) => (
             <button
@@ -140,6 +148,8 @@ export default function CommandPage() {
       </Card>
 
       <Card
+        collapsible
+        defaultOpen={outputOpen}
         title="执行结果"
         extra={
           history.length > 0 ? (

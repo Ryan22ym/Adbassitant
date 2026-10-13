@@ -127,6 +127,7 @@ import {
 } from './services/packages';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
+import { getUiConf, resolveUiConfDir } from './services/ui-conf';
 import { applyAutoLaunch } from './services/auto-launch';
 import {
   applyUpdate,
@@ -1162,6 +1163,16 @@ export function registerIpc() {
   /* ---------------- 设置 ---------------- */
 
   ipcMain.handle(IPC.SETTINGS_GET, wrap(() => getSettings()));
+
+  /*
+   * 界面配置（Conf/*.json）。
+   *
+   * 只读、带缓存 —— 「改完文件重启生效」是有意的：文件监听要处理半截写入、
+   * 编辑器另存为等边角情况，而这类配置本来就很少改。
+   * 解析与合并的容错全在 shared/ui-conf.ts，这里不会抛错。
+   */
+  ipcMain.handle(IPC.CONF_GET, wrap(() => getUiConf()));
+  ipcMain.handle(IPC.CONF_DIR, wrap(() => resolveUiConfDir()));
 
   /*
    * 保存设置。带 `autoLaunch` 的这次要落到系统（注册表启动项），并且**以系统回读为准** ——

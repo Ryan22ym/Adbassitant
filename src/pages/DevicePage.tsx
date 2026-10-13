@@ -3,6 +3,7 @@ import { Card, Button, Badge, Empty, Notice, Input, Field, Segmented, Spinner } 
 import { DevicePicker, deviceLabel } from '@/components/layout';
 import { QuickActionBar, QuickActionsDialog } from '@/components/QuickActions';
 import { useApp, useOnlineCount } from '@/store/app';
+import { useFeature, usePanelOpen } from '@/lib/ui-conf';
 import { call, tryCall } from '@/lib/ipc';
 import { formatBytes } from '@/lib/format';
 import { mirrorOptionsFor, isMirroringDevice } from '@/lib/mirror';
@@ -15,6 +16,13 @@ export default function DevicePage() {
   const setScanning = useApp((s) => s.setScanning);
   const scanning = useApp((s) => s.scanning);
   const toast = useApp((s) => s.toast);
+
+  /* 界面配置（Conf）：三块功能块的默认展开态 + 两个入口开关 */
+  const listOpen = usePanelOpen('device', 'list');
+  const detailOpen = usePanelOpen('device', 'detail');
+  const wirelessOpen = usePanelOpen('device', 'wireless');
+  const wirelessOn = useFeature('device', 'wireless');
+  const quickActionsOn = useFeature('device', 'quickActions');
 
   const [detail, setDetail] = useState<DeviceDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -169,6 +177,8 @@ export default function DevicePage() {
     <>
       {/* 设备列表 */}
       <Card
+        collapsible
+        defaultOpen={listOpen}
         title="已连接设备"
         subtitle={`共 ${devices.length} 台，其中 ${onlineCount} 台就绪`}
         extra={
@@ -237,7 +247,7 @@ export default function DevicePage() {
                     </Badge>
                   </span>
                   {/* 快捷动作：清数据 / 回桌面再进 / 杀进程重进…（本机可配置，见「更多」菜单） */}
-                  {ready && (
+                  {ready && quickActionsOn && (
                     <QuickActionBar
                       serial={d.serial}
                       ready={ready}
@@ -299,6 +309,8 @@ export default function DevicePage() {
       {/* 设备详情 */}
       {currentSerial && (
         <Card
+          collapsible
+          defaultOpen={detailOpen}
           title="设备详情"
           subtitle={currentSerial}
           extra={loadingDetail ? <Spinner /> : undefined}
@@ -328,8 +340,9 @@ export default function DevicePage() {
         </Card>
       )}
 
-      {/* 无线连接 */}
-      <Card title="无线连接" subtitle="通过 WiFi 连接设备">
+      {/* 无线连接（可用 Conf/features.json 的 device.wireless 整块关掉） */}
+      {wirelessOn && (
+        <Card collapsible defaultOpen={wirelessOpen} title="无线连接" subtitle="通过 WiFi 连接设备">
         <div className="col">
           <Segmented
             value={tcpMode}
@@ -394,7 +407,8 @@ export default function DevicePage() {
             </div>
           )}
         </div>
-      </Card>
+        </Card>
+      )}
 
       {/* 快捷动作配置（设备行左侧那块按钮的来源） */}
       <QuickActionsDialog

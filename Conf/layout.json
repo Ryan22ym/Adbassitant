@@ -1,0 +1,33 @@
+{
+  "_说明": "界面布局：左侧功能栏与工具页标签的顺序。改完保存，重启程序生效。",
+  "_用法": "只写想调的项即可 —— 列出来的按你的顺序排前面，没列出的按默认顺序接在后面。",
+  "_sidebar_ids": "device=设备 / mirror=投屏 / tools=常用工具 / apps=应用管理 / logcat=实时Logcat / weaknet=弱网模拟 / clicker=自动连点器 / command=命令终端 / settings=设置",
+  "_tool_tab_ids": "screenshot=截图 / record=录屏 / resolution=分辨率 / monkey=Monkey测试 / apk=安装安装包 / file=文件传输 / logcat=Logcat导出",
+  "_enabled": true,
+  "sidebar": {
+    "order": [
+      "device",
+      "mirror",
+      "tools",
+      "apps",
+      "logcat",
+      "weaknet",
+      "clicker",
+      "command",
+      "settings"
+    ],
+    "defaultCollapsed": false,
+    "rememberCollapsed": true
+  },
+  "toolTabs": {
+    "order": [
+      "screenshot",
+      "record",
+      "resolution",
+      "monkey",
+      "apk",
+      "file",
+      "logcat"
+    ]
+  }
+}

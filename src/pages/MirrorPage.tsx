@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Card, Button, Field, Input, Select, Switch, Notice, Badge, Segmented } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
+import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
 import { formatDuration } from '@/lib/format';
 import { MIRROR_DEFAULTS, loadMirrorPrefs, saveMirrorPrefs } from '@/lib/mirror';
@@ -23,6 +24,11 @@ export default function MirrorPage() {
   const mirror = useApp((s) => s.mirror);
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
+
+  /* 界面配置：三块功能块的默认展开态（Conf/panels.json 的 mirror.*） */
+  const statusOpen = usePanelOpen('mirror', 'status');
+  const qualityOpen = usePanelOpen('mirror', 'quality');
+  const hotkeysOpen = usePanelOpen('mirror', 'hotkeys');
 
   // 初值取「上次用过的参数」（与快速投屏按钮同源），没调过则是默认均衡档
   const [initial] = useState(() => loadMirrorPrefs());
@@ -110,6 +116,8 @@ export default function MirrorPage() {
     <>
       {/* 状态卡 */}
       <Card
+        collapsible
+        defaultOpen={statusOpen}
         title="投屏状态"
         extra={
           mirror.running ? (
@@ -164,7 +172,7 @@ export default function MirrorPage() {
       </Card>
 
       {/* 参数配置 */}
-      <Card title="画质与行为" subtitle="启动前可调整，重启投屏后生效">
+      <Card collapsible defaultOpen={qualityOpen} title="画质与行为" subtitle="启动前可调整，重启投屏后生效">
         <div className="col">
           <Field label="画质预设">
             <Select
@@ -252,7 +260,7 @@ export default function MirrorPage() {
       </Card>
 
       {/* 快捷键说明 */}
-      <Card title="快捷键">
+      <Card collapsible defaultOpen={hotkeysOpen} title="快捷键">
         <div className="shortcut-grid">
           <SC keys="Ctrl + H" desc="返回 / Home" />
           <SC keys="Ctrl + B" desc="返回键" />

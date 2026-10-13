@@ -1,0 +1,40 @@
+{
+  "_说明": "功能入口总开关：true=显示，false=该入口在界面上不出现（代码保留，随时可以改回来）。",
+  "_用法": "关掉只是「藏起来」，不是禁用功能；直接访问该页面地址仍然可用。",
+  "_注意": "关掉的管理类入口不影响程序运行；但把 settings 也关掉后，就只能靠改这个文件恢复了。",
+  "_enabled": true,
+  "features": {
+    "nav": {
+      "device": true,
+      "mirror": true,
+      "tools": true,
+      "apps": true,
+      "logcat": true,
+      "weaknet": true,
+      "clicker": true,
+      "command": true,
+      "settings": true
+    },
+    "tools": {
+      "screenshot": true,
+      "record": true,
+      "resolution": true,
+      "monkey": true,
+      "apk": true,
+      "file": true,
+      "logcat": true
+    },
+    "device": {
+      "wireless": true,
+      "quickActions": true
+    },
+    "clicker": {
+      "record": true
+    },
+    "settings": {
+      "autoMirror": true,
+      "update": true,
+      "envCheck": true
+    }
+  }
+}

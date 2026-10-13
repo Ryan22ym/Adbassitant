@@ -13,6 +13,7 @@ import {
   Spinner,
 } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
+import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
 import { formatBytes } from '@/lib/format';
 import type {
@@ -108,6 +109,13 @@ const MODE_TITLE: Record<string, string> = {
 export default function WeakNetworkPage() {
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
+
+  /* 界面配置：五块功能块的默认展开态（Conf/panels.json 的 weaknet.*） */
+  const paramsOpen = usePanelOpen('weaknet', 'params');
+  const scopeOpen = usePanelOpen('weaknet', 'scope');
+  const presetsOpen = usePanelOpen('weaknet', 'presets');
+  const deviceOpen = usePanelOpen('weaknet', 'device');
+  const howtoOpen = usePanelOpen('weaknet', 'howto');
 
   const [params, setParams] = useState<WeakNetParams>(DEFAULT_PARAMS);
   const [presets, setPresets] = useState<WeakNetPreset[]>([]);
@@ -649,6 +657,8 @@ export default function WeakNetworkPage() {
         {/* ---------------- 左：参数配置 ---------------- */}
         <div className="wn-col">
           <Card
+            collapsible
+            defaultOpen={paramsOpen}
             title="弱网参数"
             subtitle="分别控制上行（设备发出）与下行（设备接收）"
             extra={
@@ -810,7 +820,7 @@ export default function WeakNetworkPage() {
             </div>
           </Card>
 
-          <Card title="生效范围与时长">
+          <Card collapsible defaultOpen={scopeOpen} title="生效范围与时长">
             <div className="col">
               <div className="grid-2">
                 <Field label="持续时长" hint="秒，0 = 直到手动停止">
@@ -863,6 +873,8 @@ export default function WeakNetworkPage() {
         {/* ---------------- 右：预设与设备能力 ---------------- */}
         <div className="wn-col wn-col-side">
           <Card
+            collapsible
+            defaultOpen={presetsOpen}
             title="参数预设"
             subtitle="保存当前参数，随时一键复用"
             extra={<Badge tone="default">{presets.length} 个</Badge>}
@@ -902,6 +914,8 @@ export default function WeakNetworkPage() {
           </Card>
 
           <Card
+            collapsible
+            defaultOpen={deviceOpen}
             title="设备能力"
             subtitle="设备侧 VPN 的就绪情况"
             extra={
@@ -940,7 +954,7 @@ export default function WeakNetworkPage() {
             )}
           </Card>
 
-          <Card title="实现原理与限制">
+          <Card collapsible defaultOpen={howtoOpen} title="实现原理与限制">
             <div className="col" style={{ gap: 8 }}>
               <p className="text-dim" style={{ lineHeight: 1.7 }}>
                 <strong>上行</strong>指设备发出的流量（上传、请求），

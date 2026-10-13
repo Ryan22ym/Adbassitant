@@ -150,6 +150,9 @@ const IPC = {
   LOG_DIR: 'log:dir',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+  /* 界面配置（Conf/*.json，见 shared/ui-conf.ts） */
+  CONF_GET: 'conf:get',
+  CONF_DIR: 'conf:dir',
   /* 窗口外观（v1.1.3）：自绘标题栏的底色 */
   WINDOW_SET_TITLEBAR: 'window:setTitlebar',
 
@@ -464,6 +467,14 @@ const api = {
   /* 设置 */
   getSettings: () => invoke(IPC.SETTINGS_GET),
   setSettings: (patch: any) => invoke(IPC.SETTINGS_SET, patch),
+
+  /*
+   * 界面配置（Conf/*.json）：顺序 / 显隐 / 默认展开。
+   * 启动时读一次，契约与出厂默认见 shared/ui-conf.ts。
+   */
+  getUiConf: () => invoke(IPC.CONF_GET),
+  /** 用户可改的那份 Conf 目录绝对路径（用于「打开配置文件夹」） */
+  uiConfDir: () => invoke(IPC.CONF_DIR),
 
   /* 自绘标题栏（v1.1.3）：把当前主题色下的顶栏底色交给主进程 */
   setTitlebar: (opts: { color: string; symbolColor?: string; height?: number }) =>

@@ -1,6 +1,6 @@
 {
   "name": "adb-assistant",
-  "version": "1.1.11",
+  "version": "1.1.12",
   "description": "ADB 桌面助手 - 现代化 Android 设备管理工具",
   "main": "dist-electron/electron/main.js",
   "author": "xiaoyang",
@@ -39,6 +39,7 @@
     "check:update:installed": "node scripts/check-update.cjs --installed --expect-version 1.1.11 --out out-v1.1.11",
     "check:update-online": "node scripts/check-update-online.cjs",
     "check:update-online-ui": "node scripts/check-update-online-ui.cjs",
+    "check:update-badge": "python scripts/run-electron.py scripts/check-update-badge-ui.cjs --watch ui-shots/_update-badge.log --until \"UPDATE BADGE UI CHECK DONE\" --timeout 300",
     "check:asar-stage": "python scripts/run-electron.py scripts/check-asar-stage.cjs --watch ui-shots/_asar-stage.log --until \"ASAR STAGE CHECK DONE\" --timeout 300",
     "check:helper-launch": "python scripts/check-helper-launch.py",
     "make:update": "python scripts/make-update.py --out out-v1.1.11",
@@ -61,6 +62,7 @@
     "check:packages": "node scripts/check-packages.cjs",
     "check:packages-ui": "python scripts/run-electron.py scripts/check-packages-ui.cjs --watch ui-shots/_packages-ui.log --until \"PACKAGES UI CHECK DONE\" --timeout 600",
     "check:sidebar": "python scripts/run-electron.py scripts/check-sidebar.cjs --watch ui-shots/_sidebar.log --until \"SIDEBAR CHECK DONE\" --timeout 300",
+    "check:ui-conf": "python scripts/run-electron.py scripts/check-ui-conf.cjs --watch ui-shots/_ui-conf.log --until \"UI CONF CHECK DONE\" --timeout 300",
     "check:genshin": "python scripts/run-electron.py scripts/check-genshin.cjs --watch ui-shots/_genshin.log --until \"GENSHIN CHECK DONE\" --timeout 300",
     "check:titlebar-scrim": "python scripts/run-electron.py scripts/check-titlebar-scrim.cjs --watch ui-shots/_titlebar-scrim.log --until \"TITLEBAR SCRIM CHECK DONE\" --timeout 240",
     "check:titlebar-symbol": "python scripts/run-electron.py scripts/check-titlebar-symbol.cjs --watch ui-shots/_titlebar-symbol.log --until \"TITLEBAR SYMBOL CHECK DONE\" --timeout 300",

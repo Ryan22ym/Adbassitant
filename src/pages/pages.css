@@ -1406,6 +1406,56 @@
 
 /* ---- 关于页 · 软件更新（v1.0.7） ---- */
 
+/*
+ * 「软件更新」标题行右侧操作区的宽度分配（v1.1.12）。
+ *
+ * 这一行现在最多要塞五个元素（红点+New、版本徽标、检查更新、下载并更新、更新目录）。
+ * Card 的默认规则是 `.card-extra { flex: none }` —— 不参与收缩，内容一多就直接顶出
+ * 卡片右边被裁掉（实测就是这么被切的）。这里只对这张卡片放宽：
+ *   · 右侧操作区允许收缩 + 换行；
+ *   · 左侧「软件更新 / 当前版本」不参与压缩，宁可让按钮换行也别把标题挤没。
+ * 用 .update-card 限定作用域，别的卡片布局一个字不动。
+ */
+.update-card .card-extra {
+  flex: 0 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.update-card .card-extra > .row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.update-card .card-head-text {
+  flex: 0 0 auto;
+}
+
+/*
+ * 「软件更新」标题行上的红字 New（v1.1.12）。
+ *
+ * 挂在标题行（即卡片收起的**更新栏**）里：这一行本来就常驻可见，收起态下用户也扫得到。
+ * 以前只有一枚绿色徽标说明版本号，「有没有新版本」要靠读字，这里补一枚红字，跟侧栏「设置」同一套语言。
+ *
+ * 🔴 **纯红字：前面不带红点、自身不带底色/边框**（用户两次明确要求：
+ * 「new只有字就行了，不要有白底」→「那不要红点吧」）。
+ * 所以 `padding` / `border-radius` / `background` / `border` 一律不加，也别把 `.update-new-dot` 加回来。
+ * 这一行右侧已经挤着绿色「新版本 vX」徽标，再来色块或圆点就是两个标签打架；纯红字最轻。
+ *
+ * 颜色一律走语义色变量：三套主题（浅/深/原神）各自的深浅两档都调过，写死颜色必翻车。
+ * 没了自己的底色，红字直接压在**卡片底色**上 —— 对比度按卡片算（实测浅 4.83 / 深 4.65 / 原神 2.75）。
+ */
+.update-new {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--danger, #e24b4a);
+}
+
 .update-note {
   font-size: 12px;
   line-height: 1.7;

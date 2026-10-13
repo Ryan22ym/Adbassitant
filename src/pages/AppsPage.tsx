@@ -10,6 +10,7 @@ import {
   Spinner,
 } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
+import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
 import { formatBytes, formatTime } from '@/lib/format';
 import PackageManager from './PackageManager';
@@ -39,6 +40,10 @@ interface Row {
 export default function AppsPage() {
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
+
+  /* 界面配置：左右两块功能块的默认展开态（Conf/panels.json 的 apps.*） */
+  const listOpen = usePanelOpen('apps', 'list');
+  const detailOpen = usePanelOpen('apps', 'detail');
 
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [favorites, setFavorites] = useState<FavoriteApp[]>([]);
@@ -320,6 +325,8 @@ export default function AppsPage() {
       <div className="apps-layout">
         {/* ---------------- 左：应用列表 ---------------- */}
         <Card
+          collapsible
+          defaultOpen={listOpen}
           title="应用列表"
           subtitle={
             loading
@@ -434,6 +441,8 @@ export default function AppsPage() {
 
         {/* ---------------- 右：详情与操作 ---------------- */}
         <Card
+          collapsible
+          defaultOpen={detailOpen}
           title="应用详情"
           subtitle={selected ? selected : '从左侧选择应用查看详情'}
           padding={false}

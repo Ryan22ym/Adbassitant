@@ -6,6 +6,7 @@ import { useApp } from './store/app';
 import { toHexColor, dimOver } from './lib/color';
 import { IPC } from '@shared/types';
 import type { UpdateResult, UpdateCheckResult, AabSigningInfo } from '@shared/types';
+import type { UiConf } from '@shared/ui-conf';
 
 import DevicePage from './pages/DevicePage';
 import MirrorPage from './pages/MirrorPage';
@@ -71,6 +72,7 @@ export default function App() {
   const appendLog = useApp((s) => s.appendLog);
   const setMirror = useApp((s) => s.setMirror);
   const setSettings = useApp((s) => s.setSettings);
+  const setUiConf = useApp((s) => s.setUiConf);
   const applyTheme = useApp((s) => s.applyTheme);
   const setLogs = useApp((s) => s.setLogs);
   // 标题栏配色要跟着这两个走（见下面同步给主进程的 effect）
@@ -90,6 +92,18 @@ export default function App() {
        * 所以这里只发起、不await，等其它初始化跑完再收结果。
        */
       const handshake = window.adbApi.updateHandshake();
+
+      /*
+       * 界面配置（Conf/*.json）先取。
+       *
+       * 侧栏顺序、工具页标签、各页功能块的默认展开收起都由它决定 ——
+       * store 的初值是出厂默认，所以没改过配置的用户这里拿到的是同一份，界面不抖；
+       * 改过配置的用户会看到一次「按出厂布局画完 → 切到自己的布局」，启动瞬间可以接受。
+       */
+      const confRes = await window.adbApi.getUiConf();
+      if (alive && confRes?.ok && confRes.data) {
+        setUiConf(confRes.data as UiConf);
+      }
 
       const res = await window.adbApi.getSettings();
       if (alive && res.ok && res.data) {

@@ -1494,6 +1494,17 @@ export const IPC = {
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
 
+  /*
+   * 界面配置（Conf/*.json，v1.1.12）。
+   *
+   * 与 SETTINGS_* 是两条不同的路：settings 是用户在界面里改的运行时偏好，
+   * CONF 是用户手改文件调整的界面骨架（顺序 / 显隐 / 默认展开），启动时只读一次。
+   * 契约与出厂默认见 shared/ui-conf.ts。
+   */
+  CONF_GET: 'conf:get',
+  /** 返回用户可改的那份 Conf 目录绝对路径（设置页「打开配置文件夹」用） */
+  CONF_DIR: 'conf:dir',
+
   /* 窗口外观（v1.1.3）：标题栏是自绘的，底色要跟着主题色走 */
   WINDOW_SET_TITLEBAR: 'window:setTitlebar',
 

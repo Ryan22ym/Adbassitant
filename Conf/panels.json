@@ -1,0 +1,71 @@
+{
+  "_说明": "各页面功能块的默认展开(true)还是收起(false)。收起后点标题仍可展开，不影响功能。",
+  "_用法": "只想调某一块就改那一个值；没写的项按默认值。整份不想要时把 _enabled 改成 false。",
+  "_id对照": "id 是「页面.功能块」，对照见同目录 README.md 的表格。",
+  "_enabled": true,
+  "panels": {
+    "device": {
+      "list": true,
+      "detail": true,
+      "wireless": true
+    },
+    "mirror": {
+      "status": true,
+      "quality": true,
+      "hotkeys": false
+    },
+    "tools": {
+      "screenshot": true,
+      "record": true,
+      "resolution": true,
+      "monkey": false,
+      "apk": true,
+      "file": true,
+      "logcat": true
+    },
+    "apps": {
+      "list": true,
+      "detail": true
+    },
+    "logcat": {
+      "stream": true,
+      "filter": true
+    },
+    "weaknet": {
+      "params": true,
+      "scope": true,
+      "presets": false,
+      "device": true,
+      "howto": false
+    },
+    "clicker": {
+      "steps": true,
+      "preview": true,
+      "params": true,
+      "library": true
+    },
+    "command": {
+      "input": true,
+      "common": true,
+      "output": true
+    },
+    "logs": {
+      "stream": true
+    },
+    "packages": {
+      "workdir": true,
+      "rules": false,
+      "filter": true,
+      "list": true
+    },
+    "settings": {
+      "appearance": true,
+      "about": true,
+      "dirs": false,
+      "update": true,
+      "logs": false,
+      "env": false,
+      "autoMirror": true
+    }
+  }
+}

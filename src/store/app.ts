@@ -10,6 +10,7 @@ import type {
   SigningMode,
   AccentId,
 } from '@shared/types';
+import { cloneDefaultUiConf, type UiConf } from '@shared/ui-conf';
 
 /* ------------------------------------------------------------------ */
 /* 全局应用状态                                                        */
@@ -135,6 +136,16 @@ interface AppState {
   /* 设置 */
   settings: AppSettings | null;
   setSettings: (s: AppSettings) => void;
+
+  /*
+   * 界面配置（Conf/*.json，v1.1.12）。
+   *
+   * 初值取**出厂默认**而不是 null，是为了首屏就有东西可画：IPC 是异步的，
+   * 如果初值是 null，导航与各功能块会先按「什么都没有」渲染一帧再跳变。
+   * 用户没改过配置时，主进程回来的结果与初值相同，界面一次都不会抖。
+   */
+  uiConf: UiConf;
+  setUiConf: (c: UiConf) => void;
 
   /*
    * 主题（v1.1.11 起是三选一，同一级，见 shared/types.ts 的 ThemeId）。
@@ -285,12 +296,25 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().accent !== a) set({ accent: a });
 
     /*
-     * 左侧功能栏的收起状态同样以主进程那份为准（老 settings.json 没这个字段，
-     * `!!undefined` 会落到展开，正好是想要的默认值）。
+     * 左侧功能栏的收起状态。
+     *
+     * 默认取主进程记住的那份（settings.json，老文件里没这个字段时
+     * `!!undefined` 落到展开，正好是想要的默认值）。
+     * 但 Conf 里 `rememberCollapsed: false` 时改用 Conf 的 `defaultCollapsed` ——
+     * 那是「每次启动都回到固定形态、不记住手动切换」的语义。
      */
-    const collapsed = !!settings.sidebarCollapsed;
+    const sidebarConf = get().uiConf.layout.sidebar;
+    const collapsed = sidebarConf.rememberCollapsed
+      ? !!settings.sidebarCollapsed
+      : sidebarConf.defaultCollapsed;
     if (get().sidebarCollapsed !== collapsed) set({ sidebarCollapsed: collapsed });
   },
+
+  /* ---------------- 界面配置（Conf） ---------------- */
+  // 出厂默认的深拷贝：防止任何一处误改把「默认值」本身改掉（与 settings.ts 里
+  // 对象字段都给新副本同一个理由）
+  uiConf: cloneDefaultUiConf(),
+  setUiConf: (uiConf) => set({ uiConf }),
 
   /* ---------------- 主题 ---------------- */
   theme: 'light',

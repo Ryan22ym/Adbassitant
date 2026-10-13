@@ -1,6 +1,8 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useApp } from '@/store/app';
+import { useUiConf } from '@/lib/ui-conf';
+import { featureOnOf } from '@shared/ui-conf';
 import { Badge } from './ui';
 import { Icon } from './icons';
 import brandIcon from '@/assets/app-icon.png';
@@ -15,17 +17,29 @@ import './layout.css';
 /* 侧边导航                                                            */
 /* ------------------------------------------------------------------ */
 
-const NAV = [
-  { to: '/', label: '设备', icon: Icon.device, exact: true },
-  { to: '/mirror', label: '投屏', icon: Icon.mirror },
-  { to: '/tools', label: '常用工具', icon: Icon.tools },
-  { to: '/apps', label: '应用管理', icon: Icon.apps },
-  { to: '/logcat', label: '实时 Logcat', icon: Icon.logcat },
-  { to: '/weaknet', label: '弱网模拟', icon: Icon.weaknet },
-  { to: '/clicker', label: '自动连点器', icon: Icon.clicker },
-  { to: '/command', label: '命令终端', icon: Icon.terminal },
-  { to: '/settings', label: '设置', icon: Icon.settings },
-];
+/**
+ * 侧栏功能的**定义表**（id → 去哪、叫什么、什么图标）。
+ *
+ * 这里只放「这个功能是什么」；**顺序与显隐都不在这里**，而是由 Conf/layout.json
+ * 的 `sidebar.order`（顺序）和 Conf/features.json 的 `nav.*`（显隐）决定 ——
+ * 以前顺序是写死的数组，用户想调就得改代码重编。
+ *
+ * ⚠️ id 清单是白名单（shared/ui-conf.ts 的 SIDEBAR_IDS），三处必须同名：
+ *    这里、SIDEBAR_IDS、以及 Conf/README.md 的对照表。
+ */
+type NavDef = { to: string; label: string; icon: React.ReactNode; exact?: boolean };
+
+const NAV_DEFS: Record<string, NavDef> = {
+  device: { to: '/', label: '设备', icon: Icon.device, exact: true },
+  mirror: { to: '/mirror', label: '投屏', icon: Icon.mirror },
+  tools: { to: '/tools', label: '常用工具', icon: Icon.tools },
+  apps: { to: '/apps', label: '应用管理', icon: Icon.apps },
+  logcat: { to: '/logcat', label: '实时 Logcat', icon: Icon.logcat },
+  weaknet: { to: '/weaknet', label: '弱网模拟', icon: Icon.weaknet },
+  clicker: { to: '/clicker', label: '自动连点器', icon: Icon.clicker },
+  command: { to: '/command', label: '命令终端', icon: Icon.terminal },
+  settings: { to: '/settings', label: '设置', icon: Icon.settings },
+};
 
 export function Sidebar() {
   const devices = useApp((s) => s.devices);
@@ -40,16 +54,31 @@ export function Sidebar() {
   const brandMark = theme === 'genshin' ? brandIconGenshin : brandIcon;
 
   /*
+   * 导航项 = 定义表 ∩ Conf。
+   * 顺序取 layout.sidebar.order（主进程已把非法 id 滤掉、缺失项补在后面），
+   * 再用 features.nav 把关掉的入口摘掉。
+   */
+  const conf = useUiConf();
+  const navItems = conf.layout.sidebar.order
+    .map((id) => ({ id, def: NAV_DEFS[id] }))
+    .filter((x): x is { id: string; def: NavDef } => !!x.def)
+    .filter((x) => featureOnOf(conf, 'nav', x.id));
+
+  /*
    * 收起 / 展开左侧功能栏。
    *
    * 先改内存状态让界面立刻响应，再异步写回主进程做持久化 ——
    * 不 await、也不因写入失败回滚：写不进去（磁盘只读等）最多是下次启动弹回展开，
    * 不该让按钮点了没反应。
+   *
+   * `rememberCollapsed: false` 时不写盘：用户要的就是「每次启动都回到配置里的形态」，
+   * 写了反而会把下次启动的状态带歪。
    */
+  const rememberCollapsed = conf.layout.sidebar.rememberCollapsed;
   const toggleCollapsed = () => {
     const next = !collapsed;
     setSidebarCollapsed(next);
-    window.adbApi.setSettings({ sidebarCollapsed: next });
+    if (rememberCollapsed) window.adbApi.setSettings({ sidebarCollapsed: next });
   };
 
   const statusText = onlineCount > 0 ? `${onlineCount} 台设备在线` : '未连接设备';
@@ -88,7 +117,7 @@ export function Sidebar() {
       </div>
 
       <nav className="sidebar-nav">
-        {NAV.map((item) => (
+        {navItems.map(({ def: item }) => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -103,7 +132,10 @@ export function Sidebar() {
               <span className="nav-count">{onlineCount}</span>
             )}
             {item.to === '/settings' && updateAvailable && (
-              <span className="nav-dot" title="有新版本可以更新" />
+              /* 只说「是版本更新」这一件事：一枚红字 New（收起态塞不下，那行隐藏） */
+              <span className="nav-new" title="有新版本可以更新">
+                New
+              </span>
             )}
           </NavLink>
         ))}

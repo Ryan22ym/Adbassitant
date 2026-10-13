@@ -7,6 +7,7 @@ import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
 import { startMirror } from './services/mirror';
 import { getSettings } from './services/settings';
+import { getUiConf, resolveUiConfDir } from './services/ui-conf';
 import { pickAutoConnectTarget } from './services/auto-connect';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
 import { refreshShortcutIcons } from './services/shortcuts';
@@ -315,6 +316,25 @@ app.whenReady().then(() => {
   }
 
   registerIpc();
+
+  /*
+   * 界面配置（Conf/*.json）启动时读一次并预热缓存。
+   *
+   * 放在 registerIpc 之后、建窗口之前：渲染层一挂载就会来取，
+   * 这里先读一次能把「配置目录在哪 / 哪份文件没读进来」写进运行日志 ——
+   * 用户找不到 Conf 文件夹时，日志里那一行就是答案。
+   */
+  try {
+    const conf = getUiConf();
+    log(
+      'info',
+      '配置',
+      `界面配置目录：${resolveUiConfDir()}（导航 ${conf.layout.sidebar.order.length} 项，` +
+        `工具标签 ${conf.layout.toolTabs.order.length} 项）`,
+    );
+  } catch (e) {
+    log('warn', '配置', `界面配置读取异常，已按出厂默认运行：${(e as Error).message}`);
+  }
 
   // 设置一变就同步托盘：开关就是「程序要不要常驻」的开关，必须立刻生效
   setSettingsChangedHook(() => syncTray());

@@ -15,6 +15,7 @@ import {
 } from '@/components/ui';
 import { Icon, StepIcon } from '@/components/icons';
 import { useApp, useCurrentDevice } from '@/store/app';
+import { useFeature, usePanelOpen } from '@/lib/ui-conf';
 import { call, tryCall } from '@/lib/ipc';
 import type {
   ClickerScript,
@@ -92,6 +93,12 @@ export default function AutoClickerPage() {
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
 
+  /* 界面配置：四块功能块的默认展开态 + 「手机端录制」标签的开关 */
+  const stepsOpen = usePanelOpen('clicker', 'steps');
+  const paramsOpen = usePanelOpen('clicker', 'params');
+  const libraryOpen = usePanelOpen('clicker', 'library');
+  const recordOn = useFeature('clicker', 'record');
+
   const [tab, setTab] = useState<Tab>('script');
   const [scripts, setScripts] = useState<ClickerScript[]>([]);
   const [draft, setDraft] = useState<ClickerScript>(emptyScript);
@@ -101,6 +108,11 @@ export default function AutoClickerPage() {
   const [keycodes, setKeycodes] = useState<{ code: number; label: string }[]>([]);
   const [status, setStatus] = useState<ClickerStatus | null>(null);
   const [progress, setProgress] = useState<ClickerProgress | null>(null);
+
+  /* 「手机端录制」被 Conf 关掉时，若当前正停在这个标签上，退回脚本编辑 */
+  useEffect(() => {
+    if (!recordOn && tab === 'record') setTab('script');
+  }, [recordOn, tab]);
 
   /* ---------------- 录制面板状态 ---------------- */
   const [recInfo, setRecInfo] = useState<RecorderInfo | null>(null);
@@ -622,7 +634,8 @@ export default function AutoClickerPage() {
         onChange={setTab}
         options={[
           { value: 'script', label: '脚本编辑与回放' },
-          { value: 'record', label: '手机端录制' },
+          /* 「手机端录制」可用 Conf/features.json 的 clicker.record 整块关掉 */
+          ...(recordOn ? [{ value: 'record' as Tab, label: '手机端录制' }] : []),
         ]}
       />
 
@@ -723,6 +736,8 @@ export default function AutoClickerPage() {
             {/* ---------------- 左：步骤表 ---------------- */}
             <div className="ck-col">
               <Card
+                collapsible
+                defaultOpen={stepsOpen}
                 title="步骤"
                 subtitle="从上到下依次执行"
                 extra={
@@ -782,7 +797,7 @@ export default function AutoClickerPage() {
 
             {/* ---------------- 右：参数 / 脚本库 ---------------- */}
             <div className="ck-col ck-col-side">
-              <Card title="执行参数" subtitle="倍速只影响等待与间隙，不缩短长按/滑动时长">
+              <Card collapsible defaultOpen={paramsOpen} title="执行参数" subtitle="倍速只影响等待与间隙，不缩短长按/滑动时长">
                 <div className="col">
                   <Field label="循环次数" hint="0 = 无限循环，直到手动停止">
                     <Input
@@ -867,6 +882,8 @@ export default function AutoClickerPage() {
               </Card>
 
               <Card
+                collapsible
+                defaultOpen={libraryOpen}
                 title="脚本库"
                 subtitle="保存在本机，随时复用"
                 extra={<Badge tone="default">{scripts.length} 个</Badge>}
@@ -1533,6 +1550,8 @@ const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
  * 真要实时看画面请用投屏页。
  */
 function ScreenPreview({ serial, onPick }: ScreenPreviewProps) {
+  /* 界面配置：预览图的默认展开态（Conf/panels.json 的 clicker.preview） */
+  const open = usePanelOpen('clicker', 'preview');
   const [frame, setFrame] = useState<PreviewFrame | null>(null);
   // 默认**暂停**：进页面时不自动连抓屏幕（screencap 每秒一次会白占带宽，
   // 而且画面自己动起来容易干扰「对着画面点坐标」这件事）。要实时看就点一下按钮。
@@ -1584,6 +1603,8 @@ function ScreenPreview({ serial, onPick }: ScreenPreviewProps) {
 
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="屏幕预览图"
       subtitle="点画面任意位置 = 追加一个点击步骤"
       extra={

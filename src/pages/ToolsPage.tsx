@@ -13,6 +13,8 @@ import {
   Spinner,
 } from '@/components/ui';
 import { useApp, useCurrentDevice, type InstallSigningOverride } from '@/store/app';
+import { usePanelOpen, useUiConf } from '@/lib/ui-conf';
+import { featureOnOf } from '@shared/ui-conf';
 import { call } from '@/lib/ipc';
 import { collectApks, installApkFiles, kindOf } from '@/lib/install';
 import { formatBytes, fileName } from '@/lib/format';
@@ -32,6 +34,23 @@ import type {
 } from '@shared/types';
 
 type Tab = 'screenshot' | 'record' | 'resolution' | 'monkey' | 'apk' | 'file' | 'logcat';
+
+/**
+ * 「常用工具」页各标签的名称表。
+ *
+ * ⚠️ 这里只有「这个标签叫什么」；**顺序与显隐由 Conf 决定** ——
+ *    Conf/layout.json 的 `toolTabs.order` 管顺序，Conf/features.json 的 `tools.*` 管显隐。
+ *    id 白名单见 shared/ui-conf.ts 的 TOOL_TAB_IDS（三处必须同名）。
+ */
+const TAB_DEFS: Record<Tab, string> = {
+  screenshot: '截图',
+  record: '录屏',
+  resolution: '分辨率',
+  monkey: 'Monkey 测试',
+  apk: '安装安装包',
+  file: '文件传输',
+  logcat: 'Logcat 导出',
+};
 
 /** 三种安装方式的说明（界面提示 + 让用户明白数据会不会被清） */
 const MODE_HINT: Record<InstallMode, string> = {
@@ -54,8 +73,25 @@ const APKS_MODE_HINT: Record<InstallMode, string> = {
 };
 
 export default function ToolsPage() {
-  const [tab, setTab] = useState<Tab>('screenshot');
   const current = useCurrentDevice();
+  const conf = useUiConf();
+
+  /* 可见标签 = 配置里的顺序 ∩ 定义表 ∩ 未被 features 关掉 */
+  const tabs = conf.layout.toolTabs.order.filter(
+    (k): k is Tab => k in TAB_DEFS && featureOnOf(conf, 'tools', k),
+  );
+  const firstTab = tabs[0];
+  const tabKey = tabs.join(',');
+
+  /*
+   * 当前标签必须始终落在 tabs 里。
+   * 用户改 Conf 重启后（某个标签被关掉、或第一个标签换了）不该停在空白页上。
+   */
+  const [tab, setTab] = useState<Tab | undefined>(firstTab);
+  useEffect(() => {
+    if (!tab || !tabs.includes(tab)) setTab(firstTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabKey, tab]);
 
   return (
     <>
@@ -65,37 +101,37 @@ export default function ToolsPage() {
         </Notice>
       )}
 
-      <Card padding={false}>
-        <div className="tabs">
-          {(
-            [
-              ['screenshot', '截图'],
-              ['record', '录屏'],
-              ['resolution', '分辨率'],
-              ['monkey', 'Monkey 测试'],
-              ['apk', '安装安装包'],
-              ['file', '文件传输'],
-              ['logcat', 'Logcat 导出'],
-            ] as [Tab, string][]
-          ).map(([k, label]) => (
-            <button
-              key={k}
-              className={`tab ${tab === k ? 'active' : ''}`}
-              onClick={() => setTab(k)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </Card>
+      {tabs.length === 0 ? (
+        <Notice tone="warn">
+          「常用工具」的所有入口都被关闭了。打开程序目录下的
+          <span className="mono"> Conf\features.json</span>，把 <span className="mono">tools</span>
+          里对应项改回 <span className="mono">true</span> 后重启即可。
+        </Notice>
+      ) : (
+        <>
+          <Card padding={false}>
+            <div className="tabs">
+              {tabs.map((k) => (
+                <button
+                  key={k}
+                  className={`tab ${tab === k ? 'active' : ''}`}
+                  onClick={() => setTab(k)}
+                >
+                  {TAB_DEFS[k]}
+                </button>
+              ))}
+            </div>
+          </Card>
 
-      {tab === 'screenshot' && <ScreenshotPanel />}
-      {tab === 'record' && <RecordPanel />}
-      {tab === 'resolution' && <ResolutionPanel />}
-      {tab === 'monkey' && <MonkeyPanel />}
-      {tab === 'apk' && <ApkPanel />}
-      {tab === 'file' && <FilePanel />}
-      {tab === 'logcat' && <LogcatExportPanel />}
+          {tab === 'screenshot' && <ScreenshotPanel />}
+          {tab === 'record' && <RecordPanel />}
+          {tab === 'resolution' && <ResolutionPanel />}
+          {tab === 'monkey' && <MonkeyPanel />}
+          {tab === 'apk' && <ApkPanel />}
+          {tab === 'file' && <FilePanel />}
+          {tab === 'logcat' && <LogcatExportPanel />}
+        </>
+      )}
     </>
   );
 }
@@ -131,8 +167,12 @@ function ScreenshotPanel() {
     }
   };
 
+  const open = usePanelOpen('tools', 'screenshot');
+
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="屏幕截图"
       subtitle="直接从设备读取画面，自动保存为 PNG"
       extra={
@@ -248,8 +288,12 @@ function RecordPanel() {
     }
   };
 
+  const open = usePanelOpen('tools', 'record');
+
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="屏幕录制"
       subtitle="在设备端录制，结束后自动拉取到电脑"
       extra={record ? <Badge tone="danger" dot>录制中</Badge> : undefined}
@@ -415,8 +459,12 @@ function ResolutionPanel() {
     }
   };
 
+  const open = usePanelOpen('tools', 'resolution');
+
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="分辨率与 DPI"
       subtitle="通过 wm size / wm density 修改，可随时恢复默认"
       extra={
@@ -594,8 +642,12 @@ function MonkeyPanel() {
     }
   };
 
+  const open = usePanelOpen('tools', 'monkey');
+
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="Monkey 稳定性测试"
       subtitle="向应用发送伪随机事件流，用于发现崩溃与 ANR"
       extra={running ? <Badge tone="warn" dot>运行中</Badge> : undefined}
@@ -909,8 +961,12 @@ function ApkPanel() {
     await installApkFiles(apks, { mode, grantAll });
   };
 
+  const open = usePanelOpen('tools', 'apk');
+
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="安装安装包"
       subtitle="支持 APK、AAB 与 APKS；选择或直接拖入，安装过程会显示进度"
     >
@@ -1607,8 +1663,12 @@ function FilePanel() {
     }
   };
 
+  const open = usePanelOpen('tools', 'file');
+
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="文件传输"
       subtitle="在电脑与设备之间双向传输文件"
       extra={
@@ -1866,8 +1926,12 @@ function LogcatExportPanel() {
     return parts[parts.length - 1] || v;
   };
 
+  const open = usePanelOpen('tools', 'logcat');
+
   return (
     <Card
+      collapsible
+      defaultOpen={open}
       title="导出 Logcat 日志"
       subtitle="直接读取设备当前日志缓冲区并导出到文件，无需先开始抓取"
       extra={

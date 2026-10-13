@@ -14,6 +14,7 @@ import {
   Spinner,
 } from '@/components/ui';
 import { useApp } from '@/store/app';
+import { useFeature, usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
 import { IPC } from '@shared/types';
 import type {
@@ -80,6 +81,8 @@ const THEME_MODES: { value: 'light' | 'dark' | 'genshin'; label: string }[] = [
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.12':
+    '新增界面配置文件：程序目录下的 Conf 文件夹可直接调整左侧功能栏顺序、各功能块默认展开还是收起、以及单独开关某个功能入口，改完重启生效；在线更新不会覆盖你改过的配置，改坏了删掉对应文件即可恢复出厂。',
   '1.1.11':
     '新增「原神」主题：米白底、深靛蓝卡片、淡金衬色的整体外观，主题配色固定不提供切换；该主题下左侧功能栏换成配套的金色标志与金色应用名。',
   '1.1.10':
@@ -139,6 +142,20 @@ export default function SettingsPage() {
   const setSettings = useApp((s) => s.setSettings);
   const navigate = useNavigate();
   const [logDir, setLogDir] = useState('');
+
+  /*
+   * 界面配置（Conf）：设置页各卡片的默认展开态，以及三张可选卡片的显隐。
+   * 出厂默认与这里原来写死的 defaultOpen 逐项一致，所以不配置时观感不变。
+   */
+  const appearanceOpen = usePanelOpen('settings', 'appearance');
+  const aboutOpen = usePanelOpen('settings', 'about');
+  const dirsOpen = usePanelOpen('settings', 'dirs');
+  const logsOpen = usePanelOpen('settings', 'logs');
+  const envOpen = usePanelOpen('settings', 'env');
+  const autoMirrorOpen = usePanelOpen('settings', 'autoMirror');
+  const autoMirrorOn = useFeature('settings', 'autoMirror');
+  const envCheckOn = useFeature('settings', 'envCheck');
+  const updateOn = useFeature('settings', 'update');
 
   /* 运行日志目录：只用于展示与「打开文件夹」（日志按日期落盘、只保留 24 小时） */
   useEffect(() => {
@@ -216,7 +233,12 @@ export default function SettingsPage() {
         **前两栏（外观 / 关于）例外，默认展开**：主题是最常改的一项，版本信息也常要一眼看到。
         折叠只是视觉收起（body 仍在 DOM 里），所以自检、检查更新那几处副作用照常跑。
       */}
-      <Card title="外观" subtitle="主题模式与主题色" collapsible defaultOpen>
+      <Card
+        collapsible
+        defaultOpen={appearanceOpen}
+        title="外观"
+        subtitle="主题模式与主题色"
+      >
         <Field label="主题模式">
           <Segmented
             value={theme}
@@ -269,13 +291,37 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
+
+        {/*
+          界面配置入口。
+          放在「外观」而不是单开一张卡片：它和主题一样属于「界面长什么样」，
+          而且配置文件本来就是给愿意动手的人用的，不占主流程的注意力。
+        */}
+        <div className="field">
+          <span className="field-label">界面配置</span>
+          <div className="text-dim" style={{ marginBottom: 8 }}>
+            左侧功能栏顺序、各入口显隐、功能块默认展开收起，都可以在程序目录的
+            <span className="mono"> Conf\ </span>
+            里改，保存后重启程序生效（详见目录内的 README.md）。
+          </div>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={async () => {
+              const r = await window.adbApi.uiConfDir();
+              if (r.ok && r.data) void window.adbApi.openPath(String(r.data));
+            }}
+          >
+            打开配置文件夹
+          </Button>
+        </div>
       </Card>
 
       <Card
         title="关于"
         subtitle="程序信息与当前版本的更新说明"
         collapsible
-        defaultOpen
+        defaultOpen={aboutOpen}
       >
         <div className="kv-list">
           <About k="程序名称" v="ADB 桌面助手" />
@@ -294,7 +340,7 @@ export default function SettingsPage() {
         title="默认保存目录"
         subtitle="截图、录屏、日志导出与文件拉取的默认位置"
         collapsible
-        defaultOpen={false}
+        defaultOpen={dirsOpen}
       >
         <div className="col">
           <DirRow
@@ -315,13 +361,14 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      <UpdatePanel />
+      {/* 「软件更新」可用 Conf/features.json 的 settings.update 整块关掉 */}
+      {updateOn && <UpdatePanel />}
 
       <Card
         title="运行日志"
         subtitle="操作记录按日期存成本地文件，只保留最近 24 小时"
         collapsible
-        defaultOpen={false}
+        defaultOpen={logsOpen}
       >
         <div className="col">
           <div className="kv-list">
@@ -344,12 +391,13 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      {/* 环境自检：默认收起 —— 只有出问题时才需要展开看详情 */}
-      <Card
-        title="环境自检"
-        subtitle="检查 adb、scrcpy 等组件是否完整"
-        collapsible
-        defaultOpen={false}
+      {/* 环境自检：默认收起 —— 只有出问题时才需要展开看详情（可用 settings.envCheck 整块关掉） */}
+      {envCheckOn && (
+        <Card
+          title="环境自检"
+          subtitle="检查 adb、scrcpy 等组件是否完整"
+          collapsible
+          defaultOpen={envOpen}
         extra={
           <Button size="sm" variant="default" onClick={checkEnv} loading={checking}>
             重新检测
@@ -388,7 +436,8 @@ export default function SettingsPage() {
             )}
           </div>
         )}
-      </Card>
+        </Card>
+      )}
 
       {/*
         开机自启动（v1.1.7）：所有设置项的最下方。
@@ -414,11 +463,19 @@ export default function SettingsPage() {
 
       {/*
         插入自动投屏（v1.1.9）。
-        和上面的「开机自启动」是同一类东西（都在改变程序自身的运行方式），所以紧挨着放，
-        但这一张**需要解释**：三重门槛（USB 真机 / 已授权 / 曾投屏成功过）和一个副作用
-        （关窗改为最小化到托盘）都不是一个开关名字能装下的，所以带标题 + 说明、不做折叠。
+        和上面的「开机自启动」是同一类东西（都在改变程序自身的运行方式），所以紧挨着放。
+        这一张**需要解释**：三重门槛（USB 真机 / 已授权 / 曾投屏成功过）和一个副作用
+        （关窗改为最小化到托盘）都不是一个开关名字能装下的 —— 所以默认展开把话说清楚，
+        但允许用户通过 Conf 把它收起（真正想做的是「整个入口藏掉」，见 features 的
+        settings.autoMirror）。
       */}
-      <Card title="插入手机自动投屏" subtitle="插上 USB 就自动打开助手并投屏">
+      {autoMirrorOn && (
+        <Card
+          collapsible
+          defaultOpen={autoMirrorOpen}
+          title="插入手机自动投屏"
+          subtitle="插上 USB 就自动打开助手并投屏"
+        >
         <div className="setting-line">
           <span className="setting-line-label">启用</span>
           <span className="spacer" />
@@ -445,7 +502,8 @@ export default function SettingsPage() {
             : '目前还没记录到设备 —— 先手动投屏成功一次，那台设备才会进入自动投屏范围。'}{' '}
           开启后关闭窗口会改为最小化到托盘（否则程序退出后没人监听插入），双击托盘图标可重新打开。
         </p>
-      </Card>
+        </Card>
+      )}
     </>
   );
 }
@@ -487,6 +545,13 @@ function UpdatePanel() {
   const setSettings = useApp((s) => s.setSettings);
   const setUpdateAvailable = useApp((s) => s.setUpdateAvailable);
 
+  /*
+   * 这张卡片的展开态是**受控**的（下面 ensureOpen 要在点「下载并更新」后自己摊开），
+   * 所以不能只靠 Card 的 defaultOpen —— 把 Conf 里的默认值喂给受控状态，
+   * 并在配置异步到位时同步一次（见下面 useState 之后那个 effect）。
+   */
+  const updatePanelDefaultOpen = usePanelOpen('settings', 'update');
+
   const [ctx, setCtx] = useState<UpdateContext | null>(null);
   const [check, setCheck] = useState<UpdateCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
@@ -494,6 +559,18 @@ function UpdatePanel() {
   const [busy, setBusy] = useState<'' | 'prepare' | 'download' | 'go'>('');
   const [confirming, setConfirming] = useState<null | 'apply' | 'rollback'>(null);
   const [dl, setDl] = useState<UpdateDownloadProgress | null>(null);
+  /*
+   * 卡片开合由这里托管（Card 的受控模式）：默认收起。
+   * 收起态里能点的按钮（「下载并更新」）点下去之后，进度条、确认框、「立即更新并重启」
+   * 全在收起区里 —— 用户看到的就是「点了没反应」。所以凡是会引出后续步骤的动作，
+   * 先 ensureOpen() 把卡片摊开（见 download / 收起态里的「立即更新并重启」）。
+   */
+  const [panelOpen, setPanelOpen] = useState(() => updatePanelDefaultOpen);
+  /* Conf 是启动后异步到位的：到齐时把受控展开态对齐到配置里的默认值 */
+  useEffect(() => {
+    setPanelOpen(updatePanelDefaultOpen);
+  }, [updatePanelDefaultOpen]);
+  const ensureOpen = () => setPanelOpen(true);
 
   const refresh = async () => {
     const r = await call<UpdateContext>(() => window.adbApi.updateContext(), { silent: true });
@@ -550,6 +627,8 @@ function UpdatePanel() {
   const download = async () => {
     const pkg = check?.latest?.pkg;
     if (!pkg) return;
+    // 收起态点进来的：先把卡片摊开，进度与后续步骤才看得见
+    ensureOpen();
     setBusy('download');
     setDl(null);
     setConfirming(null);
@@ -667,11 +746,22 @@ function UpdatePanel() {
         title="软件更新"
         subtitle={`当前版本 v${ctx?.version ?? __APP_VERSION__}`}
         collapsible
-        defaultOpen={false}
+        defaultOpen={updatePanelDefaultOpen}
+        open={panelOpen}
+        onToggle={setPanelOpen}
+        /* 标题行右边的元素比较多（红点+New、版本徽标、检查更新、下载并更新、更新目录），
+           要能换行 —— 见 pages.css 的 .update-card 那组规则 */
+        className="update-card"
         extra={
-          <div className="row">
+          <div className="row row-wrap">
             {checkState === 'available' && check?.latest && (
-              <Badge tone="success">新版本 v{check.latest.version}</Badge>
+              <>
+                {/* 只说「是版本更新」这一件事：一枚红字 New，前面不带红点、自身不带底，见 pages.css 的 .update-new */}
+                <span className="update-new" data-update-new="1" title="有新版本可以更新">
+                  New
+                </span>
+                <Badge tone="success">新版本 v{check.latest.version}</Badge>
+              </>
             )}
             <Button
               size="sm"
@@ -699,6 +789,25 @@ function UpdatePanel() {
                   下载并更新
                 </Button>
               )}
+            {/*
+             * 包已就绪、而卡片处在收起态时，把「立即更新并重启」也搬到标题行 ——
+             * 否则收起态里点不动最后一步，只能靠用户自己想到去展开。
+             * 展开态不用重一份（下面正文里本来就有），所以这里限定 !panelOpen。
+             */}
+            {!panelOpen && info?.ok && confirming !== 'apply' && (
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => {
+                  ensureOpen();
+                  setConfirming('apply');
+                }}
+                disabled={busyNow}
+                data-update-apply-quick="1"
+              >
+                立即更新并重启
+              </Button>
+            )}
             <Button
               size="sm"
               variant="ghost"

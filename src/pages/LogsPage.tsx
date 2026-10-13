@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { Card, Button, Badge, Empty, Segmented, Input } from '@/components/ui';
 import { useApp } from '@/store/app';
+import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
 import { formatTime } from '@/lib/format';
 import type { LogEntry, LogLevel } from '@shared/types';
@@ -23,6 +24,9 @@ export default function LogsPage() {
   const [autoScroll, setAutoScroll] = useState(true);
   const [exporting, setExporting] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
+
+  /* 界面配置：日志主体的默认展开态（Conf/panels.json 的 logs.stream） */
+  const viewOpen = usePanelOpen('logs', 'stream');
 
   const filtered = useMemo(() => {
     let list = logs;
@@ -82,6 +86,8 @@ export default function LogsPage() {
 
   return (
     <Card
+      collapsible
+      defaultOpen={viewOpen}
       title="运行日志"
       subtitle="实时记录所有 adb 命令与操作结果，可一键导出为文本文件"
       extra={

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './ui.css';
 import { Icon } from './icons';
 
@@ -57,6 +57,14 @@ interface CardProps {
   defaultOpen?: boolean;
   /** 收起时替换 subtitle 显示的内容（把当前值带出来用） */
   collapsedSubtitle?: React.ReactNode;
+  /**
+   * 受控展开态。传了它就由外部说了算（内部不再自持状态）——
+   * 「软件更新」要能在用户点了收起态里的按钮后**自己展开**
+   * （否则点「下载并更新」后进度与「立即更新并重启」都藏在收起区里，看着像没反应）。
+   */
+  open?: boolean;
+  /** 受控模式下的开合回调（不传 open 时忽略） */
+  onToggle?: (open: boolean) => void;
 }
 
 export function Card({
@@ -69,6 +77,8 @@ export function Card({
   collapsible = false,
   defaultOpen = true,
   collapsedSubtitle,
+  open,
+  onToggle,
 }: CardProps) {
   /*
    * 折叠只是**视觉收起**：body 一直留在 DOM 里（CSS display:none），
@@ -76,10 +86,32 @@ export function Card({
    *   1. 折叠卡片里的按钮（如「检查更新」）要能被验收脚本 querySelector 到；
    *   2. 卡片内部的 useEffect（自检、检查更新）保持常驻，展开时立刻有结果。
    */
-  const [open, setOpen] = useState(defaultOpen);
-  const expanded = !collapsible || open;
+  const [selfOpen, setSelfOpen] = useState(defaultOpen);
+  const controlled = open !== undefined;
+  const isOpen = controlled ? !!open : selfOpen;
+  const expanded = !collapsible || isOpen;
 
-  const toggle = collapsible ? () => setOpen((v) => !v) : undefined;
+  /*
+   * defaultOpen 变化时同步内部展开态。
+   *
+   * 起因：界面配置（Conf/panels.json）是启动后**异步**取回来的，Card 往往已经按
+   * store 里的出厂默认挂载过一次 —— 而 useState 的初始值只取第一次。
+   * 没有这一段，用户把某块改成「默认收起」就不会生效。
+   *
+   * 受控模式（传了 open）不受影响；defaultOpen 本身是配置派生值，
+   * 整个生命周期里只变一次（出厂默认 → 用户配置），不会反复覆盖用户的手动开合。
+   */
+  useEffect(() => {
+    if (!controlled) setSelfOpen(defaultOpen);
+  }, [defaultOpen, controlled]);
+
+  const flip = () => {
+    if (!collapsible) return;
+    if (controlled) onToggle?.(!isOpen);
+    else setSelfOpen((v) => !v);
+  };
+
+  const toggle = collapsible ? flip : undefined;
 
   return (
     <section
@@ -96,7 +128,7 @@ export function Card({
               ? (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    setOpen((v) => !v);
+                    flip();
                   }
                 }
               : undefined
@@ -119,8 +151,16 @@ export function Card({
             {subtitle && <p className="card-subtitle">{expanded ? subtitle : collapsedSubtitle ?? subtitle}</p>}
           </div>
           {extra && (
-            /* 右侧操作区独立可点（如折叠态下的「检查更新」），别让点击穿到标题的折叠开关 */
-            <div className="card-extra" onClick={(e) => e.stopPropagation()}>
+            /*
+             * 右侧操作区独立可点（如折叠态下的「检查更新」），别让点击穿到标题的折叠开关。
+             * 键盘同理：按钮上按空格/回车会被 header 的 keydown 吞掉（preventDefault 后
+             * 按钮自己的 click 不再触发），所以这里也要拦一道。
+             */
+            <div
+              className="card-extra"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
               {extra}
             </div>
           )}

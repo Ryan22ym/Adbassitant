@@ -18,6 +18,13 @@
       "filter": [
         "**/*"
       ]
+    },
+    {
+      "from": "Conf",
+      "to": "Conf",
+      "filter": [
+        "**/*"
+      ]
     }
   ],
   "win": {

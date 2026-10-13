@@ -13,6 +13,7 @@ import {
   Switch,
 } from '@/components/ui';
 import { useApp } from '@/store/app';
+import { usePanelOpen } from '@/lib/ui-conf';
 import { Icon } from '@/components/icons';
 import { call, tryCall } from '@/lib/ipc';
 import { formatBytes } from '@/lib/format';
@@ -91,6 +92,12 @@ export default function PackageManager({ actionsHost }: Props) {
   const setSettings = useApp((s) => s.setSettings);
   /** 安装方式沿用全局默认（和拖放安装同一个值，不另开一套） */
   const installMode = useApp((s) => s.installMode);
+
+  /* 界面配置：四块功能块的默认展开态（Conf/panels.json 的 packages.*） */
+  const filterOpen = usePanelOpen('packages', 'filter');
+  const listOpen = usePanelOpen('packages', 'list');
+  const workdirOpen = usePanelOpen('packages', 'workdir');
+  const rulesOpen = usePanelOpen('packages', 'rules');
 
   const [scan, setScan] = useState<PackageScanResult | null>(null);
   const [busy, setBusy] = useState<'scan' | 'organize' | null>(null);
@@ -479,6 +486,8 @@ export default function PackageManager({ actionsHost }: Props) {
 
       {/* ---------------- 1. 标签筛选 ---------------- */}
       <Card
+        collapsible
+        defaultOpen={filterOpen}
         title="标签筛选"
         subtitle={
           stats
@@ -587,6 +596,8 @@ export default function PackageManager({ actionsHost }: Props) {
 
       {/* ---------------- 2. 包列表 ---------------- */}
       <Card
+        collapsible
+        defaultOpen={listOpen}
         title="包列表"
         subtitle={
           working
@@ -793,7 +804,12 @@ export default function PackageManager({ actionsHost }: Props) {
       </Card>
 
       {/* ---------------- 3. 工作目录 ---------------- */}
-      <Card title="工作目录" subtitle="整理与浏览都只看这一个目录；换目录等于重新进一次模块">
+      <Card
+        collapsible
+        defaultOpen={workdirOpen}
+        title="工作目录"
+        subtitle="整理与浏览都只看这一个目录；换目录等于重新进一次模块"
+      >
         <div className="pkg-root">
           <Field label="当前工作目录">
             <Input value={root} readOnly placeholder="还没有设置工作目录" data-pkg-root />
@@ -814,7 +830,7 @@ export default function PackageManager({ actionsHost }: Props) {
         title="整理规则"
         subtitle="目录名与结构都可以改；改完点「立即整理」按新规则归置"
         collapsible
-        defaultOpen={false}
+        defaultOpen={rulesOpen}
       >
         <div className="col">
           <div className="pkg-dir-grid">
