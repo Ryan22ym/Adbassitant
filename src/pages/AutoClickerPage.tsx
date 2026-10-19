@@ -45,6 +45,8 @@ function emptyScript(): ClickerScript {
     loop: 1,
     speed: 1,
     jitterPx: 6,
+    preGapMs: 0,
+    postGapMs: 0,
     createdAt: now,
     updatedAt: now,
     source: 'manual',
@@ -344,10 +346,13 @@ export default function AutoClickerPage() {
       });
       if (st) setStatus(st);
       setProgress(null);
+      const preGap = draft.preGapMs ?? 0;
+      const postGap = draft.postGapMs ?? 0;
+      const gapInfo = preGap > 0 || postGap > 0 ? ` · 间隔 前${preGap}/后${postGap}ms` : '';
       toast(
         'success',
         '开始回放',
-        `${draft.loop === 0 ? '无限循环' : `${draft.loop} 轮`} · ${draft.speed}× · 偏移 ${draft.jitterPx}px`,
+        `${draft.loop === 0 ? '无限循环' : `${draft.loop} 轮`} · ${draft.speed}× · 偏移 ${draft.jitterPx}px${gapInfo}`,
       );
     } catch (e) {
       toast('error', '启动失败', (e as Error).message);
@@ -808,6 +813,36 @@ export default function AutoClickerPage() {
                     />
                   </Field>
 
+                  {/*
+                    动作间隔：脚本默认背靠背执行（只有防丢事件的内置最小间隙），
+                    设备经常来不及响应 —— 这两个参数让用户自己控制动作节奏。
+                    引擎侧语义见 auto-clicker.ts：前置在每个动作前等、后置与内置间隙取较大值。
+                  */}
+                  <Field label="前置间隔" hint="ms · 每个动作执行前先等这么久">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={600000}
+                      step={100}
+                      value={draft.preGapMs ?? 0}
+                      onChange={(e) =>
+                        patchDraft({ preGapMs: Math.max(0, parseInt(e.target.value, 10) || 0) })
+                      }
+                    />
+                  </Field>
+                  <Field label="后置间隔" hint="ms · 每个动作执行完再等这么久（≥ 内置最小间隙）">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={600000}
+                      step={100}
+                      value={draft.postGapMs ?? 0}
+                      onChange={(e) =>
+                        patchDraft({ postGapMs: Math.max(0, parseInt(e.target.value, 10) || 0) })
+                      }
+                    />
+                  </Field>
+
                   <div className="col" style={{ gap: 8 }}>
                     <span className="field-label">
                       倍速 <em className="field-hint">1× = 原速</em>
@@ -906,6 +941,9 @@ export default function AutoClickerPage() {
                           <span className="ck-script-desc">
                             {s.steps.length} 步 · {s.loop === 0 ? '无限' : `${s.loop} 轮`} · {s.speed}× ·
                             偏移 {s.jitterPx}px
+                            {(s.preGapMs ?? 0) > 0 || (s.postGapMs ?? 0) > 0
+                              ? ` · 间隔 前${s.preGapMs ?? 0}/后${s.postGapMs ?? 0}ms`
+                              : ''}
                           </span>
                         </div>
                         <button

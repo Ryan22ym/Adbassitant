@@ -129,6 +129,9 @@ function sanitizeScript(raw: unknown): ClickerScript | null {
     loop: clampInt(o.loop, 0, 0, 100000, 1),
     speed: clampNum(o.speed, 1, 0.1, 10),
     jitterPx: clampNum(o.jitterPx, 6, 0, 200),
+    // 动作间隔：老脚本没有这两个字段 → 0（保持老脚本的原始节奏不变）
+    preGapMs: clampInt(o.preGapMs, 0, 0, 600000),
+    postGapMs: clampInt(o.postGapMs, 0, 0, 600000),
     createdAt: typeof o.createdAt === 'string' ? o.createdAt : now,
     updatedAt: now,
     source: o.source === 'record' ? 'record' : 'manual',
@@ -755,6 +758,16 @@ export async function startClicker(script: ClickerScript, serial?: string): Prom
       const totalRounds = clean.loop <= 0 ? Number.MAX_SAFE_INTEGER : clean.loop;
       let done = 0;
 
+      /*
+       * 动作间隔（v1.1.14 新增）：
+       *   · 前置间隔：每个可执行动作开始前等 preGapMs（倍速生效）；
+       *   · 后置间隔：每个可执行动作结束后等 max(内置最小间隙, postGapMs)。
+       * 内置的 STEP_GAP_MS 只是为了防 adb 背靠背丢事件，用户感知不到也不会指望它；
+       * 用户配的后置间隔只要比它大就完全生效。note 是纯说明，前后都不等。
+       */
+      const preGapMs = Math.max(0, clean.preGapMs ?? 0);
+      const postGapMs = Math.max(0, clean.postGapMs ?? 0);
+
       for (let round = 1; round <= totalRounds; round += 1) {
         if (state.stop) break;
         state.status.round = round;
@@ -775,14 +788,23 @@ export async function startClicker(script: ClickerScript, serial?: string): Prom
             label,
           });
 
+          if (step.kind !== 'note' && preGapMs > 0) {
+            await wait(scaled(preGapMs, clean.speed));
+          }
+
           await runStep(s, step, size, clean.jitterPx, clean.speed);
 
           done += 1;
           state.status.done = done;
 
-          // 步骤间隙（倍速生效）—— note 是纯说明，不需要等
-          if (step.kind !== 'note' && i < clean.steps.length - 1) {
-            await wait(scaled(STEP_GAP_MS, clean.speed));
+          if (step.kind !== 'note') {
+            const builtin = scaled(STEP_GAP_MS, clean.speed);
+            const gap = postGapMs > 0 ? Math.max(builtin, scaled(postGapMs, clean.speed)) : builtin;
+            /*
+             * 最后一个动作也等：loop > 1 时它就是「轮与轮之间」的间隔；
+             * loop = 1 时只是收尾多等一下，无感知。
+             */
+            await wait(gap);
           }
         }
       }

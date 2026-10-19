@@ -125,7 +125,30 @@ import {
   scanPackageDir,
   setPackageTag,
 } from './services/packages';
+import {
+  aiChat,
+  aiConfigDir,
+  aiTest,
+  clearSessions,
+  deleteSession,
+  getAiConfig,
+  getSession,
+  listSessions,
+  saveAiConfig,
+} from './services/ai';
+import {
+  deleteCrashReport,
+  getCrashReport,
+  getCrashWatchStatus,
+  listCrashReports,
+  markCrashReportRead,
+  runAnalysis,
+  setCrashWatchSink,
+  syncCrashWatch,
+} from './services/crash';
+import type { AiChatRequest } from '../shared/types';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
+import { getWallpaperDataURL } from './services/wallpaper';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
 import { getUiConf, resolveUiConfDir } from './services/ui-conf';
 import { applyAutoLaunch } from './services/auto-launch';
@@ -244,7 +267,15 @@ export function registerIpc() {
 
   setLogPushSink((entry) => send(IPC.PUSH_LOG, entry));
 
-  setMirrorStatusSink((s) => send(IPC.PUSH_MIRROR_STATUS, s));
+  setMirrorStatusSink((s) => {
+    send(IPC.PUSH_MIRROR_STATUS, s);
+    /*
+     * 投屏一起一停就要重新对齐「崩溃监听器」（v1.1.14）：
+     * 崩溃自动分析只在投屏运行期间有意义（需求原话就是「投屏的前台应用」），
+     * 所以监听器的生命周期挂在投屏状态上，而不是一个独立的开关定时器。
+     */
+    syncCrashWatch();
+  });
 
   setLogcatLinesSink((lines) => send(IPC.PUSH_LOGCAT_LINES, lines));
 
@@ -257,6 +288,16 @@ export function registerIpc() {
 
   // 连点器回放进度（v1.0.32）—— 回放是长任务，界面靠这个刷新"执行到第几步"
   setClickerPusher((p) => send(IPC.PUSH_CLICKER_PROGRESS, p));
+
+  /*
+   * 崩溃分析的两条推送（v1.1.14）。
+   * 报告生成时推一份 meta —— 渲染层据此点亮 AI 入口的红点；
+   * 监听器状态变化时推状态条（开关 / 投屏 / 当前前台应用）。
+   */
+  setCrashWatchSink(
+    (s) => send(IPC.PUSH_AI_CRASH_STATUS, s),
+    (r) => send(IPC.PUSH_AI_CRASH_REPORT, r),
+  );
 
   /* ---------------- 环境 ---------------- */
 
@@ -1182,6 +1223,62 @@ export function registerIpc() {
     fetchFrame(frameId, serial),
   ));
 
+  /* ---------------- AI 助手（v1.1.14） ---------------- */
+
+  // 读配置。force=true 丢掉缓存重读 —— 提示词/key 是用户随手会改的东西，不该逼他重启程序
+  ipcMain.handle(IPC.AI_CONFIG_GET, wrap((_e, force = false) => getAiConfig(!!force)));
+
+  ipcMain.handle(
+    IPC.AI_CONFIG_SET,
+    wrap((_e, patch: Partial<Record<string, unknown>>) => saveAiConfig(patch || {})),
+  );
+
+  ipcMain.handle(IPC.AI_CONFIG_DIR, wrap(() => aiConfigDir()));
+
+  ipcMain.handle(IPC.AI_CHAT, wrap((_e, req: AiChatRequest) => aiChat(req)));
+
+  ipcMain.handle(IPC.AI_TEST, wrap((_e, providerId?: string) => aiTest(providerId)));
+
+  ipcMain.handle(IPC.AI_SESSION_LIST, wrap(() => listSessions()));
+  ipcMain.handle(IPC.AI_SESSION_GET, wrap((_e, id: string) => getSession(id)));
+  ipcMain.handle(IPC.AI_SESSION_DELETE, wrap((_e, id: string) => deleteSession(id)));
+  ipcMain.handle(IPC.AI_SESSION_CLEAR, wrap(() => clearSessions()));
+
+  /*
+   * 崩溃分析报告。
+   * 「立即分析」是手动入口：自动那条路的触发源是 logcat 崩溃监听（见 services/crash.ts），
+   * 两者最终调的是同一个 runAnalysis，所以行为完全一致。
+   */
+  ipcMain.handle(
+    IPC.AI_CRASH_ANALYZE,
+    wrap((_e, serial?: string, packageName?: string) => runAnalysis(serial, packageName, true)),
+  );
+
+  ipcMain.handle(IPC.AI_REPORT_LIST, wrap(() => listCrashReports()));
+  ipcMain.handle(IPC.AI_REPORT_GET, wrap((_e, id: string) => getCrashReport(id)));
+  ipcMain.handle(
+    IPC.AI_REPORT_MARK_READ,
+    wrap((_e, id: string, read = true) => markCrashReportRead(id, !!read)),
+  );
+  ipcMain.handle(IPC.AI_REPORT_DELETE, wrap((_e, id: string) => deleteCrashReport(id)));
+
+  /*
+   * 在资源管理器里定位报告。
+   * reveal=true 直接选中那个文件；false 只打开所在目录 ——
+   * 「一键定位到崩溃分析文件所在的文件夹路径」要的是后者。
+   */
+  ipcMain.handle(
+    IPC.AI_REPORT_REVEAL,
+    wrap(async (_e, path: string, reveal = true) => {
+      if (!existsSync(path)) throw new Error(`路径不存在：${path}`);
+      if (reveal) shell.showItemInFolder(path);
+      else await shell.openPath(path);
+      return true;
+    }),
+  );
+
+  ipcMain.handle(IPC.AI_CRASH_STATUS, wrap(() => getCrashWatchStatus()));
+
   /* ---------------- 设置 ---------------- */
 
   ipcMain.handle(IPC.SETTINGS_GET, wrap(() => getSettings()));
@@ -1320,6 +1417,15 @@ export function registerIpc() {
   ipcMain.handle(
     IPC.WINDOW_GRAB_DESKTOP,
     wrap(async () => {
+      /*
+       * v1.1.14 起优先读**壁纸文件本身**（见 services/wallpaper.ts）：
+       * 整屏截图会把图标 / 打开的窗口 / 任务栏一起透到玻璃底下，不是用户要的
+       * 「当前壁纸」。三级兜底：壁纸文件 → 注册表壁纸 → 整屏截图（旧行为）。
+       * 每次启动渲染层都会重新来拿一次，自然满足「每次重启时更新」。
+       */
+      const wall = await getWallpaperDataURL();
+      if (wall) return wall;
+
       const d = screen.getPrimaryDisplay();
       const w = Math.round(d.size.width * d.scaleFactor);
       const h = Math.round(d.size.height * d.scaleFactor);

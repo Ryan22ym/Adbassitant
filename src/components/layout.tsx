@@ -38,6 +38,8 @@ const NAV_DEFS: Record<string, NavDef> = {
   weaknet: { to: '/weaknet', label: '弱网模拟', icon: Icon.weaknet },
   clicker: { to: '/clicker', label: '自动连点器', icon: Icon.clicker },
   command: { to: '/command', label: '命令终端', icon: Icon.terminal },
+  /* AI 助手（v1.1.14）：对话 + 崩溃分析报告。排在「设置」之前 */
+  ai: { to: '/ai', label: 'AI 助手', icon: Icon.ai },
   settings: { to: '/settings', label: '设置', icon: Icon.settings },
 };
 
@@ -46,6 +48,12 @@ export function Sidebar() {
   const onlineCount = devices.filter((d) => d.state === 'device').length;
   // 在线更新：静默自检到有新版本就在「设置」上挂个点（不弹窗）
   const updateAvailable = useApp((s) => s.updateAvailable);
+  /*
+   * 崩溃分析报告未读数（v1.1.14）：> 0 就在「AI 助手」上亮一枚红点。
+   * 这是「有事等你处理」的唯一信号 —— 分析是后台自动跑的，
+   * 不亮红点用户根本不知道出过崩溃。
+   */
+  const crashUnread = useApp((s) => s.crashUnread);
   // 左侧功能栏收起状态（收起后只显示图标，见 layout.css 的 .sidebar.collapsed）
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useApp((s) => s.setSidebarCollapsed);
@@ -136,6 +144,14 @@ export function Sidebar() {
               <span className="nav-new" title="有新版本可以更新">
                 New
               </span>
+            )}
+            {item.to === '/ai' && crashUnread > 0 && (
+              /* 崩溃报告未读：一枚纯红点（收起态由 CSS 挪到图标右上角） */
+              <span
+                className="nav-dot"
+                title={`有 ${crashUnread} 份崩溃分析报告待查看`}
+                data-crash-dot="1"
+              />
             )}
           </NavLink>
         ))}

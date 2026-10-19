@@ -166,6 +166,11 @@
    主题色（data-accent）
    每个主题各写浅色 / 深色两条；顺序无关，靠优先级区分（理由见文件头）。
    id 与 shared/types.ts 的 AccentId、SettingsPage 的 ACCENTS 一一对应。
+
+   ⚠️ 'custom'（自定义色）**故意没有变量块**：它的整组色由
+      src/lib/accent-custom.ts 从用户选的色值现算，以内联变量写到 <html> 上。
+      这里不给块，`data-accent="custom"` 时自然落回 :root / [data-theme='dark']
+      那份中性色，再由内联值覆盖 —— 这正是想要的兜底顺序。
    ================================================================== */
 
 /* ---- 云灰：中性冷灰，最素 ---- */
@@ -342,6 +347,94 @@
   --accent-hover: #a9bad6;
   --accent-soft: #212834;
   --accent-border: #39455c;
+}
+
+/* ---- 淡粉：冷调浅粉，柔和克制（v1.1.14） ---- */
+:root[data-accent='blush'] {
+  --bg-app: #fdf8fa;
+  --bg-sidebar: #f7dde6;
+  --bg-sidebar-hover: #f3d1dd;
+  --bg-sidebar-active: #efc4d4;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #fefbfc;
+  --bg-hover: #fbebf1;
+  --bg-active: #f7dee8;
+  --bg-inset: #fdf8fa;
+  --border: #f6e4eb;
+  --border-strong: #e9c9d6;
+  --text-primary: #2f2029;
+  --text-secondary: #6d5661;
+  --text-tertiary: #9c8792;
+  --accent: #d4718f;
+  --accent-hover: #c25e7d;
+  --accent-soft: #fceef3;
+  --accent-border: #f4cfdd;
+}
+
+:root[data-accent='blush'][data-theme='dark'] {
+  --bg-app: #201820;
+  --bg-sidebar: #150f14;
+  --bg-sidebar-hover: #241a22;
+  --bg-sidebar-active: #2f222c;
+  --bg-surface: #271d25;
+  --bg-surface-2: #2d222b;
+  --bg-hover: #332630;
+  --bg-active: #3b2c38;
+  --bg-inset: #1a1319;
+  --border: #33262f;
+  --border-strong: #4a3846;
+  --text-primary: #f2e7ec;
+  --text-secondary: #b39aa6;
+  --text-tertiary: #826b78;
+  --text-inverse: #191319;
+  --accent: #ef9ab4;
+  --accent-hover: #f5b3c7;
+  --accent-soft: #34222c;
+  --accent-border: #5b3c4b;
+}
+
+/* ---- 樱花：暖调樱粉，比淡粉更艳一点（v1.1.14） ---- */
+:root[data-accent='sakura'] {
+  --bg-app: #fdf7f8;
+  --bg-sidebar: #f9d6dc;
+  --bg-sidebar-hover: #f6c7cf;
+  --bg-sidebar-active: #f2b6c1;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #fefafb;
+  --bg-hover: #fce8ec;
+  --bg-active: #f9d9e0;
+  --bg-inset: #fdf7f8;
+  --border: #f6e0e4;
+  --border-strong: #ebc2ca;
+  --text-primary: #331e23;
+  --text-secondary: #74545d;
+  --text-tertiary: #a5868f;
+  --accent: #e2637f;
+  --accent-hover: #d04f6c;
+  --accent-soft: #fde9ee;
+  --accent-border: #f8c8d4;
+}
+
+:root[data-accent='sakura'][data-theme='dark'] {
+  --bg-app: #211719;
+  --bg-sidebar: #160f11;
+  --bg-sidebar-hover: #251a1d;
+  --bg-sidebar-active: #302226;
+  --bg-surface: #281c20;
+  --bg-surface-2: #2e2125;
+  --bg-hover: #34262a;
+  --bg-active: #3d2c31;
+  --bg-inset: #1b1416;
+  --border: #34272a;
+  --border-strong: #4c393e;
+  --text-primary: #f5e9ec;
+  --text-secondary: #b89ca2;
+  --text-tertiary: #876c74;
+  --text-inverse: #1a1315;
+  --accent: #ee8496;
+  --accent-hover: #f49fae;
+  --accent-soft: #36232a;
+  --accent-border: #5d3f47;
 }
 
 /* ---------------- 重置 ---------------- */

@@ -34,6 +34,8 @@ export const SIDEBAR_IDS = [
   'weaknet',
   'clicker',
   'command',
+  /* v1.1.14：AI 助手（对话 + 崩溃分析报告），排在「设置」之前 */
+  'ai',
   'settings',
 ] as const;
 
@@ -156,6 +158,8 @@ export const DEFAULT_PANELS: PanelsConf = {
     command: { input: true, common: true, output: true },
     /* 运行日志页 */
     logs: { stream: true },
+    /* AI 助手页（v1.1.14）：对话窗口与崩溃分析报告两块 */
+    ai: { chat: true, reports: true },
     /* 安装包管理（应用管理页内的模块） */
     packages: { workdir: true, rules: false, filter: true, list: true },
     /* 设置页：与 SettingsPage 里原本写死的 defaultOpen 保持一致 */
@@ -189,6 +193,7 @@ export const DEFAULT_FEATURES: FeaturesConf = {
       weaknet: true,
       clicker: true,
       command: true,
+      ai: true,
       settings: true,
     },
     /* 「常用工具」页的各个标签 */

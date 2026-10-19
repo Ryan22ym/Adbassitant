@@ -313,6 +313,33 @@
   color: var(--danger, #e24b4a);
 }
 
+/*
+ * 崩溃分析报告未读时，挂在「AI 助手」上的一枚红点（v1.1.14）。
+ *
+ * 与上面的 nav-new 是两种信号，刻意长得不一样：
+ *   nav-new = 「有个新版本可更新」，纯文字、不抢眼；
+ *   nav-dot = 「出事了，有崩溃报告等你处理」，用最刺眼的纯圆点 ——
+ *   崩溃是**必须有人看**的事，不该被当成一条普通提示。
+ * 圆点不显示数字：报告数在这里没有意义（用户关心的是「有没有」，不是「几条」）。
+ */
+.nav-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--danger, #e24b4a);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger, #e24b4a) 16%, transparent);
+}
+
+/* 收起态没有文字可依附，红点改压在图标右上角（与 .nav-count 同一套做法） */
+.sidebar.collapsed .nav-dot {
+  position: absolute;
+  top: 2px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+}
+
 /* ---- 收起态：导航只留图标 ---- */
 
 .sidebar.collapsed .sidebar-nav {

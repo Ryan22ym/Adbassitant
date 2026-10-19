@@ -168,6 +168,28 @@ const IPC = {
   WINDOW_CLOSE: 'window:close',
   WINDOW_IS_MAX: 'window:isMax',
 
+  /*
+   * AI 助手（v1.1.14）。
+   * 🔴 字面量必须与 shared/types.ts 的 IPC 同名项逐字一致 ——
+   *    preload 是独立打包的，不能 import shared，只能手抄一份（历史坑）。
+   */
+  AI_CONFIG_GET: 'ai:configGet',
+  AI_CONFIG_SET: 'ai:configSet',
+  AI_CONFIG_DIR: 'ai:configDir',
+  AI_CHAT: 'ai:chat',
+  AI_TEST: 'ai:test',
+  AI_SESSION_LIST: 'ai:sessionList',
+  AI_SESSION_GET: 'ai:sessionGet',
+  AI_SESSION_DELETE: 'ai:sessionDelete',
+  AI_SESSION_CLEAR: 'ai:sessionClear',
+  AI_CRASH_ANALYZE: 'ai:crashAnalyze',
+  AI_REPORT_LIST: 'ai:reportList',
+  AI_REPORT_GET: 'ai:reportGet',
+  AI_REPORT_MARK_READ: 'ai:reportMarkRead',
+  AI_REPORT_DELETE: 'ai:reportDelete',
+  AI_REPORT_REVEAL: 'ai:reportReveal',
+  AI_CRASH_STATUS: 'ai:crashStatus',
+
   /* 增量更新（v1.0.7） */
   UPDATE_CONTEXT: 'update:context',
   UPDATE_PREPARE: 'update:prepare',
@@ -194,6 +216,9 @@ const IPC = {
   PUSH_UPDATE_DOWNLOAD: 'push:updateDownload',
   PUSH_CLICKER_PROGRESS: 'push:clickerProgress',
   PUSH_RECORDER_STATUS: 'push:recorderStatus',
+  /* AI 崩溃分析（v1.1.14）：报告生成 / 监听状态变化 */
+  PUSH_AI_CRASH_REPORT: 'push:aiCrashReport',
+  PUSH_AI_CRASH_STATUS: 'push:aiCrashStatus',
 } as const;
 
 /**
@@ -512,6 +537,32 @@ const api = {
   /** 窗口当前是否最大化（自绘按钮据此切换「最大化 / 还原」的图标） */
   winIsMax: () => invoke(IPC.WINDOW_IS_MAX),
 
+  /*
+   * AI 助手（v1.1.14）。
+   *
+   * 模型调用全程在主进程完成（CORS + apiKey 两条原因，见 services/ai.ts 的文件头），
+   * 渲染层这里只是转发。附件也只传**路径**，由主进程去读文件 / 抓网页。
+   */
+  aiConfig: (force = false) => invoke(IPC.AI_CONFIG_GET, force),
+  setAiConfig: (patch: any) => invoke(IPC.AI_CONFIG_SET, patch),
+  aiConfigDir: () => invoke(IPC.AI_CONFIG_DIR),
+  aiChat: (req: any) => invoke(IPC.AI_CHAT, req),
+  aiTest: (providerId?: string) => invoke(IPC.AI_TEST, providerId),
+  aiSessions: () => invoke(IPC.AI_SESSION_LIST),
+  aiSession: (id: string) => invoke(IPC.AI_SESSION_GET, id),
+  aiSessionDelete: (id: string) => invoke(IPC.AI_SESSION_DELETE, id),
+  aiSessionClear: () => invoke(IPC.AI_SESSION_CLEAR),
+  /* 崩溃分析 */
+  crashAnalyze: (serial?: string, packageName?: string) =>
+    invoke(IPC.AI_CRASH_ANALYZE, serial, packageName),
+  crashReports: () => invoke(IPC.AI_REPORT_LIST),
+  crashReport: (id: string) => invoke(IPC.AI_REPORT_GET, id),
+  crashReportMarkRead: (id: string, read = true) => invoke(IPC.AI_REPORT_MARK_READ, id, read),
+  crashReportDelete: (id: string) => invoke(IPC.AI_REPORT_DELETE, id),
+  /** reveal=true 选中文件本身；false 只打开所在文件夹 */
+  revealCrashReport: (path: string, reveal = true) => invoke(IPC.AI_REPORT_REVEAL, path, reveal),
+  crashWatchStatus: () => invoke(IPC.AI_CRASH_STATUS),
+
   /* 增量更新（v1.0.7） */
   updateContext: () => invoke(IPC.UPDATE_CONTEXT),
   /** 选择并校验小更新包（只接受 zip），返回 { ok, reason, manifest, ... } */
@@ -551,6 +602,8 @@ const api = {
       IPC.PUSH_UPDATE_DOWNLOAD,
       IPC.PUSH_CLICKER_PROGRESS,
       IPC.PUSH_RECORDER_STATUS,
+      IPC.PUSH_AI_CRASH_REPORT,
+      IPC.PUSH_AI_CRASH_STATUS,
       'push:screenshot',
     ];
     if (!allowed.includes(channel as any)) {

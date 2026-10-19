@@ -4,8 +4,9 @@ import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
 import { toHexColor, dimOver } from './lib/color';
+import { applyCustomAccent, clearCustomAccent } from './lib/accent-custom';
 import { IPC } from '@shared/types';
-import type { UpdateResult, UpdateCheckResult, AabSigningInfo } from '@shared/types';
+import type { UpdateResult, UpdateCheckResult, AabSigningInfo, CrashReportMeta, CrashWatchStatus } from '@shared/types';
 import type { UiConf } from '@shared/ui-conf';
 
 import DevicePage from './pages/DevicePage';
@@ -17,6 +18,7 @@ import WeakNetworkPage from './pages/WeakNetworkPage';
 import AutoClickerPage from './pages/AutoClickerPage';
 import CommandPage from './pages/CommandPage';
 import LogsPage from './pages/LogsPage';
+import AiPage from './pages/AiPage';
 import SettingsPage from './pages/SettingsPage';
 
 const PAGE_META: Record<string, { title: string; desc: string }> = {
@@ -30,6 +32,7 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/clicker': { title: '自动连点器', desc: '' },
   '/command': { title: '命令终端', desc: '直接执行任意 adb 命令' },
   '/logs': { title: '运行日志', desc: '实时查看操作记录并一键导出' },
+  '/ai': { title: 'AI 助手', desc: '与大模型对话，查看崩溃自动分析报告' },
   '/settings': { title: '设置', desc: '外观、默认目录与环境自检' },
 };
 
@@ -78,14 +81,24 @@ export default function App() {
   // 标题栏配色要跟着这两个走（见下面同步给主进程的 effect）
   const theme = useApp((s) => s.theme);
   const accent = useApp((s) => s.accent);
+  /*
+   * 自定义主题色（v1.1.14）：色值一变、或浅深模式一变，整套派生变量都要重算。
+   * 它是内联变量（不是 CSS 块），所以必须有一处**唯一**的地方负责写 / 清，
+   * 就是下面那个 effect —— 任何别处都别再动这十几个变量。
+   */
+  const accentCustom = useApp((s) => s.accentCustom);
+  /* 玻璃主题的底图（v1.1.14）：模式（壁纸 / 主题色，互斥）+ 抓回来的壁纸 */
+  const glassBackdrop = useApp((s) => s.glassBackdrop);
+  const glassWall = useApp((s) => s.glassWall);
+  /*
+   * 🔴 设置是否已经从主进程读回来。没读回来之前 theme 只是 store 的出厂值
+   *    'light'，不是用户真实的选择 —— 这段时间**绝不能**把 theme 通知给主进程
+   *    的 setGlass（跨玻璃形态会触发重建窗口），否则启动时会
+   *    「先按 light 重建一次 → 设置到了再按 glass 重建一次」地闪个不停。
+   */
+  const settingsReady = useApp((s) => s.settings !== null);
   // 当前页面上有没有全屏遮罩（弹窗变暗时右上角系统按钮区要跟着一起压暗）
   const [scrimActive, setScrimActive] = useState(false);
-  /*
-   * 玻璃主题的「壁纸底图」（data URL）。
-   * 由下面那个 effect 从主进程抓一张真实桌面塞进来（见注释）。
-   * null = 还没抓到 / 抓失败 → CSS 退回纯色底。
-   */
-  const [glassWall, setGlassWall] = useState<string | null>(null);
 
   /* 初始化：读取设置、订阅推送（仅执行一次） */
   useEffect(() => {
@@ -143,6 +156,20 @@ export default function App() {
       const logRes = await window.adbApi.getAllLogs();
       if (alive && logRes.ok && logRes.data) {
         setLogs(logRes.data);
+      }
+
+      /*
+       * 崩溃分析报告（v1.1.14）：启动时把索引与监听状态拉一次。
+       * 必须在这里拉 —— 侧栏红点靠 crashUnread，不先取一次的话，
+       * 「程序重启后仍有未读报告」这种最常见的情况反而不会亮。
+       */
+      const repRes = await window.adbApi.crashReports();
+      if (alive && repRes?.ok && repRes.data) {
+        useApp.getState().setCrashReports(repRes.data as CrashReportMeta[]);
+      }
+      const cwRes = await window.adbApi.crashWatchStatus();
+      if (alive && cwRes?.ok && cwRes.data) {
+        useApp.getState().setCrashStatus(cwRes.data as CrashWatchStatus);
       }
 
       const mirrorRes = await window.adbApi.mirrorStatus();
@@ -224,12 +251,33 @@ export default function App() {
       }
     });
 
+    /*
+     * 崩溃自动分析（v1.1.14）两条推送。
+     *
+     * PUSH_AI_CRASH_REPORT：报告写完了。这里既要点亮侧栏红点（pushCrashReport 内部
+     * 未读数 +1），也要弹一次 toast —— 用户那时多半正盯着别的页面，不给提示的话
+     * 「红点亮了」很容易被忽略，而这份报告的价值就在于第一时间被看到。
+     *
+     * PUSH_AI_CRASH_STATUS：监听器状态变化（谁在监听 / 开关开没开）。
+     * 页面上的状态条靠它，不轮询。
+     */
+    const offCrashReport = window.adbApi.on(IPC.PUSH_AI_CRASH_REPORT, (r: CrashReportMeta) => {
+      const st = useApp.getState();
+      st.pushCrashReport(r);
+      st.toast('error', '检测到应用闪退，分析报告已生成', r?.summary || r?.packageName || '');
+    });
+    const offCrashStatus = window.adbApi.on(IPC.PUSH_AI_CRASH_STATUS, (s: CrashWatchStatus) =>
+      useApp.getState().setCrashStatus(s),
+    );
+
     return () => {
       alive = false;
       offLog();
       offDevice();
       offMirror();
       offRecord();
+      offCrashReport();
+      offCrashStatus();
     };
     // 仅在挂载时执行一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -268,6 +316,27 @@ export default function App() {
     sync();
     return () => mo.disconnect();
   }, []);
+
+  /*
+   * 自定义主题色（v1.1.14）：把「一个色值」展开成整套界面变量。
+   *
+   * 🔴 这里是**唯一**写 / 清那十几个内联变量的地方（lib/accent-custom.ts 负责算）。
+   *    之所以要挂在 theme 上：同一支色在浅色与深色下是**两套**派生值
+   *    （浅色往下压明度、深色往上抬），只依赖 accent 的话，
+   *    「选好自定义粉 → 切深色」会留在浅色那套值上，在白字黑底里发暗。
+   *
+   * 🔴 不是 'custom' 时必须**清掉**内联覆盖：内联变量优先级高于任何 CSS 选择器，
+   *    不清的话从「自定义」切回「苍穹」会看到侧栏还是粉的、按钮已经蓝了。
+   *
+   * 🔴🔴 这个 effect 的位置**必须在「标题栏配色」那个 effect 之前**：
+   *    那边是读 .titlebar 的 computed backgroundColor 回传给主进程的，
+   *    而 React 按声明顺序跑 effect —— 排在后面前者读到的还是改色前的旧值，
+   *    表现就是「换了自定义色，右上角三个按钮的区域还是旧色」。
+   */
+  useEffect(() => {
+    if (accent === 'custom') applyCustomAccent(accentCustom, theme === 'dark');
+    else clearCustomAccent();
+  }, [accent, accentCustom, theme]);
 
   /*
    * 标题栏配色跟随主题。
@@ -320,53 +389,59 @@ export default function App() {
         : symbolBase;
 
     void window.adbApi.setTitlebar({ color, symbolColor });
-  }, [theme, accent, scrimActive]);
+    /*
+     * 🔴 依赖里有 accentCustom：自定义主题色改的是**内联变量**，改了之后
+     *    --bg-titlebar（= color-mix(侧栏色, 内容区色)）跟着变，
+     *    主进程那份标题栏底色必须重算重传，否则右上角按钮区还是旧色。
+     */
+  }, [theme, accent, accentCustom, scrimActive]);
 
   /*
-   * 透明玻璃主题：抓桌面壁纸 + 铺到页面最底层（v1.1.13，2026-10-13 修正）。
+   * 透明玻璃主题：底图（v1.1.14 起分两种模式，**互斥**）。
    *
-   * 🔴🔴 为什么不再走系统 Acrylic（这一版改动的核心）：
+   * 🔴 为什么不再走系统 Acrylic（v1.1.13 改动的核心）：
    *    原方案指望 `backgroundMaterial:'acrylic'` 让真实桌面透上来并被系统磨砂。
    *    但 Electron 在 **Windows 10 上不渲染 Acrylic**（上游 issue #48440，内部用的是
    *    Win11 接口、没有 Win10 回落）；而一旦窗口 transparent:true，
    *    CSS 的 backdrop-filter 也会一起失效（页面背后是空的，没东西可采样）。
    *    ⇒ 两套模糊全死：壁纸原样清晰透出，模糊滑杆怎么拖都没反应。
    *
-   *    现改为「模拟玻璃」：主进程抓一张**真实桌面**（IPC.WINDOW_GRAB_DESKTOP），
+   *    现改为「模拟玻璃」：主进程提供底图（壁纸文件 / 整屏截图兜底），
    *    铺成本页面最底层的 `.glass-backdrop`。于是：
-   *      · 壁纸仍是用户自己的桌面（观感目标不变，不是编造的假图）；
+   *      · 底图真实存在（不是编造的假色块）；
    *      · backdrop-filter 背后有实底 ⇒ 模糊滑杆真正生效；
    *      · 不依赖系统私有接口，Win10 / Win11 表现一致。
    *
-   * ⚠️ 时序：必须**先**把壁纸铺好、再让面板去糊它。这里用一个 state（glassWall）
-   *    控制挂载，抓到就渲染、抓不到就退回纯色（不阻塞界面、也不白屏）。
-   * 🔴 只抓一次：每次切主题都重抓会让切主题明显卡顿（截图本身要几百毫秒）。
-   *    桌面换了怎么办？下次启动会重新抓 —— 这是可接受的代价。
+   * 🔴 两种底图模式（v1.1.14，用户要求互斥）：
+   *      wallpaper 壁纸  → 走上面的抓取路径，铺真实桌面壁纸
+   *      tint      主题色 → **完全不抓壁纸**（省掉几百毫秒的截图/读文件），
+   *                        底图由 CSS 按 data-glass-tint 现画一张低饱和渐变
+   *    所以「切到主题色模式后不能再使用壁纸」不只是界面上禁用一个按钮 ——
+   *    这里连抓取这一步都不再发生（状态层也把 glassWall 清成了 null）。
+   *
+   * ⚠️ 计时：必须先有底图、再让面板去糊它。抓取是异步的，抓不到（null）时
+   *    CSS 会退回纯色底，不阻塞界面、也不白屏。
+   * 🔴 只抓一次并在 store 里缓存：每次切主题都重抓要几百毫秒，切主题会明显卡顿。
+   *    桌面换了怎么办？设置页有「重新读取桌面壁纸」，或者重启程序。
    */
   useEffect(() => {
+    /*
+     * 🔴 设置没读回来之前不要调 setGlass：此时 theme 是 store 出厂值 'light'，
+     *    如果用户真实主题是玻璃，这次调用会在主进程触发「按非玻璃形态重建」，
+     *    等设置到了又一次「按玻璃重建」—— 每次重建重新挂载本组件，无限闪窗。
+     *    主进程建窗时已经按落盘的主题形态建好了，这里的首次同步本来就是冗余的。
+     */
+    if (!settingsReady) return;
     // 主进程那边只负责窗口底色的明暗（Acrylic 已移除），幂等，随手同步即可
     void window.adbApi?.setGlass(theme === 'glass');
     if (theme !== 'glass') return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        /*
-         * 🔴 返回值是 { ok, data, error } 信封（ipc.ts 的 wrap()），必须取 .data。
-         *    漏了这层会导致把整个信封对象当 data URL 用 —— 表现为
-         *    `url.slice is not a function`，且 .glass-backdrop 背景是 none（一片空）。
-         */
-        const res = await window.adbApi?.grabDesktop?.();
-        const url = res && res.ok ? res.data : null;
-        if (!cancelled && typeof url === 'string' && url) setGlassWall(url);
-      } catch {
-        /* 抓不到就保持 null，CSS 会退回纯色底，不影响使用 */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [theme]);
+    // 主题色模式：底图全部交给 CSS（--g-tint-bg），一张图都不抓
+    if (glassBackdrop === 'tint') return;
+    // 壁纸已有缓存就不重复抓（重新读取在设置页手动触发）
+    if (glassWall) return;
+    void useApp.getState().loadGlassWall();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme, settingsReady, glassBackdrop, glassWall]);
 
   /*
    * 玻璃主题下窗口是无边框的，系统标题栏与它自带的最小化/最大化/关闭按钮
@@ -380,7 +455,7 @@ export default function App() {
   return (
     <div className="app-shell">
       {/*
-        玻璃主题的「壁纸层」—— 页面内最底的一张真实桌面截图（v1.1.13 修正）。
+        玻璃主题的「底图层」—— 页面内最底的一层（v1.1.13 起，v1.1.14 分两种模式）。
 
         🔴 它是整个玻璃效果的地基，位置和层级都不能动：
           · `position:fixed; inset:0` → 铺满视口，不受任何容器滚动影响；
@@ -388,13 +463,21 @@ export default function App() {
           · 它**必须是页面内的真实 DOM 元素**，不能是 CSS background-image：
             backdrop-filter 只能采样「页面内、自己背后的像素」，CSS 背景图不算。
 
-        ⚠️ 抓到之前（glassWall === null）不渲染它 —— 此时窗口底色是深色
+        🔴 两种模式**同一个元素**，只换背景（见 theme-glass.css）：
+          · 壁纸模式 → style 里给 backgroundImage（主进程抓来的真实桌面）
+          · 主题色模式 → 加 .glass-tint 这个 class，背景取 CSS 变量 --g-tint-bg
+          不分成两个元素，是为了切换模式时「背后永远有底」—— 面板的 backdrop-filter
+          在切换那一帧采到空的话，整屏会闪一下。
+
+        ⚠️ 底图还没准备好（抓取中 / 抓失败）时不渲染它 —— 此时窗口底色是深色
            （见主进程 applyGlassWindow），不会闪白。
       */}
-      {isGlass && glassWall && (
+      {isGlass && (glassBackdrop === 'tint' || glassWall) && (
         <div
-          className="glass-backdrop"
-          style={{ backgroundImage: `url(${glassWall})` }}
+          className={`glass-backdrop${glassBackdrop === 'tint' ? ' glass-tint' : ''}`}
+          style={
+            glassBackdrop === 'tint' ? undefined : { backgroundImage: `url(${glassWall})` }
+          }
           aria-hidden="true"
         />
       )}
@@ -453,6 +536,7 @@ export default function App() {
                 <Route path="/clicker" element={<AutoClickerPage />} />
                 <Route path="/command" element={<CommandPage />} />
                 <Route path="/logs" element={<LogsPage />} />
+                <Route path="/ai" element={<AiPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </div>

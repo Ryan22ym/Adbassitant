@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button, Input, Select, Switch, Spinner } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
 import { call, tryCall } from '@/lib/ipc';
@@ -166,81 +167,93 @@ export function QuickActionBar({
         {Icon.bolt}
       </button>
 
-      {menuOpen && pos && (
-        <>
-          <div className="qa-mask" onClick={closeMenu} />
-          <div
-            className="qa-menu"
-            style={{ top: pos.top, right: pos.right }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="qa-menu-head">
-              <span className="qa-menu-title">快捷动作</span>
-              <button
-                className="qa-menu-cfg"
-                data-qa-configure
-                onClick={() => {
-                  closeMenu();
-                  onConfigure();
-                }}
-              >
-                配置
-              </button>
-            </div>
-
-            <div className="qa-menu-fg" data-qa-fg>
-              {fgLoading && !fg ? (
-                <>
-                  <Spinner size={11} /> 正在读取当前前台应用…
-                </>
-              ) : fg?.packageName ? (
-                fg.isLauncher ? (
-                  <>
-                    当前前台：<b>桌面</b>
-                    {fg.lastApp ? ` · 将用最近应用 ${shortPkg(fg.lastApp)}` : ''}
-                  </>
-                ) : (
-                  <>
-                    当前前台：<b title={fg.packageName}>{shortPkg(fg.packageName)}</b>
-                  </>
-                )
-              ) : (
-                '未识别到前台应用（点动作时再探测）'
-              )}
-            </div>
-
-            <div className="qa-menu-list">
-              {enabled.map((a) => (
+      {/*
+        🔴 菜单必须 Portal 到 document.body，不能留在组件树里（v1.1.14）：
+        玻璃主题给 .app-body / .main / .card 都加了 backdrop-filter，而 CSS 规定
+        「backdrop-filter 非 none 的元素是 fixed 后代的包含块」—— 浮层挂在设备行
+        （.card 内部）下面时，定位基准从视口变成了那张卡片：getBoundingClientRect
+        算出的视口坐标被按卡片内坐标解释，菜单整个飞出卡片（常被 overflow 裁掉），
+        表现就是「点 ⚡ 没反应」。Portal 到 body 后脱离所有带 filter 的祖先，
+        任何主题下都按视口定位。
+      */}
+      {menuOpen &&
+        pos &&
+        createPortal(
+          <>
+            <div className="qa-mask" onClick={closeMenu} />
+            <div
+              className="qa-menu"
+              style={{ top: pos.top, right: pos.right }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="qa-menu-head">
+                <span className="qa-menu-title">快捷动作</span>
                 <button
-                  key={a.id}
-                  className={`qa-menu-item qa-menu-item-${a.tone || 'default'}`}
-                  disabled={!ready || busy === a.id}
-                  data-qa-item={a.kind}
-                  onClick={() => void run(a)}
+                  className="qa-menu-cfg"
+                  data-qa-configure
+                  onClick={() => {
+                    closeMenu();
+                    onConfigure();
+                  }}
                 >
-                  <span className="qa-mi-icon">{ActionIcon[a.kind]}</span>
-                  <span className="qa-mi-label">{a.label}</span>
-                  <span className="qa-mi-target mono">{targetHint(a)}</span>
-                  {busy === a.id && <Spinner size={11} />}
+                  配置
                 </button>
-              ))}
-            </div>
+              </div>
 
-            <div className="qa-menu-foot">
-              <button
-                className="qa-menu-foot-btn"
-                onClick={() => {
-                  closeMenu();
-                  onConfigure();
-                }}
-              >
-                <span className="qa-foot-icon">{Icon.gear}</span>
-                配置快捷动作…
-              </button>
+              <div className="qa-menu-fg" data-qa-fg>
+                {fgLoading && !fg ? (
+                  <>
+                    <Spinner size={11} /> 正在读取当前前台应用…
+                  </>
+                ) : fg?.packageName ? (
+                  fg.isLauncher ? (
+                    <>
+                      当前前台：<b>桌面</b>
+                      {fg.lastApp ? ` · 将用最近应用 ${shortPkg(fg.lastApp)}` : ''}
+                    </>
+                  ) : (
+                    <>
+                      当前前台：<b title={fg.packageName}>{shortPkg(fg.packageName)}</b>
+                    </>
+                  )
+                ) : (
+                  '未识别到前台应用（点动作时再探测）'
+                )}
+              </div>
+
+              <div className="qa-menu-list">
+                {enabled.map((a) => (
+                  <button
+                    key={a.id}
+                    className={`qa-menu-item qa-menu-item-${a.tone || 'default'}`}
+                    disabled={!ready || busy === a.id}
+                    data-qa-item={a.kind}
+                    onClick={() => void run(a)}
+                  >
+                    <span className="qa-mi-icon">{ActionIcon[a.kind]}</span>
+                    <span className="qa-mi-label">{a.label}</span>
+                    <span className="qa-mi-target mono">{targetHint(a)}</span>
+                    {busy === a.id && <Spinner size={11} />}
+                  </button>
+                ))}
+              </div>
+
+              <div className="qa-menu-foot">
+                <button
+                  className="qa-menu-foot-btn"
+                  onClick={() => {
+                    closeMenu();
+                    onConfigure();
+                  }}
+                >
+                  <span className="qa-foot-icon">{Icon.gear}</span>
+                  配置快捷动作…
+                </button>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          </>,
+          document.body,
+        )}
     </span>
   );
 }
@@ -423,7 +436,12 @@ export function QuickActionsDialog({
 
   if (!open) return null;
 
-  return (
+  /*
+   * 配置弹层同样 Portal 到 document.body —— 理由与上面的 ⚡ 菜单相同：
+   * 玻璃主题的 backdrop-filter 会把 fixed 弹层的包含块改成 .main / .card，
+   * 遮罩盖不全、弹窗错位。Portal 后任何主题下都按视口定位。
+   */
+  return createPortal(
     <div className="qa-dialog-mask" onClick={onClose}>
       <div className="qa-dialog" data-qa-dialog onClick={(e) => e.stopPropagation()}>
         <header className="qa-dialog-head">
@@ -606,6 +624,7 @@ export function QuickActionsDialog({
           ))}
         </datalist>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

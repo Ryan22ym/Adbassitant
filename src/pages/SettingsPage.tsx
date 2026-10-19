@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -21,6 +21,8 @@ import { IPC } from '@shared/types';
 import type {
   AccentId,
   EnvCheckResult,
+  GlassBackdropMode,
+  GlassTintId,
   UpdateCheckResult,
   UpdateContext,
   UpdateDownloadProgress,
@@ -52,6 +54,63 @@ const ACCENTS: {
   { id: 'cangqiong', name: '苍穹', light: '#3b6ae1', dark: '#6b8cf0' },
   { id: 'ocean', name: '远山', light: '#2a5cc4', dark: '#5b8bf0' },
   { id: 'ink', name: '墨玉', light: '#46566f', dark: '#8fa3c4' },
+  /* v1.1.14：两组粉色系。淡粉偏冷、饱和度低；樱花偏暖、更艳一点 —— 并排能看出差别 */
+  { id: 'blush', name: '淡粉', light: '#d4718f', dark: '#ef9ab4' },
+  { id: 'sakura', name: '樱花', light: '#e2637f', dark: '#ee8496' },
+];
+
+/**
+ * 自定义色（v1.1.14）。
+ *
+ * 界面上是色块列表末尾的一枚**彩虹色圆点**，点开才出现色盘 ——
+ * 它不是「第 8 套配色」，而是「让你自己挑一个色值」，
+ * 所以刻意和其它主题色长得不一样（渐变底 + 齿轮感的图标性）。
+ *
+ * 🔴 色值只有**一个**：整套界面的十几个变量由它现算（src/lib/accent-custom.ts）。
+ *    默认值给一个粉红而不是纯红/纯蓝 —— 用户第一次点进来看到的是一个
+ *    已经调好明度的成片观感，而不是一个需要自己摸索的空白。
+ */
+const CUSTOM_ACCENT_ID: AccentId = 'custom';
+/** 第一次点「自定义」时先用这个色（之后一直用用户上次挑的） */
+const CUSTOM_ACCENT_FALLBACK = '#e06b8b';
+/**
+ * 色盘里的常用色快选。
+ * 不追求「覆盖所有色相」，而是给几个**一眼就能定下来的方向** ——
+ * 有了它们，多数人不用去拖那个系统色盘。
+ */
+const CUSTOM_ACCENT_PRESETS = [
+  '#e06b8b',
+  '#e2637f',
+  '#d4718f',
+  '#3b6ae1',
+  '#2e7c9c',
+  '#5b8c5a',
+  '#c08a2e',
+  '#8a6bd1',
+];
+
+/**
+ * 玻璃主题「主题色底图」的色系（v1.1.14）。
+ *
+ * 与上面的主题色**不是一回事**：这里的每一项决定的是**整窗底图**长什么样
+ * （生成的低饱和渐变），同时顺带把主色换成同色系 —— 底色是淡粉、按钮还是蓝的，
+ * 整屏就不是一套东西了。
+ * 色值与渐变停靠色在 src/styles/theme-glass.css 的 [data-glass-tint] 块里。
+ */
+const GLASS_TINTS: { id: GlassTintId; name: string; swatch: string }[] = [
+  { id: 'blue', name: '淡蓝', swatch: '#dce9fb' },
+  { id: 'pink', name: '淡粉', swatch: '#fbe6ee' },
+  { id: 'gray', name: '雅灰', swatch: '#e6e8ec' },
+  { id: 'pearl', name: '珍珠白', swatch: '#f1eee9' },
+];
+
+/**
+ * 玻璃主题的底图模式（v1.1.14）—— **互斥**，见 shared/types.ts 的 GlassBackdropMode。
+ * 用分段控件而不是两个开关：两个开关会出现「都开 / 都关」这种没有意义的状态。
+ */
+const GLASS_BACKDROPS: { value: GlassBackdropMode; label: string }[] = [
+  { value: 'wallpaper', label: '桌面壁纸' },
+  { value: 'tint', label: '主题色' },
 ];
 
 /**
@@ -87,6 +146,8 @@ const THEME_MODES: { value: 'light' | 'dark' | 'genshin' | 'glass'; label: strin
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.14':
+    '新增「AI 助手」：模型接口写在程序目录的 Conf\\ai.json 里，DeepSeek / 通义千问 / Kimi / 智谱 GLM / OpenAI / Claude 已预填好地址与模型，填上自己的 Key 即可用，也能在页面里直接改；对话支持图片、文件与网页链接三种附件。设置页最后一行新增「检测崩溃自动AI分析日志」开关，开启后投屏中的前台应用一发生闪退就自动导出日志、把最近 10 分钟的日志与崩溃前的操作记录交给 AI 分析，并生成含崩溃时间、设备、崩溃前操作与原因分析的报告；侧栏 AI 入口亮红点提醒，报告页可一键定位到日志与报告所在的文件夹。新增淡粉、樱花两套主题色与自定义主题色（色盘自由选色，整套界面配色自动派生）；透明玻璃主题新增淡蓝 / 淡粉 / 雅灰 / 珍珠白四种主题色底图（低饱和柔光底，与桌面壁纸模式二选一互斥）；修复玻璃主题切回其它主题后右上角窗口按钮消失。',
   '1.1.13':
     '新增「玻璃」主题：整窗透明磨砂玻璃效果，透明度与模糊程度可在设置里调节；修复实时 Logcat 切换设备后「保存为文件」导出仍是旧设备日志的问题；投屏键盘输入改为 UHID 模式，数字、英文、中文输入法都能直接输入。',
   '1.1.12':
@@ -175,10 +236,17 @@ export default function SettingsPage() {
   const applyTheme = useApp((s) => s.applyTheme);
   const accent = useApp((s) => s.accent);
   const applyAccent = useApp((s) => s.applyAccent);
+  /* 自定义主题色（v1.1.14）：色值与「界面上那份缓存」都在 store 里 */
+  const accentCustom = useApp((s) => s.accentCustom);
+  const applyAccentCustom = useApp((s) => s.applyAccentCustom);
   /* 透明玻璃主题的两个参数（v1.1.13）—— 拖动实时写 DOM，松手才落盘 */
   const glassOpacity = useApp((s) => s.glassOpacity);
   const glassRoughness = useApp((s) => s.glassRoughness);
   const paintGlass = useApp((s) => s.paintGlass);
+  /* 玻璃主题的底图（v1.1.14）：壁纸 / 主题色，互斥 */
+  const glassBackdrop = useApp((s) => s.glassBackdrop);
+  const glassTint = useApp((s) => s.glassTint);
+  const glassWall = useApp((s) => s.glassWall);
   const toast = useApp((s) => s.toast);
 
   const [env, setEnv] = useState<EnvCheckResult | null>(null);
@@ -237,6 +305,76 @@ export default function SettingsPage() {
     update({ accent: a });
   };
 
+  /*
+   * 自定义主题色（v1.1.14）。
+   *
+   * 🔴 落盘要**防抖**：系统色盘在拖动过程中会连续触发 input（每个色相档一次），
+   *    而保存设置是同步 IPC + 整文件重写 —— 不防抖的话拖一次色盘要写几十次磁盘。
+   *    所以：改色立刻写 DOM（画面跟手），400ms 内不再动才落盘。
+   *    浅/深两套派生值由 App 的 effect 按当前主题重算，这里只管色值本身。
+   */
+  const persistTimer = useRef<number | null>(null);
+  const clearPersistTimer = () => {
+    if (persistTimer.current !== null) {
+      window.clearTimeout(persistTimer.current);
+      persistTimer.current = null;
+    }
+  };
+  /* 组件卸载时把挂着的落盘取消掉，避免在已卸载的组件上 setSettings */
+  useEffect(() => clearPersistTimer, []);
+
+  const setCustomAccent = (hex: string) => {
+    applyAccentCustom(hex);
+    // 色值变了才需要重挂 data-accent（'custom' 是它自己的值，重复设也无害）
+    if (accent !== CUSTOM_ACCENT_ID) applyAccent(CUSTOM_ACCENT_ID);
+    clearPersistTimer();
+    persistTimer.current = window.setTimeout(() => {
+      persistTimer.current = null;
+      update({ accent: CUSTOM_ACCENT_ID, accentCustom: hex });
+    }, 400);
+  };
+
+  /** 点「自定义」色块：还没挑过色就先给一个默认色，色盘才不会一进来是黑的 */
+  const openCustomAccent = () => {
+    if (!accentCustom) {
+      setCustomAccent(CUSTOM_ACCENT_FALLBACK);
+      return;
+    }
+    changeAccent(CUSTOM_ACCENT_ID);
+  };
+
+  const reloadGlassWallpaper = async () => {
+    toast('info', '正在读取桌面壁纸…');
+    await useApp.getState().loadGlassWall();
+    if (useApp.getState().glassWall) toast('success', '已按当前桌面壁纸更新底图');
+    else toast('warn', '没读到桌面壁纸', '可能壁纸被系统加密或路径变了，底图会退回纯色');
+  };
+
+  /*
+   * 玻璃底图模式切换（v1.1.14）——**互斥**的那一步就发生在这里。
+   *
+   * 切到壁纸模式时**顺手补一次抓取**：从主题色模式切回来时 store 里的
+   * glassWall 是 null（切走时被清掉了），不补的话底图会空白一块，
+   * 得等 App 的 effect 再跑一轮 —— 而那个 effect 的依赖里就有 glassBackdrop，
+   * 所以其实也会自己跑；这里显式补一次是为了让「刚切过去就有图」这件事
+   * 不依赖 effect 的执行顺序（观感上更干脆）。
+   */
+  const changeGlassBackdrop = (mode: GlassBackdropMode) => {
+    if (mode === glassBackdrop) return;
+    useApp.getState().setGlassBackdrop(mode);
+    void update({ glassBackdrop: mode });
+    if (mode === 'wallpaper' && !useApp.getState().glassWall) {
+      void useApp.getState().loadGlassWall();
+    }
+  };
+
+  /** 换玻璃底图的色系（只改 <html data-glass-tint>，由 store 负责写） */
+  const changeGlassTint = (t: GlassTintId) => {
+    if (glassTint === t) return;
+    useApp.getState().setGlassTint(t);
+    void update({ glassTint: t });
+  };
+
   const pickDir = async (key: 'screenshotDir' | 'recordDir' | 'pullDir') => {
     const dir = await call<string | null>(() => window.adbApi.pickDir(), { silent: true });
     if (dir) update({ [key]: dir });
@@ -265,7 +403,7 @@ export default function SettingsPage() {
         collapsible
         defaultOpen={appearanceOpen}
         title="外观"
-        subtitle="主题模式与主题色"
+        subtitle="主题模式、主题色与底图"
       >
         <Field label="主题模式">
           <Segmented
@@ -276,10 +414,10 @@ export default function SettingsPage() {
         </Field>
 
         {/*
-          主题色那一行按主题分两种形态：
-          · 浅色 / 深色 → 原来的 5 色圆点，随便切；
-          · 原神 → 配色是它世界观的一部分（暖金），**不提供切换入口**，
-            换成一句说明。整行直接消失会让人以为界面坏了，所以留个交代。
+          主题色 / 底图那一块，按主题分三种形态（v1.1.14 起）：
+          · 原神        → 配色是它世界观的一部分（暖金），不提供切换，只留一句交代；
+          · 透明玻璃    → 「底图模式（壁纸 / 主题色）」+ 色系选择，两者**互斥**；
+          · 浅色 / 深色 → 主题色（7 套 + 自定义色盘）。
         */}
         {theme === 'genshin' ? (
           <div className="field accent-field">
@@ -288,46 +426,176 @@ export default function SettingsPage() {
           </div>
         ) : theme === 'glass' ? (
           /*
-            透明玻璃主题：主色固定（参考图那支蓝），同样不给切。
-            这里换成它**专属的两个参数**，只在选中该主题时出现 ——
-            别的主题下这两条滑杆没有意义（CSS 只认 data-theme='glass'）。
+            透明玻璃主题的底图（v1.1.14 重构）。
+            原方案是「固定配色（白色磨砂 + 蓝）」+ 一句说明；现在改成可选：
+            底图模式二选一（互斥），主题色模式下再挑色系。
           */
-          <div className="field accent-field">
-            <span className="field-label">主题色</span>
-            <div className="text-dim">透明玻璃主题使用固定配色（白色磨砂 + 蓝），不提供主题色切换</div>
-          </div>
+          <>
+            <Field label="底图模式" hint="两者互斥，一次只能用一种">
+              <Segmented
+                value={glassBackdrop}
+                onChange={(v) => changeGlassBackdrop(v as GlassBackdropMode)}
+                options={GLASS_BACKDROPS}
+              />
+            </Field>
+
+            <div className="field accent-field">
+              <span className="field-label">主题色</span>
+              <div className="accent-picker">
+                {GLASS_TINTS.map((t) => {
+                  const usable = glassBackdrop === 'tint';
+                  const active = usable && glassTint === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`accent-chip${active ? ' active' : ''}`}
+                      data-glass-tint-id={t.id}
+                      aria-pressed={active}
+                      disabled={!usable}
+                      title={
+                        usable
+                          ? `${t.name}底图`
+                          : `当前是桌面壁纸模式，先切到「主题色」才能选色系`
+                      }
+                      onClick={() => changeGlassTint(t.id)}
+                    >
+                      <span
+                        className="accent-swatch"
+                        style={{ '--swatch': t.swatch } as CSSProperties}
+                      />
+                      <span className="accent-name">{t.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/*
+                这段提示是「互斥」这件事在界面上的落点：
+                选中一种模式后，另一种就是**不可用**状态，而不是「两个都能开」。
+                不把话说出来的话，用户会以为色系旁边少了什么开关。
+              */}
+              <div className="text-dim accent-note">
+                {glassBackdrop === 'tint'
+                  ? '底图按所选色系自动生成（低饱和柔和渐变），桌面壁纸已停用。需要用壁纸请先把上面的「底图模式」切回「桌面壁纸」。'
+                  : '当前用你电脑的桌面壁纸当底图。想换成主题色底图，先把上面的「底图模式」切到「主题色」。'}
+              </div>
+            </div>
+
+            {glassBackdrop === 'wallpaper' && (
+              <div className="field accent-field">
+                <span className="field-label">壁纸来源</span>
+                <div className="row row-wrap">
+                  <span className="text-dim">
+                    {glassWall ? '已读取到当前桌面壁纸' : '尚未读取到（底图会退回纯色）'}
+                  </span>
+                  <Button size="sm" variant="default" onClick={reloadGlassWallpaper}>
+                    重新读取桌面壁纸
+                  </Button>
+                </div>
+                <div className="text-dim accent-note">
+                  壁纸在启动时读取一次；换了桌面壁纸后点上面这个按钮即可立刻更新。
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           /*
-            主题色：色块就是该主题的主色（--accent）一个圆点。
+            浅色 / 深色：主题色一行（色块 = 该主题的主色）+ 自定义色盘。
             故意不用 <Field>（它渲染的是 <label>）—— 里面放 <button> 会让点击被 label
             再触发一次，所以这里手写同样的 .field / .field-label 结构。
           */
-          <div className="field accent-field">
-            <span className="field-label">主题色</span>
-            <div className="accent-picker">
-              {ACCENTS.map((a) => {
-                const color = theme === 'dark' ? a.dark : a.light;
-                const active = accent === a.id;
-                return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`accent-chip${active ? ' active' : ''}`}
-                    data-accent-id={a.id}
-                    aria-pressed={active}
-                    title={a.name}
-                    onClick={() => changeAccent(a.id)}
-                  >
-                    <span
-                      className="accent-swatch"
-                      style={{ '--swatch': color } as CSSProperties}
+          <>
+            <div className="field accent-field">
+              <span className="field-label">主题色</span>
+              <div className="accent-picker">
+                {ACCENTS.map((a) => {
+                  const color = theme === 'dark' ? a.dark : a.light;
+                  const active = accent === a.id;
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      className={`accent-chip${active ? ' active' : ''}`}
+                      data-accent-id={a.id}
+                      aria-pressed={active}
+                      title={a.name}
+                      onClick={() => changeAccent(a.id)}
+                    >
+                      <span
+                        className="accent-swatch"
+                        style={{ '--swatch': color } as CSSProperties}
+                      />
+                      <span className="accent-name">{a.name}</span>
+                    </button>
+                  );
+                })}
+
+                {/*
+                  自定义色（v1.1.14）：刻意和上面几枚长得不一样 ——
+                  彩虹渐变底 + 加号，一眼能认出「这不是一套现成配色，是自己调」。
+                */}
+                <button
+                  type="button"
+                  className={`accent-chip${accent === CUSTOM_ACCENT_ID ? ' active' : ''}`}
+                  data-accent-id="custom"
+                  aria-pressed={accent === CUSTOM_ACCENT_ID}
+                  title="自定义颜色"
+                  onClick={openCustomAccent}
+                >
+                  <span className="accent-swatch accent-swatch-custom" />
+                  <span className="accent-name">自定义</span>
+                </button>
+              </div>
+
+              {/*
+                色盘只在「自定义」被选中时展开。
+                🔴 用原生 <input type="color">，不自己画色盘：
+                  它是系统色盘（Windows 上是那个完整的颜色选择器，带取色器 /
+                  色相环 / RGB / HEX），自己画一个既费事又做不到那么好用。
+              */}
+              {accent === CUSTOM_ACCENT_ID && (
+                <div className="custom-accent">
+                  <div className="custom-accent-line">
+                    <input
+                      type="color"
+                      className="custom-accent-input"
+                      aria-label="自定义主题色"
+                      value={/^#[0-9a-fA-F]{6}$/.test(accentCustom) ? accentCustom : CUSTOM_ACCENT_FALLBACK}
+                      onChange={(e) => setCustomAccent(e.target.value.toLowerCase())}
                     />
-                    <span className="accent-name">{a.name}</span>
-                  </button>
-                );
-              })}
+                    <span className="mono custom-accent-hex">
+                      {/^#[0-9a-fA-F]{6}$/.test(accentCustom)
+                        ? accentCustom.toLowerCase()
+                        : CUSTOM_ACCENT_FALLBACK}
+                    </span>
+                    <span className="text-dim custom-accent-tip">
+                      点左侧色块打开色盘，拖动时界面实时跟随
+                    </span>
+                  </div>
+
+                  <div className="custom-accent-presets">
+                    {CUSTOM_ACCENT_PRESETS.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        className={`custom-accent-dot${
+                          accentCustom.toLowerCase() === c ? ' active' : ''
+                        }`}
+                        style={{ '--swatch': c } as CSSProperties}
+                        title={c}
+                        onClick={() => setCustomAccent(c)}
+                      />
+                    ))}
+                  </div>
+
+                  <div className="text-dim accent-note">
+                    只挑一个颜色，整套界面的底色、边框、按钮会按它自动派生
+                    （背景往灰里压、按钮的明度也会校正，避免挑到接近纯白或纯黑时看不清）。
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
+          </>
         )}
 
         {/*
@@ -345,7 +613,7 @@ export default function SettingsPage() {
               />
             </Field>
 
-            <Field label="模糊程度" hint="数值越大桌面磨得越糊（只剩色块）；0 为不模糊">
+            <Field label="模糊程度" hint="数值越大底图磨得越糊（只剩色块）；0 为不模糊">
               <Slider
                 value={glassRoughness}
                 onInput={(v) => onGlassInput(glassOpacity, v)}
@@ -354,14 +622,18 @@ export default function SettingsPage() {
             </Field>
 
             {/*
-              一句必要的提醒：这里说的是**两个滑杆的关系**，以及滑杆管不到的那部分。
-              不写清楚的话，用户在浅色壁纸上把模糊拉满却觉得「本来就挺清楚」，
+              一句必要的提醒：这里说的是**两个滑杆的关系**。
+              不写清楚的话，用户在浅色底图上把模糊拉满却觉得「本来就挺清楚」，
               会以为滑杆坏了。
+              ⚠️ 别写「桌面那层磨砂由系统提供，需要 Win10 1809+」——
+                 那是 v1.1.13 之前走系统 Acrylic 时代的说法，现在是「模拟玻璃」：
+                 底图由程序自己铺（壁纸文件或现画的渐变），模糊由 CSS backdrop-filter
+                 做，跟系统版本无关（Win10 也能用）。
             */}
             <div className="text-dim glass-tune-hint">
-              模糊程度决定「看得见多少细节」：45 左右桌面只剩柔和的色块（默认）；
+              模糊程度决定「看得见多少细节」：45 左右底图只剩柔和的色块（默认）；
               调到 20 以下会重新认出图标和文字轮廓；拉到 0 则完全清晰。
-              桌面那一层的磨砂同样由系统提供，需 Windows 10 1809 及以上版本。
+              两个滑杆对「桌面壁纸」与「主题色」两种底图都生效。
             </div>
           </div>
         )}
@@ -577,6 +849,27 @@ export default function SettingsPage() {
           >
             打开配置文件夹
           </Button>
+        </div>
+      </Card>
+
+      {/*
+        检测崩溃自动 AI 分析日志（v1.1.14）。
+        需求明确要求它是**设置页的最后一行**、且**只有开关、不写说明**，
+        所以形态和上面「开机自启动」完全一致：Card 不传 title、整张卡片一行。
+        别顺手补 setting-note —— 开关打开后什么行为，写在 AI 页面顶部的状态条里。
+
+        开关本身只写 settings.crashAutoAnalyze；监听器的启停由主进程的
+        syncCrashWatch() 跟着这个值走（设置变更钩子在 electron/main.ts）。
+      */}
+      <Card>
+        <div className="setting-line">
+          <span className="setting-line-label setting-line-title">检测崩溃自动AI分析日志</span>
+          <span className="spacer" />
+          <Switch
+            checked={!!settings.crashAutoAnalyze}
+            onChange={(v) => update({ crashAutoAnalyze: v })}
+            aria-label="检测崩溃自动AI分析日志"
+          />
         </div>
       </Card>
     </>

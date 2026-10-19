@@ -22,8 +22,16 @@ import { log } from './adb';
  *    一律记一条 warn 然后按出厂默认继续跑。
  */
 
-/** 三份配置文件。顺序即日志与复制的顺序。 */
-const CONF_FILES = ['layout.json', 'panels.json', 'features.json'] as const;
+/**
+ * 配置文件。顺序即日志与复制的顺序。
+ *
+ * ⚠️ ai.json（v1.1.14）也在这里，但它**不属于 UiConf**：
+ *    它是 AI 模块的接入配置，由 services/ai.ts 自己读（同样借这个目录，
+ *    让用户只需要认识一个 Conf/ 文件夹）。放在这份清单里的唯一目的是
+ *    「首次启动时把出厂模板复制到用户目录」—— 复制完就与 ui-conf 无关了，
+ *    别顺手把它塞进 getUiConf() 的 normalize 里。
+ */
+const CONF_FILES = ['layout.json', 'panels.json', 'features.json', 'ai.json'] as const;
 
 /** 出厂说明文档，每次启动都刷新一份到用户目录（是文档不是配置，覆盖无风险） */
 const CONF_README = 'README.md';

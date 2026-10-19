@@ -10,6 +10,7 @@ import { getSettings } from './services/settings';
 import { getUiConf, resolveUiConfDir } from './services/ui-conf';
 import { pickAutoConnectTarget } from './services/auto-connect';
 import { hasActiveWeakNetSession, recoverStaleSession, stopWeakNet } from './services/weaknet';
+import { shutdownCrashWatch, syncCrashWatch } from './services/crash';
 import { refreshShortcutIcons } from './services/shortcuts';
 import { syncAutoLaunch } from './services/auto-launch';
 import { syncGlassCorners, resetGlassCornerCache } from './services/win-corners';
@@ -18,6 +19,16 @@ import { MIRROR_DEFAULTS } from '../shared/mirror-defaults';
 
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
+/*
+ * 当前窗口的「形态」：建窗时是不是按玻璃主题建的（frame:false，无系统按钮）。
+ *
+ * 🔴 frame / titleBarOverlay 都是 **建窗参数**，运行期改不回去 ——
+ *    所以「玻璃 ↔ 普通主题」跨越形态时，唯一正确的做法是**按新形态重建窗口**
+ *    （见 applyGlassWindow）。这个标记就是用来判断「这次 setGlass 是否跨形态」。
+ */
+let windowFormGlass = false;
+/* 上一次跨形态重建窗口的时刻（保险丝用，见 recreateWindowForGlassForm） */
+let lastGlassRecreateAt = 0;
 
 /** 托盘图标：只在「插入自动投屏」开着的时候存在，见 trayEnabled() */
 let tray: Tray | null = null;
@@ -211,14 +222,30 @@ function startInGlass(): boolean {
  *    · 面板的 `backdrop-filter` 背后终于有实底 ⇒ **模糊滑杆真正生效**。
  *    · 跨 Win10 / Win11 表现一致，不依赖任何系统级私有接口。
  *
- * ⚠️ 这个函数现在只负责「窗口底色的明暗」—— Acrylic 那部分已移除。
- *    保留函数与调用点是为了不改 IPC 契约（渲染层仍会调 setGlass）。
+ * 🔴🔴 跨形态切换 = 重建窗口（v1.1.14 修复「玻璃切回其它主题后右上角按钮消失」）：
+ *    玻璃主题建窗用 `frame:false`（无系统按钮，渲染层画圆点），普通主题用
+ *    `titleBarStyle:'hidden' + titleBarOverlay`（系统按钮）。这两套都是
+ *    **建窗参数**：frame 运行期改不回去，而 `setTitleBarOverlay` 在没开
+ *    overlay 的窗口上必然抛错（被下面的 catch 吞掉）—— 旧版本退出玻璃后
+ *    系统按钮就永远消失了，只能重启（重启按新主题建窗，按钮才回来）。
+ *    反方向（普通 → 玻璃）还有个隐藏 bug：系统 overlay 按钮还在，和自绘
+ *    圆点**同时出现**两套。⇒ 只要「这次要的形态 ≠ 建窗形态」，直接按新形态
+ *    重建窗口（保留位置与最大化状态），两个方向的 bug 一起根治。
+ *
+ * ⚠️ 同形态内（玻璃 → 玻璃、普通 → 普通）只动窗口底色，不重建 ——
+ *    主题色之间的切换仍然是平滑的，没有窗口闪动。
  *
  * 🔴 托盘 / 投屏子窗口不受影响：本函数只动 mainWindow。
  */
 function applyGlassWindow(on: boolean): void {
   const w = mainWindow;
   if (!w || w.isDestroyed()) return;
+  /* 跨形态：玻璃形态的窗口给不了 overlay 按钮，普通形态的窗口给不了
+   * frame:false —— 两边都救不回来，只能按新形态重建。 */
+  if (on !== windowFormGlass) {
+    recreateWindowForGlassForm(on);
+    return;
+  }
   try {
     if (on) {
       /*
@@ -244,7 +271,44 @@ function applyGlassWindow(on: boolean): void {
   syncGlassCorners(w, on);
 }
 
-function createWindow() {
+/**
+ * 按**新的玻璃形态**重建主窗口（v1.1.14）。
+ *
+ * 只在「玻璃 ↔ 普通主题」跨越窗口形态时调用（见 applyGlassWindow）：
+ * frame / titleBarOverlay 是建窗参数，改不回去，只能拆了重盖。
+ *
+ * 做法：**先**按新形态建好新窗口（拿到旧窗口的位置与最大化状态），
+ * **再** destroy 旧窗口 —— 中间不留「没有窗口」的空档。
+ * ⚠️ 必须用 `destroy()` 而不是 `close()`：旧窗口挂着「关窗收进托盘」的
+ *    close 拦截（见 createWindow 里那段），close() 会被 preventDefault 变成
+ *    藏进托盘，旧窗口永远关不掉、还一直占着资源。
+ * 🔴 新窗口加载后会自己读设置、走一遍主题初始化（包括再调一次 setGlass），
+ *    那时形态已经一致，不会再触发重建 —— 不会死循环。
+ */
+function recreateWindowForGlassForm(on: boolean): void {
+  const old = mainWindow;
+  if (!old || old.isDestroyed()) return;
+  /*
+   * 🔴 保险丝：正常生命周期里最多只该发生一次（切主题那次）。
+   *    如果渲染层有 bug 反复调 setGlass 且值在跳，这里会变成「建了拆、拆了建」
+   *    的闪窗死循环 —— 1.5 秒内的第二次重建直接拒绝，宁可形态不对也别转圈。
+   */
+  const now = Date.now();
+  if (now - lastGlassRecreateAt < 1500) {
+    log('warn', '窗口', '玻璃形态重建过于频繁，本次已忽略（疑似渲染层反复 setGlass）');
+    return;
+  }
+  lastGlassRecreateAt = now;
+  const maximized = old.isMaximized();
+  const bounds = maximized ? undefined : old.getBounds();
+  createWindow({ glass: on, bounds, maximized });
+  /* 让触发本次重建的 IPC 先返回（发送方还是旧窗口的渲染进程），下一拍再拆旧窗口 */
+  setTimeout(() => {
+    if (!old.isDestroyed()) old.destroy();
+  }, 0);
+}
+
+function createWindow(restore?: { glass: boolean; bounds?: Electron.Rectangle; maximized?: boolean }) {
   /*
    * 标题栏改成自绘（v1.1.3）。
    *
@@ -279,13 +343,15 @@ function createWindow() {
    * 只能靠 setBackgroundMaterial('none') + setBackgroundColor(不透明) 把观感拉回来，
    * 并让渲染层不再设 roundedCorners（见 applyGlassWindow 的注释）。
    */
-  const glass = startInGlass();
+  const glass = restore ? restore.glass : startInGlass();
 
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 960,
     minHeight: 640,
+    /* 重建（跨玻璃形态切换）时沿用旧窗口的位置尺寸，别跳回出厂 1280×860 */
+    ...(restore?.bounds ?? {}),
     title: 'ADB 桌面助手',
     icon: appIcon(),
     // 首帧（页面还没画出来）的底色，尽量贴近默认主题色，避免闪一下别的颜色。
@@ -341,6 +407,8 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
+    /* 重建时旧窗口是最大化状态 → 新窗口也要最大化（bounds 在最大化时不取，见 recreate） */
+    if (restore?.maximized) mainWindow?.maximize();
   });
 
   /*
@@ -414,10 +482,17 @@ function createWindow() {
    *
    * 开关关着时这里直接放行 —— 行为与 v1.1.8 完全一致（关窗即退出）。
    */
+  /*
+   * 🔴 下面两个 handler 必须**捕获本窗口实例**（win），不能引用模块级 mainWindow：
+   *    跨玻璃形态切换会先建新窗口（mainWindow 已指向新窗口）再销毁旧窗口 ——
+   *    旧窗口的 closed 若无条件 `mainWindow = null`，会把**新窗口**的引用清掉，
+   *    后面 bringToFront / syncTray 全部失灵。
+   */
+  const win = mainWindow;
   mainWindow.on('close', (e) => {
     if (appQuitting || !trayEnabled()) return;
     e.preventDefault();
-    mainWindow?.hide();
+    win.hide();
     if (!trayHintShown && tray) {
       trayHintShown = true;
       try {
@@ -432,13 +507,17 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
-    mainWindow = null;
+    /* 只有当挂掉的确实是「当前窗口」才清引用（重建场景下挂的是旧窗口） */
+    if (mainWindow === win) mainWindow = null;
     /*
      * 🔴 圆角缓存是模块级单例，窗口换了（退出重进 / macOS 的 activate 重建）
      *    必须清掉，否则新窗口沿用旧 key，圆角会被「跳过设置」而消失。
      */
     resetGlassCornerCache();
   });
+
+  // 记录本窗口的形态（玻璃 ↔ 普通的运行期切换靠它判断要不要重建）
+  windowFormGlass = glass;
 
   // 外部链接用系统浏览器打开
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -524,7 +603,16 @@ app.whenReady().then(() => {
   }
 
   // 设置一变就同步托盘：开关就是「程序要不要常驻」的开关，必须立刻生效
-  setSettingsChangedHook(() => syncTray());
+  setSettingsChangedHook(() => {
+    syncTray();
+    /*
+     * 崩溃自动分析（v1.1.14）跟着同一个钩子走。
+     * 它不另开一条「设置监听」：设置落盘的唯一出口就是 ipc.ts 的 SETTINGS_SET，
+     * 而那个出口只调这一个钩子 —— 两处各监听一次必然有一处会漏。
+     * 监听器内部自己判断「开关开没开 + 投屏在不在跑」，这里无脑调即可（幂等）。
+     */
+    syncCrashWatch();
+  });
 
   /*
    * 玻璃主题的窗口切换钩子（v1.1.13）：渲染层点了「透明玻璃」就切整窗 Acrylic。
@@ -536,6 +624,8 @@ app.whenReady().then(() => {
 
   // 开机时开关可能已经是开的（上次开过），托盘要在窗口出现之前就位
   syncTray();
+  /* 崩溃监听器同样对齐一次（此时投屏没跑，等价于「不监听」，幂等） */
+  syncCrashWatch();
 
   // 首屏之后做一次设备扫描，让 UI 快速有数据
   mainWindow?.webContents.once('did-finish-load', () => {
@@ -570,6 +660,8 @@ app.whenReady().then(() => {
    *     加 in-flight 保护，避免 adb 卡住时请求越堆越多。
    */
   let scanning = false;
+  /* 崩溃监听器的自愈节拍：每 5 次设备扫描（约 10 秒）对齐一次 */
+  let healTick = 0;
   setInterval(async () => {
     if (scanning) return;
     scanning = true;
@@ -580,6 +672,21 @@ app.whenReady().then(() => {
       }
       const target = pickAutoConnectTarget(ds);
       if (target) await fireAutoConnect(target);
+
+      /*
+       * 崩溃监听器的自愈（v1.1.14）。
+       *
+       * 正常路径下它由「投屏状态推送 / 设置变化」驱动，但有两种情况会让它悄悄停摆：
+       *   · 设备掉线导致 logcat 子进程退出（watch 被清空，但投屏状态没变，不会再有推送）；
+       *   · 投屏进程被外部强杀，状态推送没来得及发出。
+       * 这类「监听器死了但没人知道」的静默失效最难查 —— 用户以为在守着，
+       * 实际崩溃了什么都没发生。所以定期无脑对齐一次（幂等，代价是一次布尔判断）。
+       */
+      healTick += 1;
+      if (healTick >= 5) {
+        healTick = 0;
+        syncCrashWatch();
+      }
     } catch {
       /* ignore */
     } finally {
@@ -616,6 +723,8 @@ app.on('window-all-closed', () => {
  */
 app.on('before-quit', () => {
   appQuitting = true;
+  /* 崩溃监听挂着一条 adb logcat 子进程，退出时收干净（否则它会变成孤儿进程） */
+  shutdownCrashWatch();
 });
 
 let quitting = false;

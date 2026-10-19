@@ -52,6 +52,10 @@
     "logs": {
       "stream": true
     },
+    "ai": {
+      "chat": true,
+      "reports": true
+    },
     "packages": {
       "workdir": true,
       "rules": false,

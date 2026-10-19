@@ -23,6 +23,8 @@ function defaultPackageRoot(): string {
 const DEFAULTS: AppSettings = {
   theme: 'light',
   accent: 'cangqiong',
+  // 自定义主题色（v1.1.14）：空串 = 还没挑过，此时 accent='custom' 也没意义
+  accentCustom: '',
   // 左侧功能栏默认展开（新装的用户先看到带文字的完整导航）
   sidebarCollapsed: false,
   screenshotDir: '',
@@ -74,6 +76,17 @@ const DEFAULTS: AppSettings = {
    */
   glassOpacity: 20,
   glassRoughness: 45,
+  // 玻璃主题的底图：默认仍是「壁纸」（v1.1.13 的行为），色系默认淡蓝
+  glassBackdrop: 'wallpaper',
+  glassTint: 'blue',
+  /*
+   * 检测崩溃自动 AI 分析日志（v1.1.14）：默认关。
+   *
+   * 两个理由：① 开了之后主进程会常驻一个 logcat 子进程（哪怕只在投屏期间）；
+   * ② 它会**自动花钱** —— 每识别到一次闪退就调一次模型，用户没配好 key 之前
+   *    贸然打开只会在运行日志里刷一屏失败。所以必须由用户显式点头。
+   */
+  crashAutoAnalyze: false,
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -115,6 +128,7 @@ function defaultDirs(): AppSettings {
   return {
     theme: 'light',
     accent: 'cangqiong',
+    accentCustom: '',
     sidebarCollapsed: false,
     screenshotDir: join(pictures, 'ADB助手'),
     recordDir: join(videos, 'ADB助手'),
@@ -153,6 +167,11 @@ function defaultDirs(): AppSettings {
     // ⚠️ 必须与上面 DEFAULTS 的取值一致（20 是「透出真桌面」的那一档）
     glassOpacity: 20,
     glassRoughness: 45,
+    // 玻璃主题底图（v1.1.14）：与 DEFAULTS 保持一致 —— 默认壁纸模式、淡蓝色系
+    glassBackdrop: 'wallpaper',
+    glassTint: 'blue',
+    // 崩溃自动 AI 分析（v1.1.14）：与 DEFAULTS 一致，默认关
+    crashAutoAnalyze: false,
   };
 }
 

@@ -186,6 +186,79 @@ export const Icon = {
       <path d="M12 11v8M8 15h8" strokeLinecap="round" />
     </svg>
   ),
+
+  /* ---- AI 助手相关（v1.1.14） ---- */
+
+  /**
+   * AI：四角星 + 一颗小卫星星。
+   *
+   * 用「星」而不是机器人 / 大脑：这个模块的定位是**助手**（对话 + 分析），
+   * 机器人会让人以为是某种自动化执行器；四角星是当下 AI 功能最通用的记号，
+   * 扫一眼就知道「这里是个 AI」。右上角那颗小星是「不止一个能力」的暗示。
+   */
+  ai: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path
+        d="M11 3.6l1.7 4.6 4.6 1.7-4.6 1.7L11 16.2l-1.7-4.6-4.6-1.7 4.6-1.7z"
+        strokeLinejoin="round"
+      />
+      <path d="M17.4 14.6l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z" strokeLinejoin="round" />
+    </svg>
+  ),
+  /** 发送：纸飞机 */
+  send: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4.2 11.6L20 4.4l-7.2 15.8-2.3-6.3z" strokeLinejoin="round" />
+      <path d="M20 4.4l-9.5 9.5" strokeLinecap="round" />
+    </svg>
+  ),
+  /** 添加文件：回形针 */
+  paperclip: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path
+        d="M18.4 10.6l-7 7a4 4 0 01-5.7-5.7l7.6-7.6a2.7 2.7 0 013.8 3.8l-7.6 7.6a1.35 1.35 0 01-1.9-1.9l7-7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ),
+  /** 图片附件：相框 + 山 */
+  image: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="3" y="4.5" width="18" height="15" rx="2.4" />
+      <circle cx="8.6" cy="10" r="1.5" />
+      <path d="M4 17l4.6-4.3a1.6 1.6 0 012.2 0L14 16l2-1.8a1.6 1.6 0 012.1 0L20.5 17" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  /** 网页链接：链条 */
+  link: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M10 13.8a4 4 0 006 .5l2.4-2.4a4 4 0 10-5.7-5.7l-1.2 1.2" strokeLinecap="round" />
+      <path d="M14 10.2a4 4 0 00-6-.5l-2.4 2.4a4 4 0 105.7 5.7l1.2-1.2" strokeLinecap="round" />
+    </svg>
+  ),
+  /** 删除：垃圾桶 */
+  trash: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4.5 6.8h15" strokeLinecap="round" />
+      <path d="M9.2 6.8V4.9a1.2 1.2 0 011.2-1.2h3.2a1.2 1.2 0 011.2 1.2v1.9" strokeLinecap="round" />
+      <path d="M6.6 6.8l.8 12a1.4 1.4 0 001.4 1.3h6.4a1.4 1.4 0 001.4-1.3l.8-12" strokeLinejoin="round" />
+    </svg>
+  ),
+  /** 报告：文档 + 折角 */
+  report: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M6 3.5h7l5 5v11a1 1 0 01-1 1H6a1 1 0 01-1-1v-15a1 1 0 011-1z" strokeLinejoin="round" />
+      <path d="M13 3.5v5h5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8.6 15.4l1.9 1.9 3.9-3.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  pin: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M9 3.5h6l-.8 5.2 3 3.1H6.8l3-3.1z" strokeLinejoin="round" />
+      <path d="M12 11.8v8.7" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 /* ------------------------------------------------------------------ */

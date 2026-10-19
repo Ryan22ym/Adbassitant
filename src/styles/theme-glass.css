@@ -250,6 +250,90 @@
   --g-tl-red: #ff5f57;
   --g-tl-yellow: #febc2e;
   --g-tl-green: #28c840;
+
+  /* ================================================================
+     主题色底图（v1.1.14）—— 底图的默认色系与渐变构图
+     ----------------------------------------------------------------
+     玻璃主题的底图有**两种模式，互斥**（见 shared/types.ts 的 GlassBackdropMode）：
+       wallpaper 壁纸   → 铺当前桌面壁纸（.glass-backdrop 的 backgroundImage 由 JS 给）
+       tint      主题色 → 不铺图，按所选色系**生成**一张低饱和柔和渐变
+
+     🔴 为什么主题色模式不用图片也不用纯色，而是「几层大半径径向渐变」：
+        纯色板在整窗尺度上是一块死板的色纸，一眼就看出「这不是玻璃」；
+        渐变是在模拟**真实桌面本来就会有的明暗起伏** —— 一块偏亮的窗、
+        一块偏暗的墙，模糊之后正好就是这种一团团柔和的色域。
+        这正是 v1.1.13 定稿的那条审美（「能看到大致色彩，看不了这么清楚」）。
+
+     🔴 所有停靠色一律**低饱和**（饱和度压到 8%~25%）：高饱和的底色透过
+        0.2 的面板之后会变成一块洗不掉的荧光色，看久了很累。
+        要的是「像是隔着一层磨砂看窗外」，不是「涂了一层马卡龙」。
+
+     构图只写一次（下面 --g-tint-bg），四个色系各自只提供 5 个停靠色。
+     默认值 = 淡蓝，与 v1.1.13 那支蓝一脉相承（老用户切过来不会觉得突兀）。
+     ================================================================ */
+  --g-tint-base: #dce9fb;
+  --g-tint-base-2: #f0f5fd;
+  --g-tint-1: rgba(163, 197, 244, 0.75);
+  --g-tint-2: rgba(198, 219, 248, 0.7);
+  --g-tint-3: rgba(226, 238, 253, 0.8);
+  --g-tint-bg:
+    radial-gradient(120% 95% at 16% 8%, var(--g-tint-1), transparent 62%),
+    radial-gradient(112% 88% at 84% 18%, var(--g-tint-3), transparent 58%),
+    radial-gradient(150% 125% at 52% 112%, var(--g-tint-2), transparent 70%),
+    linear-gradient(152deg, var(--g-tint-base), var(--g-tint-base-2));
+}
+
+/* ---- 底图色系：淡蓝 ---- */
+:root[data-theme='glass'][data-glass-tint='blue'] {
+  --g-tint-base: #dce9fb;
+  --g-tint-base-2: #eef4fd;
+  --g-tint-1: rgba(163, 197, 244, 0.72);
+  --g-tint-2: rgba(196, 218, 248, 0.68);
+  --g-tint-3: rgba(226, 238, 253, 0.78);
+  /* 主色跟着色系走：淡蓝底配蓝按钮 / 蓝导航，整屏才是一套东西 */
+  --accent: #4a7fd4;
+  --accent-hover: #3a6cc0;
+  --accent-soft: rgba(74, 127, 212, 0.16);
+  --accent-border: rgba(74, 127, 212, 0.36);
+}
+
+/* ---- 底图色系：淡粉 ---- */
+:root[data-theme='glass'][data-glass-tint='pink'] {
+  --g-tint-base: #fbe6ee;
+  --g-tint-base-2: #fdf3f7;
+  --g-tint-1: rgba(246, 195, 215, 0.72);
+  --g-tint-2: rgba(249, 214, 229, 0.68);
+  --g-tint-3: rgba(253, 235, 242, 0.78);
+  --accent: #ce6a90;
+  --accent-hover: #ba567c;
+  --accent-soft: rgba(206, 106, 144, 0.16);
+  --accent-border: rgba(206, 106, 144, 0.36);
+}
+
+/* ---- 底图色系：雅灰 ---- */
+:root[data-theme='glass'][data-glass-tint='gray'] {
+  --g-tint-base: #e6e8ec;
+  --g-tint-base-2: #f3f4f6;
+  --g-tint-1: rgba(198, 204, 213, 0.7);
+  --g-tint-2: rgba(217, 221, 227, 0.68);
+  --g-tint-3: rgba(238, 240, 243, 0.78);
+  --accent: #6b7482;
+  --accent-hover: #59616d;
+  --accent-soft: rgba(107, 116, 130, 0.16);
+  --accent-border: rgba(107, 116, 130, 0.36);
+}
+
+/* ---- 底图色系：珍珠白 ---- */
+:root[data-theme='glass'][data-glass-tint='pearl'] {
+  --g-tint-base: #f1eee9;
+  --g-tint-base-2: #fbfaf7;
+  --g-tint-1: rgba(231, 224, 215, 0.7);
+  --g-tint-2: rgba(242, 238, 232, 0.72);
+  --g-tint-3: rgba(252, 250, 246, 0.82);
+  --accent: #a3927a;
+  --accent-hover: #8d7c65;
+  --accent-soft: rgba(163, 146, 122, 0.16);
+  --accent-border: rgba(163, 146, 122, 0.36);
 }
 
 /* ==================================================================
@@ -295,6 +379,20 @@
   background-position: center;
   background-repeat: no-repeat;
   pointer-events: none; /* 纯装饰，不能挡交互 */
+}
+
+/*
+ * 主题色底图（v1.1.14）。
+ *
+ * 🔴 刻意**复用同一个 .glass-backdrop 元素**，只把背景从「一张图」换成
+ *    「一段 CSS 渐变」（--g-tint-bg，四个色系在文件上半部分定义）。
+ *    为什么不另起一个元素：面板上的 backdrop-filter 需要「背后有实底」才采得到样，
+ *    两套底图各用一个元素的话，切换模式的瞬间旧元素被卸载、新元素刚挂上，
+ *    中间那一帧背后是空的 —— 面板会闪一下（透明窗口时代的那个坑）。
+ *    同一个元素只换 background-image，背后永远有底，切换是平滑的。
+ */
+:root[data-theme='glass'] .glass-backdrop.glass-tint {
+  background-image: var(--g-tint-bg);
 }
 
 :root[data-theme='glass'] .app-shell {

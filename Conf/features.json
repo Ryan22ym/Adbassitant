@@ -13,6 +13,7 @@
       "weaknet": true,
       "clicker": true,
       "command": true,
+      "ai": true,
       "settings": true
     },
     "tools": {

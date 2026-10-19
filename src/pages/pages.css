@@ -2177,6 +2177,129 @@
   line-height: 1.55;
 }
 
+/* ---------------- 设置页 · 主题色一行里的辅助件（v1.1.14） ----------------
+ * 三样东西：色块底下的说明句、自定义色的色盘面板、互斥提示那句。
+ * 共同点是都属于 .accent-field 这一行，靠 .accent-note 统一行距与颜色。
+ */
+
+/* 色块下方的说明句（互斥提示 / 派生说明 / 使用说明都用它） */
+.accent-note {
+  margin-top: 8px;
+  line-height: 1.55;
+  max-width: 620px;
+}
+
+/*
+ * 未可用的色块（玻璃主题下「壁纸模式」时那几个色系）。
+ * 只降透明度、不改色 —— 色块本身是「这个色系长什么样」的预览，
+ * 把颜色也灰掉就看不出来了。
+ */
+.accent-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.accent-chip:disabled:hover {
+  color: var(--text-tertiary);
+}
+
+/*
+ * 「自定义」那一枚色块：彩虹渐变底。
+ * 🔴 它必须和上面 7 枚单色块**长得明显不一样** —— 那 7 枚是「现成的一套配色」，
+ *    这一枚是「自己调」，混在一起同质化的话，用户根本不会注意到还能自定义。
+ * 用 conic-gradient 画色相环（Chromium 原生支持），比引一张图省事。
+ */
+.accent-swatch-custom {
+  background: conic-gradient(
+    from 210deg,
+    #e2637f,
+    #e0a13f,
+    #6fb45f,
+    #3fa5b8,
+    #5b7ae1,
+    #a25fd1,
+    #e2637f
+  );
+}
+
+/* ---------------- 设置页 · 自定义主题色面板 ---------------- */
+
+.custom-accent {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.custom-accent-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/*
+ * 原生 <input type="color">。
+ * 各浏览器默认样式差异极大（有的带内边框、有的自带 padding），
+ * 所以这里把边框/圆角/内边距全部重置成自己的，只保留「点它弹色盘」的行为。
+ * --r-md 的圆角 + 一圈描边，观感和旁边的圆点色块是一套。
+ */
+.custom-accent-input {
+  width: 44px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+
+.custom-accent-input::-webkit-color-swatch-wrapper {
+  padding: 3px;
+}
+
+.custom-accent-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 6px;
+}
+
+.custom-accent-hex {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  min-width: 68px;
+}
+
+.custom-accent-tip {
+  font-size: 12px;
+}
+
+/* 常用色快选：一排小圆点，选中的那枚描一圈主色 */
+.custom-accent-presets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.custom-accent-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-full);
+  background: var(--swatch);
+  border: 1px solid var(--border-strong);
+  padding: 0;
+  flex: none;
+  transition: box-shadow var(--t-fast);
+}
+
+.custom-accent-dot.active {
+  box-shadow: 0 0 0 2px var(--bg-surface-2), 0 0 0 4px var(--accent);
+}
+
 /* ---------------- 设置页 · 单行设置项（开机自启动） ----------------
  * 其它设置项走 <Field>：label 一行、控件一行。
  * 开关这类「二元、一眼就能看懂」的项没必要占两行 —— 名称靠左、开关靠右，
@@ -2226,4 +2349,703 @@
 
 .setting-link:hover {
   color: var(--text-primary);
+}
+
+
+/* ================================================================== */
+/* AI 助手（v1.1.14）                                                  */
+/* ================================================================== */
+
+.ai-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 页内标签栏：「对话 / 崩溃报告」+ 右侧当前模型 */
+.ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-head-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* ---------------- 模型接入 ---------------- */
+
+.ai-cfg {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ai-cfg-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.ai-cfg-row > .field {
+  flex: 1 1 240px;
+  min-width: 200px;
+}
+
+.ai-cfg-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 12px;
+}
+
+.ai-cfg-actions {
+  display: flex;
+  align-items: center;
+  padding-bottom: 2px;
+}
+
+/* API Key 的「显示 / 隐藏」和目录的「选择」：塞在 input 右侧的小文字按钮 */
+.ai-key-toggle {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.ai-key-toggle:hover {
+  text-decoration: underline;
+}
+
+/* 「提示词与崩溃分析设置」默认收起：它们是配置一次就不动的项，
+ * 天天改的只有 Key 与模型，展开着会把上面三行挤下去。 */
+.ai-cfg-more {
+  border-top: 1px dashed var(--border);
+  padding-top: 4px;
+}
+
+.ai-cfg-more > summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.ai-cfg-more > summary:hover {
+  color: var(--text-primary);
+}
+
+/* ---------------- AI 页面两栏骨架（对话 / 报告共用） ---------------- */
+
+.ai-layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 230px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .ai-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ai-side {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  max-height: calc(100vh - 300px);
+  min-height: 380px;
+}
+
+.ai-side-head {
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-side-foot {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.ai-sessions {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-side-empty {
+  margin: 14px 6px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+}
+
+/* 一段历史对话 */
+.ai-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+
+.ai-session:hover {
+  background: var(--bg-hover);
+}
+
+.ai-session.on {
+  background: var(--accent-soft);
+}
+
+.ai-session-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-session-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-session.on .ai-session-title {
+  font-weight: 600;
+}
+
+.ai-session-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ai-session-del {
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 2px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t-fast), color var(--t-fast);
+}
+
+.ai-session-del svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ai-session:hover .ai-session-del {
+  opacity: 1;
+}
+
+.ai-session-del:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* ---------------- 对话区 ---------------- */
+
+.ai-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  min-height: 380px;
+  max-height: calc(100vh - 300px);
+}
+
+.ai-msgs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scroll-behavior: smooth;
+}
+
+.ai-msgs .empty {
+  margin: auto;
+}
+
+.ai-bubble {
+  max-width: min(760px, 88%);
+  padding: 10px 12px;
+  border-radius: var(--r-lg);
+  font-size: 13.5px;
+  line-height: 1.68;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.ai-bubble.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--text-primary);
+  border-bottom-right-radius: var(--r-sm);
+}
+
+.ai-bubble.assistant {
+  align-self: flex-start;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-bottom-left-radius: var(--r-sm);
+}
+
+.ai-bubble.err {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ai-bubble.pending {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.ai-bubble-atts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-bubble-att {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-bubble-att svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.ai-bubble-text {
+  white-space: pre-wrap;
+}
+
+.ai-bubble-foot {
+  display: flex;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* ---------------- 输入区 ---------------- */
+
+.ai-composer {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-surface-2);
+}
+
+.ai-atts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 92px;
+  overflow-y: auto;
+}
+
+.ai-att {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 4px;
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-width: 240px;
+}
+
+.ai-att-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  object-fit: cover;
+  flex: none;
+}
+
+.ai-att-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.ai-att-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ai-att-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-att-x {
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.ai-att-x:hover {
+  color: var(--danger);
+}
+
+.ai-link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-link-row .input {
+  flex: 1;
+}
+
+/* 输入框本身不带边框底：它整块压在 .ai-composer 的浅底上，
+ * 再加一圈边框会变成「框里套框」。 */
+.ai-input.textarea {
+  background: var(--bg-surface);
+  resize: vertical;
+  min-height: 62px;
+  max-height: 200px;
+}
+
+.ai-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-spacer {
+  flex: 1;
+}
+
+/* ---------------- 崩溃监听状态条 ---------------- */
+
+.ai-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  flex-wrap: wrap;
+}
+
+.ai-status.on {
+  border-color: var(--success);
+  background: var(--success-soft);
+}
+
+.ai-status-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--r-full);
+  background: var(--text-tertiary);
+}
+
+.ai-status.on .ai-status-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+}
+
+.ai-status-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-status-text strong {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ai-status-text span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- 报告列表项 ---------------- */
+
+.ai-report-item {
+  padding: 8px 9px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: background var(--t-fast);
+}
+
+.ai-report-item:hover {
+  background: var(--bg-hover);
+}
+
+.ai-report-item.on {
+  background: var(--accent-soft);
+}
+
+.ai-report-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-unread-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--danger);
+}
+
+.ai-report-pkg {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-report-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ai-report-sum {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ai-report-dev {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- 报告详情 ---------------- */
+
+.ai-report-detail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px 16px 16px;
+  min-height: 380px;
+  max-height: calc(100vh - 300px);
+  overflow-y: auto;
+}
+
+.ai-report-detail .empty {
+  margin: auto;
+}
+
+.ai-report-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-report-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+}
+
+.ai-report-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ai-report-meta > div.wide {
+  grid-column: 1 / -1;
+}
+
+.ai-report-meta span {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.ai-report-meta strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ai-report-body {
+  min-width: 0;
+}
+
+/* ---------------- 极简 Markdown ---------------- */
+
+.ai-md {
+  font-size: 13px;
+  line-height: 1.72;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ai-md h2 {
+  font-size: 15.5px;
+  font-weight: 650;
+  margin: 4px 0 8px;
+}
+
+.ai-md h3 {
+  font-size: 14px;
+  font-weight: 640;
+  margin: 12px 0 6px;
+  padding-left: 8px;
+  border-left: 3px solid var(--accent);
+}
+
+.ai-md h4 {
+  font-size: 13px;
+  font-weight: 620;
+  margin: 10px 0 4px;
+}
+
+.ai-md p {
+  margin: 5px 0;
+}
+
+.ai-md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+.ai-md blockquote {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+}
+
+.ai-md-li {
+  display: flex;
+  gap: 7px;
+  margin: 3px 0;
+  padding-left: 2px;
+}
+
+.ai-md-li > span:first-child {
+  flex: none;
+  color: var(--text-tertiary);
+  line-height: 1.72;
+}
+
+.ai-md code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ai-md pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+  max-height: 360px;
+  white-space: pre;
 }

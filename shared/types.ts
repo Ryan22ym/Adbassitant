@@ -974,8 +974,38 @@ export interface PackageOrganizeResult {
  *
  * 'cangqiong'（苍穹）是默认值，也是 global.css 里 :root 那一份 —— 所以它不写
  * [data-accent] 块，启动瞬间没闪烁。
+ *
+ * v1.1.14 新增三项：
+ *   'blush'  淡粉 —— 冷调浅粉（色相 340 附近，饱和度低）
+ *   'sakura' 樱花 —— 暖调樱粉（色相 352 附近，比淡粉更艳一点）
+ *   'custom' 自定义 —— **没有对应的 CSS 变量块**，整组色由
+ *            src/lib/accent-custom.ts 从用户选的色值**现算**，再以内联变量
+ *            写到 <html> 上（内联优先级最高，盖过 :root / [data-theme]）。
+ *            真实色值存在 AppSettings.accentCustom 里。
  */
-export type AccentId = 'cangqiong' | 'cloud' | 'mist' | 'ocean' | 'ink';
+export type AccentId = 'cangqiong' | 'cloud' | 'mist' | 'ocean' | 'ink' | 'blush' | 'sakura' | 'custom';
+
+/**
+ * 透明玻璃主题的底图模式（v1.1.14）。
+ *
+ *   wallpaper 壁纸 —— 铺当前桌面壁纸（v1.1.13 起的行为）
+ *   tint      主题色 —— 按所选色系**生成**一张低饱和度的柔和渐变当底图
+ *
+ * 🔴 两者**互斥**，这是产品要求：选了主题色模式就不能再用壁纸，
+ *    要用壁纸必须先切回壁纸模式。所以它是一个枚举而不是两个开关 ——
+ *    两个开关必然会出现「都开 / 都关」这两种没有意义的状态。
+ *    相机上「取景模式 / 照片模式」就是这个形态。
+ */
+export type GlassBackdropMode = 'wallpaper' | 'tint';
+
+/**
+ * 玻璃主题「主题色底图」的色系（v1.1.14）。
+ *
+ * 每个 id 在 theme-glass.css 里对应一条 [data-glass-tint='x'] 变量块，
+ * 给出底图的几个渐变停靠色 + 该色系下的主色（按钮 / 导航选中）。
+ * 要求是**低饱和、观感舒适**，所以取色一律往灰里压（饱和度 8%~25%）。
+ */
+export type GlassTintId = 'blue' | 'pink' | 'gray' | 'pearl';
 
 /**
  * 主题（v1.1.11 起是**三选一**，同一级；界面见 SettingsPage 的「主题模式」）。
@@ -1013,6 +1043,18 @@ export interface AppSettings {
   theme: ThemeId;
   /** 主题色（v1.1.2）。决定 --accent 及整套界面底色，见 AccentId */
   accent: AccentId;
+  /**
+   * 自定义主题色的色值（v1.1.14，`#rrggbb`）。
+   *
+   * 只在 `accent === 'custom'` 时参与渲染 —— 此时 src/styles 里没有任何
+   * [data-accent] 块匹配，整组颜色（主色三档 + 背景 / 边框 / 卡片）由
+   * src/lib/accent-custom.ts 从这一个色值**现算**出来。
+   *
+   * 为什么不把「算好的十几个变量」直接存进来：色值只有一份才改得动 ——
+   * 用户拖色盘时只需要写一个 hex，派生值随主题明暗（浅 / 深各一套）自动重算；
+   * 存派生值的话浅深两套共三十来个变量都得同步维护，必然跑偏。
+   */
+  accentCustom: string;
   /**
    * 左侧功能栏是否收起（v1.1.8）。
    *
@@ -1146,6 +1188,32 @@ export interface AppSettings {
    * ⚠️ 它作用于**窗口合成的背景**，桌面最外层的那点磨砂仍由系统 Acrylic 提供。
    */
   glassRoughness: number;
+  /**
+   * 玻璃主题的底图模式（v1.1.14）：壁纸 / 主题色，**互斥**，见 GlassBackdropMode。
+   * 默认 'wallpaper'（保持 v1.1.13 的行为，老用户升级上来观感不变）。
+   */
+  glassBackdrop: GlassBackdropMode;
+  /**
+   * 玻璃主题「主题色底图」的色系（v1.1.14），只在 glassBackdrop='tint' 时生效。
+   * 默认 'blue'（对应 v1.1.13 那支蓝的观感）。
+   */
+  glassTint: GlassTintId;
+
+  /*
+   * 崩溃自动分析（v1.1.14）
+   */
+  /**
+   * 「检测崩溃自动 AI 分析日志」。
+   *
+   * 开启后，**投屏运行期间**监听该设备的崩溃日志：一旦检测到前台应用闪退，
+   * 就自动导出日志 → 取最近 N 分钟交给 AI 分析 → 生成崩溃分析报告，
+   * 并在左侧「AI 助手」入口上亮红点。
+   *
+   * 默认 **false**：与 autoLaunch / autoMirrorOnConnect 一个调性 ——
+   * 它会在后台常驻一个 logcat 子进程、并在检测到崩溃时自动发起一次**计费的**
+   * 模型调用，属于必须由用户明确同意的行为。
+   */
+  crashAutoAnalyze: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1216,6 +1284,22 @@ export interface ClickerScript {
    * 0 = 关闭（精确点击）。
    */
   jitterPx: number;
+  /**
+   * 前置间隔（ms）：每个可执行步骤开始前额外等待的时长。
+   *
+   * 手动创建的脚本默认「背靠背」执行（只有 120ms 防丢事件的最小间隙），
+   * 动作之间没有任何间隔 —— 设备经常来不及响应，看起来就像脚本「没反应」。
+   * 这个字段让用户能自己控制动作节奏。0 = 不额外等待；随倍速缩放；
+   * note（说明）步骤不生效。
+   */
+  preGapMs?: number;
+  /**
+   * 后置间隔（ms）：每个可执行步骤结束后额外等待的时长。
+   *
+   * 与内置最小间隙（120ms，防 adb 背靠背丢事件）取较大值，不会低于后者；
+   * loop > 1 时，最后一轮每个动作的后置间隔自然成为「轮与轮之间」的间隔。
+   */
+  postGapMs?: number;
   /** 创建时间（ISO） */
   createdAt: string;
   /** 最后修改时间（ISO） */
@@ -1353,6 +1437,156 @@ export interface RecorderPrepare {
   touchNote: string;
   /** 面向用户的一句话总结 */
   note: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* AI 对话（v1.1.14）                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 一条附件。
+ *
+ * 三种来源形态不同，所以用 kind 区分而不是「统一成文本」：
+ *   image —— 本机图片文件。以 base64 的 data URL 交给多模态模型（模型真的能「看」）
+ *   file  —— 本机文本类文件（.log / .txt / .json / .xml / 代码…）。读成文本嵌进消息
+ *   link  —— 网页地址。主进程代抓、剥掉 HTML 标签后嵌进消息
+ *
+ * ⚠️ 图片以外的二进制文件**不读内容**，只把文件名告诉模型 ——
+ *    把几十 MB 的 APK 转成 base64 塞进上下文既没意义也会把请求撑爆。
+ */
+export interface AiAttachment {
+  kind: 'image' | 'file' | 'link';
+  /** image / file：本机绝对路径 */
+  path?: string;
+  /** link：网页地址 */
+  url?: string;
+  /** 展示用名字（图片/文件名，或网页标题） */
+  name: string;
+  /** image 附件由主进程回填（界面预览用），其它为空 */
+  previewUrl?: string;
+}
+
+/** 一条对话消息（界面与后端共用同一份形状） */
+export interface AiChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  /** 仅用户消息可能带附件 */
+  attachments?: AiAttachment[];
+  /** 这一条实际用的模型（助手消息回填，便于回溯是哪家答的） */
+  model?: string;
+  time: number;
+  /** 出错的助手消息：内容为错误原因，界面上标红 */
+  error?: boolean;
+}
+
+/** 一次会话 */
+export interface AiSession {
+  id: string;
+  title: string;
+  messages: AiChatMessage[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 会话列表项（不带消息体，避免列表接口把几 MB 历史一起传过来） */
+export interface AiSessionMeta {
+  id: string;
+  title: string;
+  updatedAt: number;
+  count: number;
+}
+
+/** 发一次对话请求 */
+export interface AiChatRequest {
+  /** 不传则新建一个会话 */
+  sessionId?: string;
+  /** 不传则用配置里的 activeProvider */
+  providerId?: string;
+  /**
+   * 完整历史（含本次用户消息）。后端无状态，每次都带全 ——
+   * 这样「编辑重发 / 删掉中间某条」不需要额外接口。
+   */
+  messages: AiChatMessage[];
+}
+
+export interface AiChatResult {
+  sessionId: string;
+  /** 助手回复的正文 */
+  content: string;
+  model: string;
+  /** 本次耗时（毫秒） */
+  durationMs: number;
+  usage?: { prompt: number; completion: number; total: number };
+}
+
+/** 连通性自检结果（AI 页面「测试连接」用） */
+export interface AiTestResult {
+  ok: boolean;
+  /** 失败原因（面向用户，直接展示） */
+  reason?: string;
+  model?: string;
+  durationMs?: number;
+  /** 模型回的一小段话，证明真的通了 */
+  reply?: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* 崩溃分析（v1.1.14）                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 一份崩溃分析报告（磁盘上有 .md 报告 + .log 日志两个文件）。
+ *
+ * meta 存在 userData/crash-reports.json 里（列表用），正文按需从 reportPath 读 ——
+ * 报告可能几万字，列表接口不该把它全带上。
+ */
+export interface CrashReportMeta {
+  id: string;
+  /** 崩溃发生时间（毫秒时间戳；取自动检测那一刻） */
+  at: number;
+  /** 设备名称（机型 · Android 版本） */
+  deviceLabel: string;
+  serial: string;
+  /** 崩溃的应用包名 */
+  packageName: string;
+  /** 崩溃原因的**一句话摘要**（取自 AI 回答的第一段，列表里显示） */
+  summary: string;
+  /** 报告文件绝对路径（.md） */
+  reportPath: string;
+  /** 导出的日志文件绝对路径（.txt） */
+  logPath: string;
+  /** 报告所在目录（「一键定位到文件夹」用） */
+  dir: string;
+  /** 是否已读（未读 → AI 导航项上的红点） */
+  read: boolean;
+  /** AI 分析失败时为失败原因，此时报告里只有固定字段、没有 AI 内容 */
+  error?: string;
+  /** 生成报告用的模型名 */
+  model?: string;
+}
+
+/** 一份报告的全文（列表点开时按需取） */
+export interface CrashReportFull {
+  meta: CrashReportMeta;
+  /** 报告 Markdown 全文；文件被删时为 null */
+  content: string | null;
+}
+
+/** 崩溃监听器的运行状态（AI 页面顶部状态条用） */
+export interface CrashWatchStatus {
+  /** 开关是否开着（settings.crashAutoAnalyze） */
+  enabled: boolean;
+  /** 是否正在监听（= 开关开着 且 投屏在跑 且 有设备） */
+  watching: boolean;
+  serial?: string;
+  deviceLabel?: string;
+  /** 当前探测到的前台应用（监听中才有） */
+  foreground?: string;
+  /** 不能监听时的一句话原因 */
+  note?: string;
+  /** 累计已生成报告数（本次进程内） */
+  reportCount: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1530,6 +1764,34 @@ export const IPC = {
   /** 放弃本次录制（收干净资源、不留数据） */
   RECORDER_CANCEL: 'recorder:cancel',
 
+  /* AI 对话（v1.1.14） */
+  /** 读 Conf/ai.json（已合并出厂默认）；force=true 丢掉缓存重新读盘 */
+  AI_CONFIG_GET: 'ai:configGet',
+  /** 局部改写配置（界面上改 provider / 提示词后落盘） */
+  AI_CONFIG_SET: 'ai:configSet',
+  /** AI 配置目录（Conf 文件夹，用于「打开配置文件夹」） */
+  AI_CONFIG_DIR: 'ai:configDir',
+  /** 发一次对话（后端无状态，带全量历史） */
+  AI_CHAT: 'ai:chat',
+  /** 连通性自检（发一句「你好」验证 key / 地址 / 模型） */
+  AI_TEST: 'ai:test',
+  /** 会话列表（不含消息体） */
+  AI_SESSION_LIST: 'ai:sessionList',
+  AI_SESSION_GET: 'ai:sessionGet',
+  AI_SESSION_DELETE: 'ai:sessionDelete',
+  AI_SESSION_CLEAR: 'ai:sessionClear',
+  /** 生成崩溃分析报告 / 直接跑一次分析（不依赖崩溃监听，界面上手动触发） */
+  AI_CRASH_ANALYZE: 'ai:crashAnalyze',
+  /** 崩溃报告列表（不含正文） */
+  AI_REPORT_LIST: 'ai:reportList',
+  AI_REPORT_GET: 'ai:reportGet',
+  AI_REPORT_MARK_READ: 'ai:reportMarkRead',
+  AI_REPORT_DELETE: 'ai:reportDelete',
+  /** 在资源管理器中定位报告文件（reveal=false 时只打开所在目录） */
+  AI_REPORT_REVEAL: 'ai:reportReveal',
+  /** 崩溃监听器当前状态 */
+  AI_CRASH_STATUS: 'ai:crashStatus',
+
   /* 日志 */
   LOG_EXPORT: 'log:export',
   LOG_CLEAR: 'log:clear',
@@ -1632,6 +1894,10 @@ export const IPC = {
   PUSH_CLICKER_PROGRESS: 'push:clickerProgress',
   /** 采集端录制状态变化（v1.0.32） */
   PUSH_RECORDER_STATUS: 'push:recorderStatus',
+  /** 崩溃分析报告生成完成（v1.1.14）：渲染层据此点亮 AI 导航项的红点 */
+  PUSH_AI_CRASH_REPORT: 'push:aiCrashReport',
+  /** 崩溃监听器状态变化（开关 / 投屏 / 前台应用变了） */
+  PUSH_AI_CRASH_STATUS: 'push:aiCrashStatus',
 } as const;
 
 /**

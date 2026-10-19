@@ -9,6 +9,10 @@ import type {
   InstallKind,
   SigningMode,
   AccentId,
+  GlassBackdropMode,
+  GlassTintId,
+  CrashReportMeta,
+  CrashWatchStatus,
 } from '@shared/types';
 import { cloneDefaultUiConf, type UiConf } from '@shared/ui-conf';
 
@@ -45,6 +49,19 @@ function paintGlassVars(opacity: number, roughness: number): void {
   const el = document.documentElement;
   el.style.setProperty('--glass-alpha', a.toFixed(3));
   el.style.setProperty('--glass-blur', `${blur.toFixed(1)}px`);
+}
+
+/* ------------------------------------------------------------------ */
+/* 主题色：自定义色（v1.1.14）                                          */
+/* ------------------------------------------------------------------ */
+/* 具体派生逻辑在 src/lib/accent-custom.ts —— 那边从**一个** hex 算出整套变量。 */
+
+/** 玻璃主题底图色系的合法值（settings.json 可能被手改，读回来要兜底） */
+const GLASS_TINTS: GlassTintId[] = ['blue', 'pink', 'gray', 'pearl'];
+
+/** 把底图色系写到 <html data-glass-tint="...">（theme-glass.css 按它选变量块） */
+function paintGlassTint(tint: GlassTintId): void {
+  document.documentElement.setAttribute('data-glass-tint', tint);
 }
 
 /* ------------------------------------------------------------------ */
@@ -210,9 +227,31 @@ interface AppState {
   /** 只写 DOM 不落盘（拖动过程中用，松手才落盘，避免刷爆 settings.json） */
   paintGlass: (opacity: number, roughness: number) => void;
 
+  /*
+   * 玻璃主题的底图（v1.1.14）：壁纸 / 主题色，**互斥**（见 GlassBackdropMode）。
+   *
+   * glassWall 是抓回来的桌面壁纸（data URL）—— 从 App 的局部 state 搬进 store，
+   * 是因为设置页要能「重新读取桌面壁纸」（换了壁纸不用重启程序）。
+   * 只在 glassBackdrop='wallpaper' 时才有值；切到主题色模式会被清掉。
+   */
+  glassBackdrop: GlassBackdropMode;
+  glassTint: GlassTintId;
+  glassWall: string | null;
+  setGlassBackdrop: (m: GlassBackdropMode) => void;
+  setGlassTint: (t: GlassTintId) => void;
+  /** 抓一张当前桌面壁纸（幂等；抓不到就保持 null，CSS 退回纯色底） */
+  loadGlassWall: () => Promise<void>;
+
   /* 主题色（决定 --accent 与整套界面底色，见 shared/types.ts 的 AccentId） */
   accent: AccentId;
   applyAccent: (a: AccentId) => void;
+
+  /*
+   * 自定义主题色的色值（v1.1.14，`#rrggbb`；空串 = 还没挑过）。
+   * 只有 accent === 'custom' 时参与渲染，派生逻辑见 lib/accent-custom.ts。
+   */
+  accentCustom: string;
+  applyAccentCustom: (hex: string) => void;
 
   /*
    * 左侧功能栏收起状态（v1.1.8）。
@@ -273,6 +312,35 @@ interface AppState {
    */
   updateAvailable: boolean;
   setUpdateAvailable: (v: boolean) => void;
+
+  /*
+   * AI 崩溃分析（v1.1.14）。
+   *
+   * crashReports 只放**索引**（meta），报告正文按需从主进程取 ——
+   * 一份报告可能几万字，全量塞进 store 会让侧栏的任何一次重渲染都变慢。
+   *
+   * 为什么未读数要单独存一个字段而不是每次 filter：
+   *   侧栏的 NavLink 每次渲染都要读它，filter 一遍 200 条只是浪费；
+   *   而且它是「红点要不要亮」的唯一依据，单独存更不容易算错。
+   */
+  crashReports: CrashReportMeta[];
+  crashUnread: number;
+  crashStatus: CrashWatchStatus | null;
+  /**
+   * 报告索引是否已经**从主进程取回来过一次**。
+   *
+   * 🔴 存在的唯一理由是给 AI 页面一个可靠的「可以决定默认停在哪个标签」的信号：
+   *    未读数与界面配置都是启动后异步到位的，早了会读到 0（于是永远停在「对话」）；
+   *    而如果拿 crashStatus / uiConf 之类去猜「另一个大概也到了」，耦合太脆。
+   *    它一旦为 true 就不再变。
+   */
+  crashReady: boolean;
+  setCrashReports: (list: CrashReportMeta[]) => void;
+  /** 收到一份新报告（推送）：插到最前并把未读数 +1 */
+  pushCrashReport: (r: CrashReportMeta) => void;
+  /** 本地把某份报告标记为已读（主进程也会同步一份） */
+  markCrashRead: (id: string) => void;
+  setCrashStatus: (s: CrashWatchStatus | null) => void;
 }
 
 const MAX_LOGS = 3000;
@@ -367,6 +435,27 @@ export const useApp = create<AppState>((set, get) => ({
     const a: AccentId = settings.accent || 'cangqiong';
     document.documentElement.setAttribute('data-accent', a);
     if (get().accent !== a) set({ accent: a });
+    /*
+     * 自定义主题色的色值（v1.1.14）。
+     * 这里**只同步到 store**，不在这里动 DOM —— 派生值要按当前明暗重算，
+     * 统一由 App.tsx 的一个 effect 负责（deps = accent / accentCustom / theme），
+     * 否则「浅色下算一套、切深色不重算」就串色了。
+     */
+    const ac = settings.accentCustom || '';
+    if (get().accentCustom !== ac) set({ accentCustom: ac });
+
+    /*
+     * 玻璃主题的底图模式与色系（v1.1.14）。
+     * 色系走 <html data-glass-tint>（CSS 按它选变量块），所以必须在这里就写 ——
+     * 启动时若用户上次选的是淡粉，界面第一帧就该是淡粉，不能等设置页。
+     * settings.json 被手改成非法值时回落 blue / wallpaper。
+     */
+    const gb: GlassBackdropMode = settings.glassBackdrop === 'tint' ? 'tint' : 'wallpaper';
+    const gt: GlassTintId = GLASS_TINTS.includes(settings.glassTint) ? settings.glassTint : 'blue';
+    paintGlassTint(gt);
+    if (get().glassBackdrop !== gb || get().glassTint !== gt) {
+      set({ glassBackdrop: gb, glassTint: gt });
+    }
 
     /*
      * 左侧功能栏的收起状态。
@@ -396,10 +485,11 @@ export const useApp = create<AppState>((set, get) => ({
     document.documentElement.setAttribute('data-theme', theme);
     set({ theme });
     /*
-     * 透明玻璃主题要动**窗口本身**（无边框 + Acrylic），这只有主进程能做。
-     * 所以切主题时顺带通知一声：进玻璃开 Acrylic，离开玻璃关掉。
-     * ⚠️ 退出玻璃时窗口的 transparent/frame 改不回去（Electron 限制），
-     *    主进程那边用不透明背景色兜底，详见 electron/main.ts 的 applyGlassWindow。
+     * 透明玻璃主题要动**窗口本身**（无边框形态 vs 系统 overlay 按钮），这只有主进程能做。
+     * 所以切主题时顺带通知一声：进玻璃切到无边框形态，离开玻璃切回 overlay 形态。
+     * ⚠️ frame / titleBarOverlay 都是建窗参数，运行期改不回去 ——
+     *    跨形态时主进程会**按新形态重建主窗口**（保留位置与最大化状态），
+     *    同形态内的主题切换不受影响（见 electron/main.ts 的 applyGlassWindow）。
      */
     void window.adbApi?.setGlass(theme === 'glass');
   },
@@ -410,6 +500,56 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().accent === accent) return;
     document.documentElement.setAttribute('data-accent', accent);
     set({ accent });
+    /*
+     * ⚠️ 这里**不**处理自定义色值的写入 / 清除：
+     *    'custom' 用的是内联变量，而内联值要按明暗（light/dark）各算一套。
+     *    统一交给 App.tsx 那个 deps=[accent, accentCustom, theme] 的 effect，
+     *    保证「切主题色」与「切浅深」走同一条路径，不会漏掉任何一种组合。
+     */
+  },
+
+  /* ---------------- 自定义主题色 ---------------- */
+  accentCustom: '',
+  applyAccentCustom: (accentCustom) => {
+    if (get().accentCustom === accentCustom) return;
+    set({ accentCustom });
+  },
+
+  /* ---------------- 玻璃主题底图 ---------------- */
+  glassBackdrop: 'wallpaper',
+  glassTint: 'blue',
+  glassWall: null,
+
+  setGlassBackdrop: (glassBackdrop) => {
+    if (get().glassBackdrop === glassBackdrop) return;
+    /*
+     * 切到「主题色」模式时**立刻把壁纸丢掉**（置 null）。
+     * 这是「两种模式互斥」在状态层的落点：留着那张 data URL 的话，
+     * 切回壁纸模式时可能先渲染一张过期壁纸再刷新，看起来像闪了一下；
+     * 而且让「有壁纸 data URL」这件事与 mode 严格一一对应，读代码时不会有歧义。
+     */
+    set({ glassBackdrop, glassWall: glassBackdrop === 'tint' ? null : get().glassWall });
+  },
+
+  setGlassTint: (glassTint) => {
+    if (get().glassTint === glassTint) return;
+    paintGlassTint(glassTint);
+    set({ glassTint });
+  },
+
+  loadGlassWall: async () => {
+    try {
+      /*
+       * 🔴 返回的是 { ok, data, error } 信封（ipc.ts 的 wrap()），必须取 .data。
+       *    漏了这层会拿到整个信封对象当 data URL 用（表现：url.slice is not a function）。
+       */
+      const res = await window.adbApi?.grabDesktop?.();
+      const url = res && res.ok ? res.data : null;
+      set({ glassWall: typeof url === 'string' && url ? url : null });
+    } catch {
+      /* 抓不到就保持 null：CSS 会退回纯色底，不影响使用 */
+      set({ glassWall: null });
+    }
   },
 
   /* ---------------- 透明玻璃参数 ---------------- */
@@ -468,6 +608,45 @@ export const useApp = create<AppState>((set, get) => ({
 
   updateAvailable: false,
   setUpdateAvailable: (updateAvailable) => set({ updateAvailable }),
+
+  /* ---------------- AI 崩溃分析（v1.1.14） ---------------- */
+  crashReports: [],
+  crashUnread: 0,
+  crashStatus: null,
+  crashReady: false,
+
+  setCrashReports: (list) =>
+    set({
+      crashReports: list,
+      crashUnread: list.filter((r) => !r.read).length,
+      crashReady: true,
+    }),
+
+  pushCrashReport: (r) =>
+    set((s) => {
+      // 同一份报告可能既被推送、又在随后的列表接口里回来一次：按 id 去重
+      if (s.crashReports.some((x) => x.id === r.id)) return {};
+      return {
+        crashReports: [r, ...s.crashReports],
+        crashUnread: s.crashUnread + (r.read ? 0 : 1),
+      };
+    }),
+
+  markCrashRead: (id) =>
+    set((s) => {
+      let changed = false;
+      const next = s.crashReports.map((r) => {
+        if (r.id === id && !r.read) {
+          changed = true;
+          return { ...r, read: true };
+        }
+        return r;
+      });
+      if (!changed) return {};
+      return { crashReports: next, crashUnread: Math.max(0, s.crashUnread - 1) };
+    }),
+
+  setCrashStatus: (crashStatus) => set({ crashStatus }),
 }));
 
 /* ------------------------------------------------------------------ */
