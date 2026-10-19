@@ -320,8 +320,8 @@ app.whenReady().then(async () => {
   ok(cfgForm.providerCount === 6, 'Conf/ai.json 的 6 家提供商都读到了', `count=${cfgForm.providerCount}`);
   ok(cfgForm.activeProvider === 'deepseek', 'activeProvider = deepseek', `active=${cfgForm.activeProvider}`);
   ok(
-    cfgForm.fields['模型名'] === 'deepseek-chat',
-    '模型名回填 = deepseek-chat（来自 ai.json 而不是界面写死）',
+    cfgForm.fields['模型名'] === 'deepseek-flash',
+    '模型名回填 = deepseek-flash（来自 ai.json 而不是界面写死）',
     `model=${cfgForm.fields['模型名']}`,
   );
   ok(
@@ -501,6 +501,93 @@ app.whenReady().then(async () => {
   ok(linkRow.exists, '点「链接」后出现地址输入行', `exists=${linkRow.exists}`);
   ok(linkRow.placeholder.includes('网页地址'), '链接输入框有可读提示', `ph=${linkRow.placeholder.slice(0, 20)}`);
 
+  /* ---- H. 切走再回来要接上上次那段对话 ---- */
+  /*
+   * 造一段历史：调主进程的 appendToSession 写进会话文件。
+   *
+   * 🔴 不能直接往 ai-chats.json 里写文件 —— ai.ts 有内存缓存，
+   *    F 段渲染对话面板时已经 load 过一次（当时是空数组），
+   *    之后再改文件，内存里还是空的。必须走它自己的写入口。
+   */
+  const aiSvc = require('../dist-electron/electron/services/ai.js');
+  const sessId = aiSvc.appendToSession(undefined, [
+    { id: 'm-1', role: 'user', content: '上次聊到哪了？', time: Date.now() - 60000 },
+    {
+      id: 'm-2',
+      role: 'assistant',
+      content: '上次停在「投屏延迟排查」这一步。',
+      model: 'deepseek-flash',
+      time: Date.now() - 59000,
+    },
+  ]);
+  log('造历史会话 ' + sessId);
+
+  // 假装用户上次就停在这段（正常使用时是「发送 / 点开列表」时写进去的）
+  await read(win, `(localStorage.setItem('adb.ai.lastSession', ${JSON.stringify(sessId)}), true)`);
+
+  // 切走再切回：AiPage 整个卸载重建，正好覆盖「用户切到别的模块」这条路
+  const backToChat = async () => {
+    // ⚠️ 「设备」页的 href 是 `#/`（首页），不是 `#/device` ——
+    //    写成后者 click 会落空，页面根本没卸载，等于什么都没验。
+    await click(win, '.nav-item[href="#/tools"]');
+    await sleep(400);
+    await click(win, '.nav-item[href="#/ai"]');
+    await waitFor(win, `!!document.querySelector('.ai-head')`);
+    await sleep(300);
+    // 万一进来落在「崩溃报告」，切回「对话」——真实路径是同一次挂载
+    if (!(await read(win, `!!document.querySelector('.ai-chat')`))) {
+      await click(win, '.ai-head .segmented-item:nth-child(1)');
+      await sleep(500);
+    }
+    await sleep(500);
+  };
+  await backToChat();
+
+  const restored = await read(
+    win,
+    `(() => ({
+      bubbles: document.querySelectorAll('.ai-bubble').length,
+      // ⚠️ 助手消息走的是 Markdown 渲染（MdView），没有 .ai-bubble-text；
+      //    取整个气泡的 textContent 才不会漏掉回复内容。
+      texts: [...document.querySelectorAll('.ai-bubble')].map((e) => e.textContent.trim()),
+      active: [...document.querySelectorAll('.ai-session')].findIndex((e) => e.classList.contains('on')),
+      count: document.querySelectorAll('.ai-session').length,
+    }))()`,
+  );
+  ok(restored.count === 1, '造出来的历史会话出现在左侧列表', `count=${restored.count}`);
+  ok(
+    restored.bubbles === 2,
+    '🔴 切走再切回来，自动接上上次那段对话（不是空白新对话）',
+    `bubbles=${restored.bubbles}`,
+  );
+  ok(
+    restored.texts.some((t) => t.includes('投屏延迟排查')),
+    '恢复出来的是同一段对话的内容',
+    `texts=${restored.texts.join(' / ').slice(0, 40)}`,
+  );
+  ok(restored.active === 0, '左侧列表的高亮也跟着恢复到那段', `activeIdx=${restored.active}`);
+
+  /* 点「新建对话」之后就不该再记着上一段了 */
+  await click(win, '.ai-side-head button');
+  await sleep(400);
+  const afterNew = await read(
+    win,
+    `(() => ({
+      saved: localStorage.getItem('adb.ai.lastSession'),
+      bubbles: document.querySelectorAll('.ai-bubble').length,
+    }))()`,
+  );
+  ok(afterNew.saved === null, '点「新建对话」后清掉「上次会话」标记', `saved=${afterNew.saved}`);
+  ok(afterNew.bubbles === 0, '新建后消息区是空的', `bubbles=${afterNew.bubbles}`);
+
+  await backToChat();
+  const afterBack = await read(win, `document.querySelectorAll('.ai-bubble').length`);
+  ok(
+    afterBack === 0,
+    '🔴 新建对话后切走再回来仍停在空对话（不会又跳回旧会话）',
+    `bubbles=${afterBack}`,
+  );
+
   /* ---- G. 设置页最后一行开关 ---- */
   await click(win, '.nav-item[href="#/settings"]');
   await waitFor(win, `!!document.querySelector('.setting-line')`);
@@ -581,7 +668,11 @@ app.whenReady().then(async () => {
   const win2 = await makeWindow();
   await win2.loadFile(path.join(ROOT, 'dist', 'index.html'), { hash: '/ai' });
   await win2.show();
-  await sleep(1800);
+  /*
+   * 等够：App 的初始化是一串串行 IPC（界面配置 → 设置 → 签名 → 日志 → 报告索引 → …），
+   * 日志一大，前几步就能吃掉两秒多，报告索引排在后面，等太短会读到空 store。
+   */
+  await sleep(3200);
   const w2 = await read(
     win2,
     `(() => ({
@@ -594,7 +685,7 @@ app.whenReady().then(async () => {
 
   /* 已读的历史报告仍在列表里（要显式切到报告页才看得到列表） */
   await click(win2, '.ai-head .segmented-item:nth-child(2)');
-  await waitFor(win2, `!!document.querySelector('.ai-report-item')`, 4000);
+  await waitFor(win2, `!!document.querySelector('.ai-report-item')`, 8000);
   const w2list = await read(
     win2,
     `(() => ({

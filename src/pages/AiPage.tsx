@@ -392,6 +392,31 @@ function ConfigCard({
 /* 对话                                                                */
 /* ================================================================== */
 
+/* 上次停在哪一段对话。
+ *
+ * 路由切走再切回来时 ChatPane 会整个卸载重建，sessionId 归零 →
+ * 用户看到的是空白新对话，得自己到左边列表里翻回刚才那段。
+ * 把 id 记在 localStorage 就够了：纯界面偏好，不值得进 settings.json。
+ */
+const LAST_SESSION_KEY = 'adb.ai.lastSession';
+
+function readLastSession(): string | undefined {
+  try {
+    return localStorage.getItem(LAST_SESSION_KEY) || undefined;
+  } catch {
+    return undefined; // 存储被禁（隐私模式 / 配额满）就当没记住过
+  }
+}
+
+function rememberSession(id: string | undefined) {
+  try {
+    if (id) localStorage.setItem(LAST_SESSION_KEY, id);
+    else localStorage.removeItem(LAST_SESSION_KEY);
+  } catch {
+    /* 同上：记不住不影响这一轮对话 */
+  }
+}
+
 function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
   const [sessions, setSessions] = useState<AiSessionMeta[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
@@ -412,6 +437,31 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
     void refreshSessions();
   }, [refreshSessions]);
 
+  /*
+   * 挂载时把上次停的那段对话接回来。
+   *
+   * ⚠️ 用 ref 只跑一次：StrictMode 下 effect 会执行两遍，会重复读会话文件；
+   *    而且用户点了「新建对话」之后，任何后续刷新都不该把旧会话拉回来 ——
+   *    那时 localStorage 已经被清掉，这里也就自然什么都不做。
+   */
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const last = readLastSession();
+    if (!last) return;
+    void (async () => {
+      const s = await tryCall<AiSession>(() => window.adbApi.aiSession(last));
+      if (!s) {
+        // 会话被删了 / 历史被清了 → 悄悄退回新对话，别留个高亮的空壳
+        rememberSession(undefined);
+        return;
+      }
+      setSessionId(s.id);
+      setMessages(s.messages || []);
+    })();
+  }, []);
+
   /* 新消息 / 发送中 都要把视图钉到底部 */
   useEffect(() => {
     const el = listRef.current;
@@ -420,6 +470,8 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
 
   const reset = () => {
     setSessionId(undefined);
+    // 新对话 = 不再记得上一段，否则切走再回来又跳回去
+    rememberSession(undefined);
     setMessages([]);
     setInput('');
     setAtts([]);
@@ -429,6 +481,7 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
     const s = await tryCall<AiSession>(() => window.adbApi.aiSession(id));
     if (!s) return;
     setSessionId(s.id);
+    rememberSession(s.id);
     setMessages(s.messages || []);
     setInput('');
     setAtts([]);
@@ -507,6 +560,7 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
         { silent: true },
       );
       setSessionId(r.sessionId);
+      rememberSession(r.sessionId);
       setMessages([
         ...history,
         { id: uid(), role: 'assistant', content: r.content, model: r.model, time: Date.now() },
