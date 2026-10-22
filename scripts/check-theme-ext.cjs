@@ -120,6 +120,11 @@ function readSnap(win) {
         accentVar: V('--accent'),
         sidebarVar: V('--bg-sidebar'),
         appBgVar: V('--bg-app'),
+        /* 侧栏元素的**算完**的背景色：内联变量把它盖掉时，这里才是真相 */
+        sidebarBg: (() => {
+          const el = document.querySelector('.sidebar');
+          return el ? getComputedStyle(el).backgroundColor : null;
+        })(),
         accentLum: lum(V('--accent')),
         appBgLum: lum(V('--bg-app')),
         inlineAccent: root.style.getPropertyValue('--accent'),
@@ -315,10 +320,40 @@ app.whenReady().then(async () => {
   ok(c4.accentVar.toLowerCase() === '#3b6ae1', '苍穹主色回到 #3b6ae1', c4.accentVar);
 
   /* ================= 3. 玻璃主题 · 底图互斥 + 色系 ================= */
+  /*
+   * 🔴 先回到「浅色 + 自定义色」，把内联变量挂上再进玻璃主题。
+   *
+   * 只从苍穹切玻璃是验不出东西的 —— 内联本来就是空的。而这个 bug 的形态是：
+   * 用户挑过自定义色之后切到固定配色的主题（原神 / 玻璃），
+   * **自定义色的内联变量仍然盖着侧栏与底色**，于是画面变成
+   * 「卡片已经是深靛蓝 / 半透明玻璃，左侧栏还是自定义色那块不透明实色」。
+   * 2026-10-22 用户截图报的正是这个（原神主题 + 淡绿侧栏 = 自定义色那套）。
+   */
+  await clickChip(win, 'data-accent-id', 'custom');
+  await sleep(320);
+  await setColorInput(win, '#5b8c5a');
+  await sleep(700);
+  const cx = await readSnap(win);
+  ok(
+    cx.accentAttr === 'custom' && !!cx.inlineSidebar,
+    '进玻璃前先恢复「自定义色」（内联已挂上）',
+    `attr=${cx.accentAttr} inline=${cx.inlineSidebar}`,
+  );
+
   const rGlass = await clickSeg(win, '主题模式', '透明玻璃');
   await sleep(1200);
   const g1 = await readSnap(win);
   ok(g1.theme === 'glass', '切到「透明玻璃」', `theme=${g1.theme}`);
+  ok(
+    !g1.inlineAccent && !g1.inlineSidebar,
+    '🔴 切到「玻璃」后自定义内联被清掉（否则侧栏是一块实色板、壁纸透不进来）',
+    `accent="${g1.inlineAccent}" sidebar="${g1.inlineSidebar}"`,
+  );
+  ok(
+    /^rgba?\(/.test(g1.sidebarBg || '') && !/^rgb\(243, 245, 249\)$/.test(g1.sidebarBg || ''),
+    '🔴 玻璃侧栏是半透明的那一档（不是自定义色的实色）',
+    `sidebarBg=${g1.sidebarBg}`,
+  );
   ok(
     g1.backdropSegActive === '桌面壁纸',
     '玻璃默认底图模式 = 桌面壁纸',
@@ -378,10 +413,30 @@ app.whenReady().then(async () => {
   ok(g4.tintAttr === 'pink', '色系选择被记住（切回来还是淡粉）', `data-glass-tint=${g4.tintAttr}`);
 
   /* ================= 4. 原神主题不参与主题色（回归） ================= */
+  /*
+   * 从玻璃切回浅色：自定义色应当**自动恢复**（色值一直在 store 里，只是被摘下来了），
+   * 然后切原神再验一次「摘掉」。这是 2026-10-22 那个 bug 的正向回归：
+   * 修复前切原神后 .sidebar 的算完背景仍是自定义色派生的 #d8e6d8（淡绿）。
+   */
+  await clickSeg(win, '主题模式', '浅色');
+  await sleep(500);
+  const n0 = await readSnap(win);
+  ok(!!n0.inlineSidebar, '🔴 从玻璃切回浅色后自定义色自动恢复（色值没丢）', `inline=${n0.inlineSidebar}`);
+
   const rGenshin = await clickSeg(win, '主题模式', '原神');
-  await sleep(600);
+  await sleep(700);
   const n1 = await readSnap(win);
   ok(rGenshin === 'ok' && n1.theme === 'genshin', '切到「原神」', `theme=${n1.theme}`);
+  ok(
+    !n1.inlineAccent && !n1.inlineSidebar,
+    '🔴 切到「原神」后自定义内联被清掉（否则左侧栏还是自定义色）',
+    `accent="${n1.inlineAccent}" sidebar="${n1.inlineSidebar}"`,
+  );
+  ok(
+    (n1.sidebarBg || '').replace(/\s/g, '') === 'rgb(79,81,93)',
+    '🔴 原神侧栏是深靛蓝 #4f515d（不是自定义色那套）',
+    `sidebarBg=${n1.sidebarBg}`,
+  );
   ok(
     n1.fixedNote.includes('固定配色'),
     '原神仍给出「配色固定」说明',

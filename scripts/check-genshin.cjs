@@ -291,11 +291,12 @@ app.whenReady().then(async () => {
   ok(a.cardGradientCount === 0, '浅色卡片没有角饰', `gradients=${a.cardGradientCount}`);
   /*
    * 🔴 「原神和浅色、深色同一级」——这条就靠分段控件的选项表钉住：
-   * 三项并列，而不是「主题模式」之外另开一行「外观皮肤」。
+   * 并列在同一行，而不是「主题模式」之外另开一行「外观皮肤」。
+   * ⚠️ v1.1.13 起多了「透明玻璃」，名单要跟着加 —— 否则这条会因为脚本自己过期而假 FAIL。
    */
   ok(
-    JSON.stringify(a.themeModeLabels) === JSON.stringify(['浅色', '深色', '原神']),
-    '🔴 主题模式是「浅色 / 深色 / 原神」三项同一级',
+    JSON.stringify(a.themeModeLabels) === JSON.stringify(['浅色', '深色', '原神', '透明玻璃']),
+    '🔴 主题模式是「浅色 / 深色 / 原神 / 透明玻璃」同级并列',
     JSON.stringify(a.themeModeLabels),
   );
   /* 浅色下必须还是原来那枚冷色图标（主题 logo 不能无差别地全局替换） */

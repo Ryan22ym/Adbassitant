@@ -4,7 +4,7 @@ import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
 import { toHexColor, dimOver } from './lib/color';
-import { applyCustomAccent, clearCustomAccent } from './lib/accent-custom';
+import { applyCustomAccent, clearCustomAccent, customAccentApplies } from './lib/accent-custom';
 import { IPC } from '@shared/types';
 import type { UpdateResult, UpdateCheckResult, AabSigningInfo, CrashReportMeta, CrashWatchStatus } from '@shared/types';
 import type { UiConf } from '@shared/ui-conf';
@@ -328,14 +328,23 @@ export default function App() {
    * 🔴 不是 'custom' 时必须**清掉**内联覆盖：内联变量优先级高于任何 CSS 选择器，
    *    不清的话从「自定义」切回「苍穹」会看到侧栏还是粉的、按钮已经蓝了。
    *
+   * 🔴🔴 theme 是原神 / 透明玻璃时**同样要清**，哪怕 accent 还是 'custom'
+   *    （见 customAccentApplies 的注释）：这两套主题的配色是固定写在
+   *    :root[data-theme='…'] 上的，内联值会整片盖掉 —— 典型症状就是
+   *    「切到原神主题后左侧栏还是自定义色那套淡色，右边卡片已经是深靛蓝」。
+   *    色值仍留在 store 里，切回浅/深色会自动恢复。
+   *
    * 🔴🔴 这个 effect 的位置**必须在「标题栏配色」那个 effect 之前**：
    *    那边是读 .titlebar 的 computed backgroundColor 回传给主进程的，
    *    而 React 按声明顺序跑 effect —— 排在后面前者读到的还是改色前的旧值，
    *    表现就是「换了自定义色，右上角三个按钮的区域还是旧色」。
    */
   useEffect(() => {
-    if (accent === 'custom') applyCustomAccent(accentCustom, theme === 'dark');
-    else clearCustomAccent();
+    if (accent === 'custom' && customAccentApplies(theme)) {
+      applyCustomAccent(accentCustom, theme === 'dark');
+    } else {
+      clearCustomAccent();
+    }
   }, [accent, accentCustom, theme]);
 
   /*

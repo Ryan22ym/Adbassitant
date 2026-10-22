@@ -223,3 +223,24 @@ export function clearCustomAccent(): void {
 export function isCustomAccent(accent: AccentId | string, hex: string): boolean {
   return accent === 'custom' && /^#[0-9a-fA-F]{6}$/.test((hex || '').trim());
 }
+
+/**
+ * 当前主题是否**允许**自定义主题色生效。
+ *
+ * 🔴🔴 只有浅色 / 深色两档可以。原神与透明玻璃各自带**固定配色**
+ *    （原神 = 米白纸 + 深靛蓝侧栏 + 淡金；玻璃 = 半透明白纱 + 壁纸），
+ *    它们整套变量都写在 `:root[data-theme='…']` 上 —— 而自定义色是
+ *    **内联在 <html> 上的变量，优先级永远更高**，只要还挂着，就会把这两套
+ *    主题的 `--bg-sidebar / --bg-app / --bg-surface` 全数盖掉。
+ *
+ *    用户看到的症状（2026-10-22 反馈的截图）：选过自定义色之后切到「原神」，
+ *    内容卡片已经是深靛蓝了，**左侧栏却还是自定义色那套淡色**——
+ *    因为侧栏的 `background: var(--bg-sidebar)` 解析到的是内联值。
+ *    玻璃主题同理（侧栏会从半透明变成一块实色板，壁纸穿透也没了）。
+ *
+ *    所以切到这两套主题时必须 **clearCustomAccent()**：色值本身留在 store 里，
+ *    切回浅色 / 深色时原样恢复，用户的选择不会丢。
+ */
+export function customAccentApplies(theme: string): boolean {
+  return theme === 'light' || theme === 'dark';
+}
