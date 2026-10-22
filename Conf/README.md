@@ -119,6 +119,7 @@
 | | `settings.logs` | 运行日志 |
 | | `settings.env` | 环境自检 |
 | | `settings.autoMirror` | 插入手机自动投屏 |
+| | `settings.window` | 窗口（记录窗口大小） |
 
 ---
 

@@ -69,7 +69,8 @@
       "update": true,
       "logs": false,
       "env": false,
-      "autoMirror": true
+      "autoMirror": true,
+      "window": false
     }
   }
 }

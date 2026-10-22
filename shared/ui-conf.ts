@@ -171,6 +171,8 @@ export const DEFAULT_PANELS: PanelsConf = {
       logs: false,
       env: false,
       autoMirror: true,
+      /* 记录窗口大小（v1.1.16）：低频设置，默认收起 */
+      window: false,
     },
   },
 };

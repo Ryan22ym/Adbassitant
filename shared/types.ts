@@ -1057,6 +1057,27 @@ export type GlassTintId = 'blue' | 'pink' | 'gray' | 'pearl';
  */
 export type ThemeId = 'light' | 'dark' | 'system' | 'genshin' | 'glass';
 
+/**
+ * 主窗口的尺寸与位置（v1.1.16）。
+ *
+ * 存的是 **DIP（逻辑像素）**，不是设备像素 —— 也就是 BrowserWindow 那套坐标系。
+ * 本机 scaleFactor=1.25，所以界面上看到的 1280×860 与屏幕像素不是 1:1，
+ * 但 DIP 的好处是换显示器 / 改缩放后含义不变，仍然能落回同一个「视觉大小」。
+ *
+ * `maximized` 与 `bounds` **同时存**：
+ *   · maximized=true 时，bounds 记的是**还原后**该有的尺寸（来自 getNormalBounds()）。
+ *     只存「最大化」而不存还原尺寸，用户下次点还原就变成一个系统默认大小的小窗，
+ *     不是他上次调好的那个大窗 —— 这是最容易漏的一点。
+ */
+export interface WindowBoundsState {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** 上次退出时是否处于最大化（全屏不计入，见 services/window-state.ts） */
+  maximized: boolean;
+}
+
 export interface AppSettings {
   theme: ThemeId;
   /** 主题色（v1.1.2）。决定 --accent 及整套界面底色，见 AccentId */
@@ -1258,6 +1279,31 @@ export interface AppSettings {
    * 上限 24 小时 —— 再大没有意义，再小等于持续打更新源。
    */
   updateCheckIntervalMin: number;
+
+  /*
+   * 记录窗口大小（v1.1.16）
+   */
+  /**
+   * 「记住窗口大小和位置」：拖动改变窗口后自动存盘，下次启动按上次的样子打开。
+   *
+   * 默认 **true** —— 与「记住侧栏展开状态」（sidebarCollapsed）一个调性：
+   * 这类纯界面偏好，用户调过一次就不想再调第二次，默认开才符合直觉。
+   *
+   * 关掉时：下次启动用出厂尺寸 1280×860，且**不再写盘**（已有的记录保留不动，
+   * 这样重新打开开关还能恢复到上次的样子）。
+   */
+  rememberWindowBounds: boolean;
+  /**
+   * 上次记录的窗口尺寸与位置；null = 从没记录过（新装 / 关过开关 / 记录被判无效）。
+   *
+   * 写入时机见 electron/services/window-state.ts：拖动结束（resized / moved）、
+   * 最大化状态变化、退出前。**最大化时存的是还原尺寸**，理由见 WindowBoundsState。
+   *
+   * ⚠️ 读到这份记录后必须做**可见性校验**（多显示器拔了 / 分辨率变小）：
+   *    判断这块矩形还够不够「露出一个角能拖回来」，不够就当作没有记录，
+   *    否则用户会看到窗口弹在屏幕外、以为程序没启动。
+   */
+  windowBounds: WindowBoundsState | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1959,6 +2005,17 @@ export const IPC = {
   WINDOW_CLOSE: 'window:close',
   /** 查询窗口是否最大化（自绘按钮要据此切换图标 / 行为） */
   WINDOW_IS_MAX: 'window:isMax',
+  /*
+   * 记录窗口大小（v1.1.16）。
+   *
+   * 为什么不放在渲染层做：bounds 只能从主进程问（BrowserWindow 的 API），
+   * 而且「恢复到上次的尺寸」也必须在**建窗那一刻**就带上 —— 晚了会先闪一个
+   * 1280×860 再跳成用户的大小，观感上像窗口抽了一下。
+   */
+  /** 读当前窗口尺寸 + 上次记录值（设置页显示用） */
+  WINDOW_GET_STATE: 'window:getState',
+  /** 恢复到出厂尺寸 1280×860（居中），并清掉记录 */
+  WINDOW_RESET_SIZE: 'window:resetSize',
 
   /* 增量更新（v1.0.7） */
   UPDATE_CONTEXT: 'update:context',

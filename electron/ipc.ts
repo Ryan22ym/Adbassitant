@@ -153,6 +153,7 @@ import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } fro
 import { getWallpaperDataURL } from './services/wallpaper';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
 import { getUiConf, resolveUiConfDir } from './services/ui-conf';
+import { resetWindowSize, windowStateSnapshot } from './services/window-state';
 import { applyAutoLaunch } from './services/auto-launch';
 import {
   applyUpdate,
@@ -1430,6 +1431,23 @@ export function registerIpc() {
   );
   ipcMain.handle(IPC.WINDOW_CLOSE, wrap(() => win()?.close() ?? false));
   ipcMain.handle(IPC.WINDOW_IS_MAX, wrap(() => win()?.isMaximized() ?? false));
+
+  /*
+   * 记录窗口大小（v1.1.16）。
+   *
+   * 写盘本身在主进程内部完成（services/window-state.ts 直接监听 resized / moved），
+   * 这两个通道只服务于设置页：一个读回来展示「当前 1280 × 860」，
+   * 一个执行「恢复默认尺寸」（退出最大化 → 居中 1280×860 → 写入记录）。
+   */
+  ipcMain.handle(IPC.WINDOW_GET_STATE, wrap(() => windowStateSnapshot(win())));
+  ipcMain.handle(
+    IPC.WINDOW_RESET_SIZE,
+    wrap(() => {
+      const w = win();
+      if (!w) throw new Error('窗口尚未创建');
+      return resetWindowSize(w);
+    }),
+  );
 
   /*
    * 抓一张桌面壁纸（v1.1.13 修正：「模拟玻璃」的底图来源）。

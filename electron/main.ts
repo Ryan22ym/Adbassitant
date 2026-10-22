@@ -14,6 +14,11 @@ import { shutdownCrashWatch, syncCrashWatch } from './services/crash';
 import { refreshShortcutIcons } from './services/shortcuts';
 import { syncAutoLaunch } from './services/auto-launch';
 import { syncGlassCorners, resetGlassCornerCache } from './services/win-corners';
+import {
+  centeredDefaultBounds,
+  savedWindowState,
+  trackWindowState,
+} from './services/window-state';
 import { IPC, TITLEBAR_HEIGHT } from '../shared/types';
 import { MIRROR_DEFAULTS } from '../shared/mirror-defaults';
 
@@ -345,13 +350,29 @@ function createWindow(restore?: { glass: boolean; bounds?: Electron.Rectangle; m
    */
   const glass = restore ? restore.glass : startInGlass();
 
+  /*
+   * 窗口尺寸与位置（v1.1.16「记录窗口大小」）。
+   *
+   * 三级来源，优先级从高到低：
+   *   ① restore（跨玻璃形态重建）：沿用**旧窗口那一刻**的 bounds —— 用户正在看这个窗口，
+   *      尺寸不能因为「换主题」而变；
+   *   ② settings.json 里的记录（services/window-state.ts）：正常启动路径；
+   *   ③ 居中的出厂尺寸 1280×860：新装、关过开关、记录被判失效（屏幕变了）时。
+   *
+   * 🔴 bounds 必须展开在**建窗参数**里，不能建完再 setBounds ——
+   *    后者会先按出厂尺寸画一帧再跳，观感上窗口会抽一下。
+   * 🔴 最大化状态另存（maximized），在 ready-to-show 里补一刀，
+   *    见下面那个 handler 的注释。
+   */
+  const restored = restore
+    ? { bounds: restore.bounds, maximized: !!restore.maximized }
+    : savedWindowState();
+  const startBounds = restored.bounds ?? centeredDefaultBounds();
+
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    ...startBounds,
     minWidth: 960,
     minHeight: 640,
-    /* 重建（跨玻璃形态切换）时沿用旧窗口的位置尺寸，别跳回出厂 1280×860 */
-    ...(restore?.bounds ?? {}),
     title: 'ADB 桌面助手',
     icon: appIcon(),
     // 首帧（页面还没画出来）的底色，尽量贴近默认主题色，避免闪一下别的颜色。
@@ -407,8 +428,13 @@ function createWindow(restore?: { glass: boolean; bounds?: Electron.Rectangle; m
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
-    /* 重建时旧窗口是最大化状态 → 新窗口也要最大化（bounds 在最大化时不取，见 recreate） */
-    if (restore?.maximized) mainWindow?.maximize();
+    /*
+     * 上次退出时是最大化 → 这次也最大化。
+     * 为什么要等到 ready-to-show：最大化必须在窗口**显示之后**做才稳
+     * （隐藏窗口上调 maximize 在 Windows 上偶发不生效，回来还是个普通窗）。
+     * bounds 这时已经被建窗参数设成「还原后的大小」，所以用户点还原能回到上次的尺寸。
+     */
+    if (restored.maximized) mainWindow?.maximize();
   });
 
   /*
@@ -518,6 +544,15 @@ function createWindow(restore?: { glass: boolean; bounds?: Electron.Rectangle; m
 
   // 记录本窗口的形态（玻璃 ↔ 普通的运行期切换靠它判断要不要重建）
   windowFormGlass = glass;
+
+  /*
+   * 记录窗口大小（v1.1.16）：拖动结束 / 最大化状态变化时存盘，下次启动按这个尺寸打开。
+   *
+   * 挂的是**本窗口实例**（win），不是模块级 mainWindow：跨玻璃形态重建时
+   * mainWindow 已指向新窗口，旧窗口的事件如果还去操作新窗口的记录会把值写歪。
+   * 旧窗口是 destroy() 退出、不发 close，所以也不会在拆掉时抢存一次。
+   */
+  trackWindowState(win);
 
   // 外部链接用系统浏览器打开
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

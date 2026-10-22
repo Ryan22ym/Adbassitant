@@ -16,7 +16,7 @@ import {
 } from '@/components/ui';
 import { useApp } from '@/store/app';
 import { useFeature, usePanelOpen } from '@/lib/ui-conf';
-import { call } from '@/lib/ipc';
+import { call, tryCall } from '@/lib/ipc';
 import { IPC } from '@shared/types';
 import type {
   AccentId,
@@ -146,6 +146,8 @@ const THEME_MODES: { value: 'light' | 'dark' | 'genshin' | 'glass'; label: strin
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.16':
+    '新增「记录窗口大小」：拖动改变窗口大小或位置后会自动记下，下次启动按上次的样子打开；最大化的状态也会记住，点还原能回到你上次调好的尺寸，不会弹回一整屏。设置页新增「窗口」卡片，可随时关掉这个记录，或一键恢复默认的 1280 × 860。',
   '1.1.15':
     '拖入安装包时，只有一台设备在线也会先让你确认覆盖 / 清洁 / 全新安装，不再默认静默覆盖安装。左下角新增「检测到新版本」提示，卡片上直接显示新版本号与更新内容（长说明按条列出、可在卡片里滚动看全），点「更新」直达设置页并自动开始下载；不在设置页时程序也会每 10 分钟自动检测一次（间隔可改，也可关）。实时 Logcat 切到其它模块再回来日志不再消失，新增「后台保持抓取」开关，日志列表改为只渲染可见行，设备刷屏时不再卡顿。AI 助手现在能自己动手查设备：提问后它会根据目标生成 adb 指令、程序自动执行并把返回结果交回对话，一轮轮查到你问的那个目标有结论为止（最多 6 轮），执行过程在对话里逐条显示、可随时点「停止」中断；卸载应用、清应用数据、刷机等破坏性命令会被拦下不执行，也可以关掉「执行 adb 指令」开关让它只回答问题。',
   '1.1.14':
@@ -254,6 +256,26 @@ export default function SettingsPage() {
   const [env, setEnv] = useState<EnvCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
 
+  /*
+   * 记录窗口大小（v1.1.16）。
+   *
+   * 界面这一侧**只读**：真正写盘在主进程（监听 resized / moved，见
+   * electron/services/window-state.ts）。这里读一次是为了把「当前 1280 × 860」
+   * 显示出来 —— 用户拖完窗口想知道记没记住，看一眼数字比拖回去重启一次快得多。
+   */
+  const windowOpen = usePanelOpen('settings', 'window');
+  const [winState, setWinState] = useState<{
+    current: { width: number; height: number; maximized: boolean } | null;
+    saved: { x: number; y: number; width: number; height: number; maximized: boolean } | null;
+  } | null>(null);
+  const refreshWinState = async () => {
+    const s = await tryCall(() => window.adbApi.winState());
+    if (s) setWinState(s);
+  };
+  useEffect(() => {
+    void refreshWinState();
+  }, []);
+
   const checkEnv = async () => {
     setChecking(true);
     try {
@@ -283,6 +305,22 @@ export default function SettingsPage() {
   const changeTheme = (t: 'light' | 'dark' | 'genshin' | 'glass') => {
     applyTheme(t);
     update({ theme: t });
+  };
+
+  /**
+   * 恢复默认窗口尺寸（v1.1.16）。
+   *
+   * 主进程会退出最大化 → 居中 1280×860 → 把这份值写进记录。
+   * 这里刷一次状态并提示，让用户看到数字真的变了（而不是只听见一句话）。
+   */
+  const resetWinSize = async () => {
+    try {
+      await call(() => window.adbApi.winResetSize());
+      await refreshWinState();
+      toast('success', '窗口已恢复默认尺寸');
+    } catch (e) {
+      toast('error', '恢复默认尺寸失败', (e as Error).message);
+    }
   };
 
   /*
@@ -640,6 +678,54 @@ export default function SettingsPage() {
           </div>
         )}
 
+      </Card>
+
+      {/*
+        记录窗口大小（v1.1.16）。
+        放在「外观」后面：它同样是「界面长什么样」这一类偏好，紧挨着最自然。
+        默认收起（见 Conf/panels.json 的 settings.window）—— 基本是一次性设置，
+        调好就不会再动，不该占主流程的位置。
+
+        🔴 这里**不负责写盘**：拖动窗口时主进程自己记（resized / moved + debounce），
+           本卡片只做两件事 —— 显示当前尺寸、提供一个回到出厂的按钮。
+      */}
+      <Card
+        title="窗口"
+        subtitle="记住窗口大小和位置，下次打开还是这个样子"
+        collapsible
+        defaultOpen={windowOpen}
+      >
+        <div className="setting-line">
+          <span className="setting-line-label">记住窗口大小和位置</span>
+          <span className="spacer" />
+          <Switch
+            checked={!!settings.rememberWindowBounds}
+            onChange={(v) => update({ rememberWindowBounds: v })}
+            aria-label="记住窗口大小和位置"
+          />
+        </div>
+
+        <div className="setting-line">
+          <span className="setting-line-label">当前窗口</span>
+          <span className="spacer" />
+          <span className="text-dim" data-win-size="1">
+            {winState?.current
+              ? `${winState.current.width} × ${winState.current.height}${
+                  winState.current.maximized ? '（最大化）' : ''
+                }`
+              : '读取中…'}
+          </span>
+          <Button size="sm" variant="default" onClick={resetWinSize} data-win-reset="1">
+            恢复默认尺寸
+          </Button>
+        </div>
+
+        <p className="setting-note">
+          拖过窗口边缘后会自动记下大小和位置，下次启动按这个样子打开（最大化状态也会记住，
+          点还原能回到你上次调好的尺寸）。这里的数字是界面逻辑像素，不受系统缩放影响。
+          关掉开关后下次启动回到默认的 1280 × 860 居中，但已记下的尺寸会保留 ——
+          重新打开开关就能回到原来的样子。
+        </p>
       </Card>
 
       <Card

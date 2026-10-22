@@ -169,6 +169,13 @@ const IPC = {
   WINDOW_TOGGLE_MAX: 'window:toggleMax',
   WINDOW_CLOSE: 'window:close',
   WINDOW_IS_MAX: 'window:isMax',
+  /*
+   * 记录窗口大小（v1.1.16）。
+   * 🔴 字面量必须与 shared/types.ts 的 IPC 同名项逐字一致 ——
+   *    preload 是独立打包的，不能 import shared，只能手抄一份（历史坑）。
+   */
+  WINDOW_GET_STATE: 'window:getState',
+  WINDOW_RESET_SIZE: 'window:resetSize',
 
   /*
    * AI 助手（v1.1.14）。
@@ -543,6 +550,16 @@ const api = {
   winClose: () => invoke(IPC.WINDOW_CLOSE),
   /** 窗口当前是否最大化（自绘按钮据此切换「最大化 / 还原」的图标） */
   winIsMax: () => invoke(IPC.WINDOW_IS_MAX),
+
+  /*
+   * 记录窗口大小（v1.1.16）。
+   * 存盘是主进程自己做的（监听 resized / moved），这里只给设置页提供
+   * 「读一眼当前尺寸」和「恢复默认尺寸」两个动作。
+   */
+  /** 当前窗口尺寸 + 上次记录值（都是 DIP，不是设备像素） */
+  winState: () => invoke(IPC.WINDOW_GET_STATE),
+  /** 退出最大化 → 居中 1280×860 → 写入记录；返回写入的那份记录 */
+  winResetSize: () => invoke(IPC.WINDOW_RESET_SIZE),
 
   /*
    * AI 助手（v1.1.14）。

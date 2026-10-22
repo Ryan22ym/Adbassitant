@@ -92,6 +92,10 @@ const DEFAULTS: AppSettings = {
   logcatKeepBackground: true,
   // 自动检查更新间隔（v1.1.15）：10 分钟。0 = 只在启动时查一次
   updateCheckIntervalMin: 10,
+  // 记住窗口大小和位置（v1.1.16）：默认开 —— 纯界面偏好，和 sidebarCollapsed 一个调性。
+  // windowBounds 初始为 null（从没记录过），由 services/window-state.ts 写入
+  rememberWindowBounds: true,
+  windowBounds: null,
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -180,6 +184,9 @@ function defaultDirs(): AppSettings {
     // Logcat 后台抓取 / 更新检测间隔（v1.1.15）：与 DEFAULTS 保持一致
     logcatKeepBackground: true,
     updateCheckIntervalMin: 10,
+    // 记住窗口大小（v1.1.16）：与 DEFAULTS 一致；null 不是共享引用，安全
+    rememberWindowBounds: true,
+    windowBounds: null,
   };
 }
 
