@@ -1,11 +1,51 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Card, Button, Badge, Empty, Segmented, Input, Field, Select, Notice, Switch } from '@/components/ui';
+import { Card, Button, Badge, Empty, Segmented, Input, Field, Select, Notice } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
 import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
-import type { LogcatFilter, LogcatLevel, LogcatLine, LogcatStatus } from '@shared/types';
+import type {
+  LogcatFilter,
+  LogcatHistory,
+  LogcatLevel,
+  LogcatLine,
+  LogcatStatus,
+} from '@shared/types';
 
+/**
+ * 实时 Logcat。
+ *
+ * v1.1.15 的三处改动，都是围绕「日志一多、页面一切就变糊」这个问题：
+ *
+ * ① **虚拟滚动**（只画视口那几十行）
+ *    以前是把最多 4000 行全部渲染成 DOM —— 每行 6 个 span，等于 2 万多个节点，
+ *    主进程每 120ms 推一批就要整棵树 reconcile 一次，设备刷屏时界面直接卡死。
+ *    现在按固定行高（ROW_H）算「当前该显示哪一段」，DOM 节点数与日志总量脱钩。
+ *
+ * ② **切页回来能接上**（logcat:history 回放）
+ *    本页是路由组件，切到别的模块就卸载、lines 跟着销毁，而主进程那条 adb logcat
+ *    还在跑 —— 回来一片空白，看着像抓取自己停了。现在挂载时把主进程环形缓冲里的
+ *    最近 N 行取回来铺上，再接着收推送。
+ *
+ * ③ **后台保持抓取**开关（设置持久化，默认开）
+ *    勾着：离开页面不停会话（配合 ② 就是「在别的页面操作设备 → 回来接着看」）；
+ *    不勾：离开页面就停掉，省 CPU 与 USB 带宽。
+ */
+
+/** 界面保留的最大行数（主进程回放缓冲同量级，见 services/logcat.ts 的 MAX_RECENT） */
 const MAX_LINES = 4000;
+/** 固定行高（px）。虚拟滚动靠它换算位置，改这里必须同步改 .logcat-line 的 height */
+const ROW_H = 22;
+/** 视口上下各多渲染几行，滚动时不会露白 */
+const OVERSCAN = 10;
+
+/**
+ * 离开页面后延迟多久真正停掉会话。
+ *
+ * 🔴 不是随手加的：React 的 StrictMode 会「挂载 → 立刻卸载 → 再挂载」，
+ *    同步就会跑一次 cleanup。若在 cleanup 里直接 stopLogcat()，开发模式下
+ *    一切页面回来就把后台抓取杀了。延迟一小会儿，第二次挂载能把这个待停任务取消掉。
+ */
+let pendingStop: ReturnType<typeof setTimeout> | null = null;
 
 const LEVELS: { value: LogcatLevel; label: string }[] = [
   { value: 'V', label: 'V' },
@@ -32,9 +72,17 @@ interface ProcEntry {
   name: string;
 }
 
+/** 只留最近 MAX_LINES 行（环形语义，与主进程一致） */
+function trimLines(list: LogcatLine[]): LogcatLine[] {
+  return list.length > MAX_LINES ? list.slice(list.length - MAX_LINES) : list;
+}
+
 export default function LogcatPage() {
   const current = useCurrentDevice();
   const toast = useApp((s) => s.toast);
+  /* 后台保持抓取（v1.1.15）：持久化在 settings.json */
+  const keepBackground = useApp((s) => s.settings?.logcatKeepBackground ?? true);
+  const setSettings = useApp((s) => s.setSettings);
 
   /* 运行状态 */
   const [running, setRunning] = useState(false);
@@ -75,22 +123,33 @@ export default function LogcatPage() {
   const heldRef = useRef<LogcatLine[]>([]);
   /* 上次生效的设备序列号，用来区分「首次挂载」与「真的切设备」 */
   const prevSerialRef = useRef<string | undefined>(undefined);
+  /*
+   * 回放是否已经铺好（v1.1.15）。
+   * 挂载那一刻推送可能已经先到了 —— 那几批必须**先攒着**，等历史行铺完再按 seq
+   * 去重合并，否则「先收到的新行」会被随后的「历史行」覆盖掉，或者重复出现。
+   */
+  const historyReadyRef = useRef(false);
+  const earlyRef = useRef<LogcatLine[]>([]);
+  /* 离页停抓要用最新值，不能靠闭包（cleanup 里读不到更新后的 props） */
+  const keepRef = useRef(keepBackground);
+  keepRef.current = keepBackground;
 
   /* ---------- 推送订阅 ---------- */
   useEffect(() => {
     const offLines = window.adbApi.on('push:logcatLines', (batch: LogcatLine[]) => {
       if (!Array.isArray(batch) || batch.length === 0) return;
-      if (pausedRef.current) {
-        heldRef.current.push(...batch);
-        if (heldRef.current.length > MAX_LINES) {
-          heldRef.current.splice(0, heldRef.current.length - MAX_LINES);
-        }
+
+      // 历史还没铺好：先攒着（上限按 MAX_LINES 兜住，别让极端刷屏把内存吃掉）
+      if (!historyReadyRef.current) {
+        earlyRef.current = trimLines(earlyRef.current.concat(batch));
         return;
       }
-      setLines((prev) => {
-        const next = prev.concat(batch);
-        return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-      });
+
+      if (pausedRef.current) {
+        heldRef.current = trimLines(heldRef.current.concat(batch));
+        return;
+      }
+      setLines((prev) => trimLines(prev.concat(batch)));
     });
 
     const offStatus = window.adbApi.on('push:logcatStatus', (s: LogcatStatus) => {
@@ -104,35 +163,93 @@ export default function LogcatPage() {
     };
   }, []);
 
+  /* ---------- 回放：把切页期间抓到的行铺回来（v1.1.15） ---------- */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const h = await call<LogcatHistory>(() => window.adbApi.logcatHistory(MAX_LINES), {
+        silent: true,
+      });
+      if (cancelled) return;
+
+      const base = h?.lines ?? [];
+      const lastSeq = base.length ? base[base.length - 1].seq : 0;
+      // 只补「历史里没有的」新行（seq 单调递增，比按 raw 去重可靠）
+      const extra = earlyRef.current.filter((l) => l.seq > lastSeq);
+      earlyRef.current = [];
+      historyReadyRef.current = true;
+
+      if (base.length || extra.length) {
+        setLines(trimLines(base.concat(extra)));
+      }
+      if (h?.status) {
+        setStatus(h.status);
+        setRunning(!!h.status.running);
+      } else {
+        /*
+         * 回放拿不到（IPC 出错 / 老版本主进程）：退回到「只读一次状态」。
+         * 少了这一步，页面会显示「已停止」而主进程其实还在推 —— 比没有回放更误导。
+         */
+        const st = await call<LogcatStatus>(() => window.adbApi.logcatStatus(), { silent: true });
+        if (!cancelled && st) {
+          setStatus(st);
+          setRunning(!!st.running);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* ---------- 离开页面：按配置决定要不要停掉后台抓取 ---------- */
+  useEffect(() => {
+    // 回到本页就把待停任务取消掉（StrictMode 的立即重挂载 / 用户快速来回切）
+    if (pendingStop) {
+      clearTimeout(pendingStop);
+      pendingStop = null;
+    }
+    return () => {
+      if (keepRef.current) return;
+      if (pendingStop) clearTimeout(pendingStop);
+      pendingStop = setTimeout(() => {
+        pendingStop = null;
+        void window.adbApi.stopLogcat();
+      }, 150);
+    };
+  }, []);
+
   /* ---------- 恢复时把暂存行并回去 ---------- */
   useEffect(() => {
     if (!paused && heldRef.current.length > 0) {
       const held = heldRef.current;
       heldRef.current = [];
-      setLines((prev) => {
-        const next = prev.concat(held);
-        return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-      });
+      setLines((prev) => trimLines(prev.concat(held)));
     }
   }, [paused]);
 
+  /* ---------- 虚拟滚动：视口高度 ---------- */
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewH, setViewH] = useState(420);
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el) return;
+    const sync = () => setViewH(el.clientHeight || 420);
+    sync();
+    // 窗口缩放 / 卡片展开收起都会改高度，用 ResizeObserver 跟着走
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   /* ---------- 自动滚动 ---------- */
   useEffect(() => {
-    if (autoScroll && viewRef.current) {
-      viewRef.current.scrollTop = viewRef.current.scrollHeight;
+    const el = viewRef.current;
+    if (autoScroll && el) {
+      el.scrollTop = el.scrollHeight;
+      setScrollTop(el.scrollTop);
     }
   }, [lines.length, autoScroll]);
-
-  /* ---------- 挂载时读取一次运行状态（页面切换后回来不丢） ---------- */
-  useEffect(() => {
-    (async () => {
-      const s = await call<LogcatStatus>(() => window.adbApi.logcatStatus(), { silent: true });
-      if (s) {
-        setStatus(s);
-        setRunning(!!s.running);
-      }
-    })();
-  }, []);
 
   const buildFilter = useCallback((): Partial<LogcatFilter> => ({
     minLevel,
@@ -147,6 +264,8 @@ export default function LogcatPage() {
     setBusy(true);
     setLines([]);
     heldRef.current = [];
+    earlyRef.current = [];
+    historyReadyRef.current = true;
     try {
       const s = await call<LogcatStatus>(
         () => window.adbApi.startLogcat(current.serial, buildFilter()),
@@ -279,6 +398,21 @@ export default function LogcatPage() {
     return list;
   }, [lines, keyword, tagFilter, procFilter]);
 
+  /*
+   * 只算「该画哪一段」（v1.1.15）。DOM 节点数由此固定在
+   * (视口高度 / 行高) + 2×OVERSCAN，跟日志总量没有关系 ——
+   * 这就是以前「日志一多就卡死」的根治点。
+   */
+  const winStart = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+  const winEnd = Math.min(
+    visible.length,
+    Math.ceil((scrollTop + viewH) / ROW_H) + OVERSCAN,
+  );
+  const winRows = useMemo(
+    () => visible.slice(winStart, Math.max(winStart, winEnd)),
+    [visible, winStart, winEnd],
+  );
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
     for (const l of lines) {
@@ -298,7 +432,12 @@ export default function LogcatPage() {
     });
   };
 
-  const notRootHint = false;
+  /** 后台保持抓取：写 store + 落盘（settings.json） */
+  const toggleKeep = (v: boolean) => {
+    const st = useApp.getState();
+    if (st.settings) setSettings({ ...st.settings, logcatKeepBackground: v });
+    void window.adbApi.setSettings({ logcatKeepBackground: v });
+  };
 
   return (
     <>
@@ -345,14 +484,33 @@ export default function LogcatPage() {
             onChange={(e) => setTagFilter(e.target.value)}
             style={{ maxWidth: 180, height: 28 }}
           />
-          <label className="auto-scroll">
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-            />
-            自动滚动
-          </label>
+          {/*
+            两个勾选项挤在右侧：自动滚动（看日志时最常用）在前，
+            后台保持抓取紧随其后。后者是 v1.1.15 新增的持久化偏好，
+            勾上之后切到别的模块，抓取不会中断，回来还能接着看。
+          */}
+          <div className="log-toolbar-toggles">
+            <label className="auto-scroll" title="新日志到达时自动滚到底部">
+              <input
+                type="checkbox"
+                checked={autoScroll}
+                onChange={(e) => setAutoScroll(e.target.checked)}
+              />
+              自动滚动
+            </label>
+            <label
+              className="auto-scroll"
+              title="勾选后切到别的模块仍继续抓取；取消勾选则离开本页即停止"
+              data-logcat-keep="1"
+            >
+              <input
+                type="checkbox"
+                checked={keepBackground}
+                onChange={(e) => toggleKeep(e.target.checked)}
+              />
+              后台保持抓取
+            </label>
+          </div>
         </div>
 
         {showFilter && (
@@ -440,7 +598,11 @@ export default function LogcatPage() {
           </div>
         )}
 
-        <div className="log-view logcat-view" ref={viewRef}>
+        <div
+          className="log-view logcat-view"
+          ref={viewRef}
+          onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
+        >
           {visible.length === 0 ? (
             <Empty
               title={running ? '等待日志输出…' : '还没有日志'}
@@ -451,7 +613,20 @@ export default function LogcatPage() {
               }
             />
           ) : (
-            visible.map((l) => <LogcatRow key={l.seq} line={l} />)
+            /*
+             * 虚拟滚动的两层：
+             *   .log-spacer 撑出完整高度（滚动条长度才对）；
+             *   .log-window 用 translateY 把自己挪到「这一段」应该在的位置。
+             * 🔴 必须是 transform 而不是 padding-top：padding 会在每帧触发重排，
+             *    滚动时肉眼可见地发涩。
+             */
+            <div className="log-spacer" style={{ height: visible.length * ROW_H }}>
+              <div className="log-window" style={{ transform: `translateY(${winStart * ROW_H}px)` }}>
+                {winRows.map((l) => (
+                  <LogcatRow key={l.seq} line={l} />
+                ))}
+              </div>
+            </div>
           )}
         </div>
 
@@ -491,16 +666,20 @@ export default function LogcatPage() {
 }
 
 function LogcatRow({ line }: { line: LogcatLine }) {
+  /*
+   * 行高固定（ROW_H），超长内容靠 ellipsis 截断 + title 悬浮看全文。
+   * 虚拟滚动要求每行等高，所以这里不能像以前那样自动换行 —— 换行了位置就算不准。
+   */
   if (line.rawOnly || !line.level) {
     return (
-      <div className="log-line lv-info">
+      <div className="log-line logcat-line lv-info" title={line.raw}>
         <span className="log-msg">{line.raw}</span>
       </div>
     );
   }
 
   return (
-    <div className={`log-line lv-${levelTone(line.level)}`}>
+    <div className={`log-line logcat-line lv-${levelTone(line.level)}`} title={line.raw}>
       <span className="log-time">{line.time}</span>
       <span className="logcat-pid">{line.pid}</span>
       <span className={`logcat-level lvl-${line.level}`}>{line.level}</span>

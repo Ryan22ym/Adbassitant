@@ -1,9 +1,9 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useApp } from '@/store/app';
 import { useUiConf } from '@/lib/ui-conf';
 import { featureOnOf } from '@shared/ui-conf';
-import { Badge } from './ui';
+import { Badge, Button } from './ui';
 import { Icon } from './icons';
 import brandIcon from '@/assets/app-icon.png';
 /*
@@ -157,12 +157,143 @@ export function Sidebar() {
         ))}
       </nav>
 
+      {/*
+        左下角「检测到新版本」小卡片（v1.1.15）。
+        挂在 nav 与 footer 之间：nav 是 flex:1，卡片天然被压到最下面，
+        紧贴上面那条「N 台设备在线」，正是用户在截图里圈出来的位置。
+        ❗ 收起态不显示 —— 56px 宽塞不下两行字和两个按钮；
+           收起时仍由「设置」上那枚 New 承担提示（见上面的 nav-new）。
+      */}
+      <UpdateTip />
+
       {/* 收起后只剩一个居中的在线状态圆点（文字由 title 补上） */}
       <div className="sidebar-foot" title={statusText}>
         <span className={`status-dot ${onlineCount > 0 ? 'online' : ''}`} />
         <span className="foot-text">{statusText}</span>
       </div>
     </aside>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 左下角更新提示卡片                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 把更新说明拆成条目（v1.1.15）。
+ *
+ * 为什么非要拆：更新源里的 notes 是发版脚本塞进去的一句话 —— 线上 v1.1.14 那条
+ * 是 **500 多字的整段**，中文不带空格、没有换行。原样铺进 187px 宽的卡片就是一坨
+ * 文字墙，滚 6 行也只能看到开头两三个短语。
+ *
+ * 规则：
+ *   · 源里本来就分好行（我们自己的 VERSION_NOTES 就是逐条写的）→ 尊重原结构；
+ *   · 只有一整段时才断句：中文/英文句末标点算一处，标点**跟在前一句末尾**；
+ *   · 不动内容，不做二次「·」前缀 —— 是否加符号交给渲染端判断。
+ */
+function splitNotes(raw: string): string[] {
+  const text = (raw || '').trim();
+  if (!text) return [];
+  const byLine = text
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (byLine.length > 1) return byLine;
+  // 一整段：按句末标点断句，最后一句可能没有标点，用 $ 兜住
+  const parts = text.match(/[^。；！？!?;]+[。；！？!?;]+|[^。；！？!?;]+$/g);
+  return (parts || [text]).map((s) => s.trim()).filter(Boolean);
+}
+
+/** 条目自带项目符号的就不要再补一个，否则会变成「· · xxx」 */
+const BULLET_RE = /^[·•\-*—]\s*/;
+
+/**
+ * 「检测到新版本」小弹窗（v1.1.15）。
+ *
+ * 两种操作，语义刻意不同：
+ *   · 取消 —— 浅色空白按钮，只是把这张卡片收起来（按版本记，换新版本还会再来）。
+ *     它**不会**关掉自动检查：用户说的是「这次别烦我」，不是「以后别查了」。
+ *   · 更新 —— 主题色实心按钮，跳到设置页并把更新卡片摊开、直接开始下载。
+ *     交接通过 store 的 updateIntent 完成，不是路由 state：
+ *     设置页可能已经在挂载状态（本来就停在设置页），路由 state 不会触发任何东西。
+ *
+ * 🔴 判据是 store 的 updateInfo 而不是 updateAvailable：卡片要显示版本号，
+ *    没有版本号说明这条结论不完整（比如手动检查刚失败），宁可不显示。
+ */
+function UpdateTip() {
+  const updateAvailable = useApp((s) => s.updateAvailable);
+  const updateInfo = useApp((s) => s.updateInfo);
+  const dismissed = useApp((s) => s.updateTipDismissed);
+  const dismiss = useApp((s) => s.dismissUpdateTip);
+  const setIntent = useApp((s) => s.setUpdateIntent);
+  const collapsed = useApp((s) => s.sidebarCollapsed);
+  const navigate = useNavigate();
+
+  if (collapsed || !updateAvailable || !updateInfo) return null;
+  // 这个版本已经被「取消」过了，别再冒出来（换版本会重新出现）
+  if (dismissed === updateInfo.version) return null;
+
+  /*
+   * 更新说明拆成条目后逐条排；长说明给固定高度 + 内部滚动 —— 不截断成省略号：
+   * 「更新了什么」正是用户决定点不点「更新」的唯一依据，看不到就等于没有。
+   * 全文同时挂在 title 上，鼠标停一下能看完整版本。
+   */
+  const notes = (updateInfo.notes || '').trim();
+  const items = splitNotes(notes);
+
+  return (
+    <div className="update-tip fade-in" data-update-tip={updateInfo.version}>
+      <div className="update-tip-head">
+        <span className="update-tip-title">检测到新版本</span>
+        <span className="update-tip-ver">v{updateInfo.version}</span>
+      </div>
+      {items.length ? (
+        <div className="update-tip-body">
+          <div className="update-tip-label">
+            更新内容
+            {updateInfo.critical && <span className="update-tip-badge">重要</span>}
+          </div>
+          <div
+            className="update-tip-notes"
+            data-update-tip-notes={items.length}
+            title={notes}
+          >
+            {items.map((text, i) => (
+              <div className="update-tip-item" key={i}>
+                {BULLET_RE.test(text) ? text : `· ${text}`}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="update-tip-desc">
+          {updateInfo.critical ? '这是一次重要更新，建议尽快升级' : '可在设置页一键下载并安装'}
+        </div>
+      )}
+      <div className="update-tip-actions">
+        {/* 浅色空白按钮 */}
+        <Button
+          size="sm"
+          variant="default"
+          data-update-tip-cancel="1"
+          onClick={() => dismiss(updateInfo.version)}
+        >
+          取消
+        </Button>
+        {/* 主题色实心按钮 */}
+        <Button
+          size="sm"
+          variant="primary"
+          data-update-tip-go="1"
+          onClick={() => {
+            setIntent('download');
+            navigate('/settings');
+          }}
+        >
+          更新
+        </Button>
+      </div>
+    </div>
   );
 }
 

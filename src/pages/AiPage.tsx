@@ -18,7 +18,10 @@ import { call, tryCall } from '@/lib/ipc';
 import { fileName, formatTime } from '@/lib/format';
 import { activeProviderOf, isAiUsable } from '@shared/ai-conf';
 import type { AiConfig, AiProvider } from '@shared/ai-conf';
+import { IPC } from '@shared/types';
 import type {
+  AiAdbStep,
+  AiAgentStepEvent,
   AiAttachment,
   AiChatMessage,
   AiChatResult,
@@ -30,11 +33,18 @@ import type {
 } from '@shared/types';
 
 /*
- * AI 助手（v1.1.14）
+ * AI 助手（v1.1.14 起）
  * ============================================================
  * 两块东西合在一个页面里：
  *   对话    —— 文字 + 图片 / 文件 / 链接三种附件，走配置里的模型
  *   崩溃报告 —— 「检测崩溃自动 AI 分析日志」开关产出的报告，带红点与一键定位
+ *
+ * 🔴 v1.1.15 新增「AI 自己执行 adb 指令」：
+ *    对话不再是一问一答 —— 主进程把「模型给的 adb 命令」跑掉、把输出回传给模型，
+ *    循环到模型不再要命令为止。这个页面只负责三件事：
+ *      ① 开关（允不允许它碰设备）；
+ *      ② 实时进度（push:aiAgentStep 推一条画一条，不然用户只能干等）；
+ *      ③ 停止（多轮跑起来可能几十秒，必须能叫停）。
  *
  * 三条约定：
  *
@@ -417,6 +427,73 @@ function rememberSession(id: string | undefined) {
   }
 }
 
+/* 「允许 AI 执行 adb 指令」开关（v1.1.15）。
+ *
+ * 默认开 —— 这是这个功能的全部意义，默认关等于没做。
+ * 放 localStorage：纯界面偏好，跟 settings.json 里的主题/目录不是一类东西。
+ */
+const ALLOW_ADB_KEY = 'adb.ai.allowAdb';
+
+function readAllowAdb(): boolean {
+  try {
+    return localStorage.getItem(ALLOW_ADB_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+/* ================================================================== */
+/* 自动执行过的 adb 指令                                               */
+/* ================================================================== */
+
+/**
+ * 一组命令的执行记录。
+ *
+ * 输出默认折叠（成功的一次 dumpsys 就有几千字，全摊开屏幕上什么别的都看不见），
+ * 但**失败的命令默认展开** —— 出问题时用户第一眼看的就是这里。
+ *
+ * 用 useState 而不是 <details open>：open 属性是受控的，用户手动展开后
+ * 只要组件重渲染一次（新消息进来就会），就会被 React 掰回初始状态。
+ */
+function StepList({ steps }: { steps: AiAdbStep[] }) {
+  return (
+    <div className="ai-steps">
+      {steps.map((s, i) => (
+        <StepRow key={s.id || `${i}`} step={s} index={i} />
+      ))}
+    </div>
+  );
+}
+
+function StepRow({ step: s, index }: { step: AiAdbStep; index: number }) {
+  const [open, setOpen] = useState(() => !s.ok && !s.blocked);
+  const tone = s.blocked ? 'blocked' : s.ok ? 'ok' : 'bad';
+  const label = s.blocked ? '已拦截' : s.ok ? '成功' : `退出码 ${s.code}`;
+  return (
+    <div className={`ai-step ${tone}`}>
+      <div className="ai-step-head">
+        <span className="ai-step-idx">{index + 1}</span>
+        <code className="ai-step-cmd" title={s.command}>
+          {s.command}
+        </code>
+        <span className="ai-step-badge">{label}</span>
+        {!s.blocked && <span className="ai-step-ms">{s.durationMs}ms</span>}
+      </div>
+      {s.reason && <div className="ai-step-reason">{s.reason}</div>}
+      {s.blocked ? (
+        <div className="ai-step-why">{s.blocked}</div>
+      ) : (
+        <div className="ai-step-out">
+          <button type="button" className="ai-step-toggle" onClick={() => setOpen((v) => !v)}>
+            {open ? '▾' : '▸'} 输出{s.truncated ? '（已截断）' : ''}
+          </button>
+          {open && <pre>{s.output}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
   const [sessions, setSessions] = useState<AiSessionMeta[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
@@ -426,7 +503,34 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
   const [sending, setSending] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkDraft, setLinkDraft] = useState('');
+  const [allowAdb, setAllowAdb] = useState(readAllowAdb);
+  const [liveSteps, setLiveSteps] = useState<AiAdbStep[]>([]);
+  const [stopping, setStopping] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+
+  /* 本次请求的标识：既用来认领推送，也用来发「停止」。
+   * 用 ref 而不是 state 是必须的 —— 推送回调在 effect 里只注册一次，
+   * 它读不到后续渲染产生的 state 快照。 */
+  const runIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ALLOW_ADB_KEY, allowAdb ? '1' : '0');
+    } catch {
+      /* 存不住就每次默认开，不影响功能 */
+    }
+  }, [allowAdb]);
+
+  /* 执行进度：主进程每跑完一条命令推一条过来。
+   * 只认自己这次 runId —— 理论上同一时刻只有一个请求在跑，
+   * 但用户手快点了两次「停止→发送」时，上一条的迟到推送不该串到新气泡里。 */
+  useEffect(() => {
+    const off = window.adbApi.on(IPC.PUSH_AI_AGENT_STEP, (ev: AiAgentStepEvent) => {
+      if (!runIdRef.current || ev.runId !== runIdRef.current) return;
+      setLiveSteps((s) => [...s, ev.step]);
+    });
+    return off;
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     const list = await tryCall<AiSessionMeta[]>(() => window.adbApi.aiSessions());
@@ -462,11 +566,11 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
     })();
   }, []);
 
-  /* 新消息 / 发送中 都要把视图钉到底部 */
+  /* 新消息 / 发送中 都要把视图钉到底部（实时执行时更要跟住，命令是一条条冒出来的） */
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, sending]);
+  }, [messages, sending, liveSteps]);
 
   const reset = () => {
     setSessionId(undefined);
@@ -550,21 +654,37 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
       time: Date.now(),
     };
     const history = [...messages, userMsg];
+    const runId = uid();
+    runIdRef.current = runId;
     setMessages(history);
+    setLiveSteps([]);
     setInput('');
     setAtts([]);
     setSending(true);
+    setStopping(false);
     try {
       const r = await call<AiChatResult>(
-        () => window.adbApi.aiChat({ sessionId, messages: history }),
+        () => window.adbApi.aiChat({ sessionId, messages: history, runId, allowAdb }),
         { silent: true },
       );
       setSessionId(r.sessionId);
       rememberSession(r.sessionId);
       setMessages([
         ...history,
-        { id: uid(), role: 'assistant', content: r.content, model: r.model, time: Date.now() },
+        {
+          id: uid(),
+          role: 'assistant',
+          content: r.content,
+          model: r.model,
+          time: Date.now(),
+          steps: r.steps && r.steps.length ? r.steps : undefined,
+        },
       ]);
+      if (r.stopped) {
+        useApp
+          .getState()
+          .toast('info', '已停止', `本次执行了 ${r.steps?.length ?? 0} 条 adb 指令，AI 没有给出结论`);
+      }
       void refreshSessions();
     } catch (e) {
       setMessages([
@@ -572,8 +692,21 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
         { id: uid(), role: 'assistant', content: (e as Error).message, time: Date.now(), error: true },
       ]);
     } finally {
+      /* 收尾必须一起做：runIdRef 不清空的话，上一次迟到的推送会串进下一次对话 */
       setSending(false);
+      setStopping(false);
+      setLiveSteps([]);
+      runIdRef.current = null;
     }
+  };
+
+  /* 停止：只是给主进程打个标记，那边在「下一条命令之前」才会真正收手 ——
+   * 所以点完不会立刻结束，按钮会转成「正在停止…」。 */
+  const doStop = async () => {
+    const id = runIdRef.current;
+    if (!id) return;
+    setStopping(true);
+    await tryCall(() => window.adbApi.aiCancel(id));
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -644,7 +777,7 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
               title="问点什么吧"
               desc={
                 usable
-                  ? `当前使用 ${activeProviderOf(cfg!).name}。可以贴一段日志、丢一张崩溃截图，也可以直接问命令怎么写。`
+                  ? `当前使用 ${activeProviderOf(cfg!).name}。可以贴一段日志、丢一张崩溃截图，也可以直接让它查手机（例如「看看当前前台是什么应用」）—— 它会自己执行 adb 指令。`
                   : '先在「模型接入」里配好 API Key'
               }
             />
@@ -653,9 +786,17 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
               {messages.map((m) => (
                 <ChatBubble key={m.id} msg={m} />
               ))}
+              {sending && liveSteps.length > 0 && (
+                <div className="ai-bubble assistant live">
+                  <StepList steps={liveSteps} />
+                </div>
+              )}
               {sending && (
                 <div className="ai-bubble assistant pending">
-                  <span className="spinner" /> 正在思考…
+                  <span className="spinner" />
+                  {liveSteps.length > 0
+                    ? `已执行 ${liveSteps.length} 条 adb 指令，AI 正在判断下一步…`
+                    : '正在思考…'}
                 </div>
               )}
             </>
@@ -727,17 +868,37 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
             <Button size="sm" variant="ghost" icon={Icon.link} onClick={() => setLinkOpen((v) => !v)}>
               链接
             </Button>
-            <span className="ai-spacer" />
-            <Button
-              size="sm"
-              variant="primary"
-              icon={Icon.send}
-              loading={sending}
-              onClick={() => void doSend()}
-              disabled={!usable && atts.length === 0 && !input.trim()}
+            {/* 允不允许 AI 自己动手。默认开 —— 这个功能的意义就在于它能把命令跑掉 */}
+            <button
+              type="button"
+              className={`ai-adb-toggle ${allowAdb ? 'on' : ''}`}
+              data-allow-adb={allowAdb ? '1' : '0'}
+              title={
+                allowAdb
+                  ? 'AI 可以自己执行 adb 指令来查设备；破坏性操作会被拦截'
+                  : '已关闭：AI 只回答问题，不动设备'
+              }
+              onClick={() => setAllowAdb((v) => !v)}
             >
-              发送
-            </Button>
+              {Icon.terminal}
+              <span>执行 adb 指令</span>
+            </button>
+            <span className="ai-spacer" />
+            {sending ? (
+              <Button size="sm" variant="ghost" icon={Icon.close} loading={stopping} onClick={() => void doStop()}>
+                {stopping ? '正在停止…' : '停止'}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="primary"
+                icon={Icon.send}
+                onClick={() => void doSend()}
+                disabled={!input.trim() && atts.length === 0}
+              >
+                发送
+              </Button>
+            )}
           </div>
         </div>
       </section>
@@ -768,7 +929,11 @@ function ChatBubble({ msg }: { msg: AiChatMessage }) {
       {isUser ? (
         msg.content && <div className="ai-bubble-text">{msg.content}</div>
       ) : (
-        <MdView text={msg.content} />
+        <>
+          {/* 命令记录在正文上方：它是「模型为了回答去查了什么」，读的时候先看过程再看结论 */}
+          {msg.steps && msg.steps.length > 0 && <StepList steps={msg.steps} />}
+          <MdView text={msg.content} />
+        </>
       )}
       <div className="ai-bubble-foot">
         <span>{formatTime(msg.time)}</span>

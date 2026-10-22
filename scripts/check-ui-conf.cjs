@@ -7,7 +7,7 @@
  * 三阶段在同一次进程里跑（主进程有个「启动读一次」的缓存，
  * 靠 services/ui-conf.ts 导出的 resetUiConfCache() 手动清掉才能连验三种状态）：
  *
- *   0. 出厂形态 —— 仓库根 Conf/ 就是出厂内容，导航 9 项、工具页 7 个标签，
+ *   0. 出厂形态 —— 仓库根 Conf/ 就是出厂内容，导航 10 项、工具页 7 个标签，
  *      顺序必须与 v1.1.11 写死的顺序逐字一致（Conf 被删掉时界面不能变样）。
  *   1. 自定义生效 —— 把三份文件改成「投屏提前、关掉三个入口、反转两块折叠」，
  *      断言顺序 / 显隐 / 折叠**三条链路**都真的接到了渲染层。
@@ -193,6 +193,12 @@ const FACTORY_NAV = [
   '弱网模拟',
   '自动连点器',
   '命令终端',
+  /*
+   * AI 助手（v1.1.14）：排在「设置」之前。
+   * 当初这份清单是 9 项，v1.1.14 加了 AI 入口后没跟着改 —— 于是 4 条导航断言
+   * 全部假 FAIL（实际顺序是对的，只是期望值少了一项）。别再漏了。
+   */
+  'AI 助手',
   '设置',
 ];
 /**
@@ -456,7 +462,7 @@ async function runInstalled() {
   let s = await launchInstalled();
   try {
     const nav = await waitForPage(s.page, READ_NAV);
-    eq(nav, '安装版 出厂导航顺序 = 9 项', FACTORY_NAV);
+    eq(nav, '安装版 出厂导航顺序 = 10 项', FACTORY_NAV);
 
     await gotoPage(s.page, '/tools');
     const tabs = await waitForPage(s.page, READ_TABS);
@@ -490,7 +496,17 @@ async function runInstalled() {
     eq(
       nav,
       '🔴 安装版 改 exe 同级 Conf/layout.json + features.json 后重启 → 顺序与显隐都变了',
-      ['投屏', '自动连点器', '设备', '常用工具', '应用管理', '实时 Logcat', '命令终端', '设置'],
+      [
+        '投屏',
+        '自动连点器',
+        '设备',
+        '常用工具',
+        '应用管理',
+        '实时 Logcat',
+        '命令终端',
+        'AI 助手',
+        '设置',
+      ],
     );
 
     await gotoPage(s.page, '/tools');
@@ -614,7 +630,7 @@ async function run() {
   await reload(win, '/tools');
 
   const nav0 = await waitFor(win, READ_NAV);
-  eq(nav0, '阶段0 出厂导航顺序 = 9 项且与旧版写死顺序一致', FACTORY_NAV);
+  eq(nav0, '阶段0 出厂导航顺序 = 10 项且与旧版写死顺序一致', FACTORY_NAV);
 
   const tabs0 = await waitFor(win, READ_TABS);
   eq(tabs0, '阶段0 出厂「常用工具」标签顺序 = 7 项', FACTORY_TABS);
@@ -679,7 +695,7 @@ async function run() {
   eq(
     nav1List,
     '阶段1 导航顺序 = 自定义的排前 + 其余按出厂补后（未知 id 已丢弃）',
-    ['投屏', '自动连点器', '设备', '常用工具', '应用管理', '实时 Logcat', '设置'],
+    ['投屏', '自动连点器', '设备', '常用工具', '应用管理', '实时 Logcat', 'AI 助手', '设置'],
   );
   ok(
     nav1List[0] === '投屏',

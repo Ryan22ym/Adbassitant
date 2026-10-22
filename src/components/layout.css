@@ -443,6 +443,124 @@
   flex: none;
 }
 
+/*
+ * 左下角「检测到新版本」小卡片（v1.1.15）。
+ *
+ * 视觉定位：它是**浮在侧栏上的一张卡**，不是侧栏的一段 —— 所以有边框、有阴影、
+ * 底色比侧栏亮一档（--bg-surface），左右各留 10px 内缩，和下面那条分割线不打架。
+ * 三套主题都不用额外写：--bg-surface / --border / --shadow 各自已经按主题调过。
+ */
+.update-tip {
+  flex: none;
+  margin: 0 10px 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.update-tip-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.update-tip-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 版本号用主题色：一眼能看出「这是更新这件事」，且不额外增加一个色相 */
+.update-tip-ver {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-tip-desc {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+/* 有更新说明时的正文区（v1.1.15） */
+.update-tip-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* 「重要」小徽标：只在更新源标了 critical 时出现，别和版本号抢主题色 */
+.update-tip-badge {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+/*
+ * 说明正文：固定可视高度 + 内部滚动。
+ * 高度取 **行高的整数倍**（6 × 17 = 102）：随便写个 92 会让最后一行被劈成
+ * 上下两半，看着像渲染坏了。
+ */
+.update-tip-notes {
+  margin-top: 3px;
+  max-height: 102px;
+  overflow-y: auto;
+  font-size: 11.5px;
+  line-height: 17px;
+  color: var(--text-secondary);
+  /* 留一点右边距，滚动条不压字 */
+  padding-right: 2px;
+}
+
+/*
+ * 单条更新说明。
+ * padding-left + 负 text-indent = 悬挂缩进：折行时对齐到文字，而不是缩到「·」下面
+ * （187px 宽一行只放得下 15 个汉字，一条说明基本都会折行）。
+ */
+.update-tip-item {
+  padding-left: 9px;
+  text-indent: -9px;
+  overflow-wrap: anywhere;
+}
+
+/* 卡片内的滚动条要比全局细：10px 在 ~200px 宽的卡片里太占地方 */
+.update-tip-notes::-webkit-scrollbar {
+  width: 6px;
+}
+.update-tip-notes::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+}
+
+.update-tip-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+/* 两颗按钮平分宽度：取消在左、更新在右（更新是主操作，放拇指更容易够到的右下） */
+.update-tip-actions .btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .status-dot.online {
   background: var(--success);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);

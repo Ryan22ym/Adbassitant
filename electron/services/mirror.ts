@@ -12,6 +12,7 @@ import {
 } from './adb';
 import type { MirrorOptions, MirrorStatus } from '../../shared/types';
 import { rememberMirroredSerial } from './auto-connect';
+import { revealWindow } from './win-reveal';
 
 /**
  * 「这次投屏算成功了」的判定延时。
@@ -21,6 +22,16 @@ import { rememberMirroredSerial } from './auto-connect';
  * 熬过这个稳定期的才记进「可自动投屏」白名单（见 services/auto-connect.ts）。
  */
 const MIRROR_OK_DELAY_MS = 3000;
+
+/**
+ * 首帧迟迟不来时，也必须在这么长时间内把投屏窗口放出来。
+ *
+ * 🔴 窗口被 windowsHide 藏起来后，**只有我们能让它出现**（见 win-reveal.ts）。
+ *    所以这个兜底不能省：日志措辞变了 / 设备卡住 / 首帧根本不来的情况下，
+ *    少了它会变成「投屏在跑但窗口永远看不见」，比原来的黑屏更糟。
+ *    正常路径下首帧约 1.5~2.5s 到达，兜底基本不会触发。
+ */
+const MIRROR_REVEAL_TIMEOUT_MS = 4000;
 
 let current: {
   child: ChildProcess;
@@ -107,7 +118,10 @@ export async function startMirror(options: MirrorOptions): Promise<MirrorStatus>
   const iconPath = scrcpyIconPath();
   const extraEnv = iconPath ? { SCRCPY_ICON_PATH: iconPath } : undefined;
 
-  const child = spawnBinary(exe, args, '投屏', extraEnv);
+  const child = spawnBinary(exe, args, '投屏', extraEnv, {
+    // 窗口先藏起来，等首帧到了再由 win-reveal 放出来（见文件头注释）
+    hideOwnWindow: process.platform === 'win32',
+  });
 
   // 先登记当前实例，再挂事件回调：
   // 否则进程若快速退出，close 回调会在 current 赋值前触发，
@@ -121,6 +135,68 @@ export async function startMirror(options: MirrorOptions): Promise<MirrorStatus>
   current = handle;
 
   /*
+   * ── 投屏窗口「藏到首帧」的放行逻辑（v1.1.15，2026-10-22）───────────────
+   *
+   * 小杨反馈：投屏成功时窗口会先黑一会儿。原因是 scrcpy 在拿到第一帧视频之前
+   * 就把窗口建好了（实测建窗 ~1.4s、首帧 ~1.9s），那段时间屏幕上是个黑窗口。
+   *
+   * 现在反过来：spawn 时 windowsHide 让系统吞掉 scrcpy 的首次 ShowWindow，
+   * 窗口在屏幕上完全不出现；等它的日志打出 `INFO: Texture: WxH`（首帧解码完成）
+   * 再由 win-reveal 主动 ShowWindow —— 放出来时画面已经在窗口里了。
+   *
+   * 🔴 这个过程只能由我们完成，所以三重保险一个都不能少：
+   *    ① 首帧日志触发；② 4s 超时兜底；③ reveal 自身失败重试 3 次。
+   */
+  let revealed = false;
+  let revealTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const tryReveal = (why: string) => {
+    if (revealed) return;
+    revealed = true;
+    if (revealTimer) {
+      clearTimeout(revealTimer);
+      revealTimer = null;
+    }
+    // 进程已经退出（启动就失败 / 设备被拔）→ 没有窗口可放，别去 PowerShell 空转
+    if (current !== handle) return;
+    const pid = child.pid;
+    if (!pid) return;
+    const attempt = (n: number) => {
+      void revealWindow(pid, n === 1 ? 1200 : 800).then((res) => {
+        // 投屏已经停了（用户点了停止 / 设备拔掉）→ 不再纠缠
+        if (current !== handle) return;
+        if (res.ok) {
+          log('info', '投屏', `投屏窗口已显示（${why}）`);
+          return;
+        }
+        if (n < 3) {
+          setTimeout(() => attempt(n + 1), 300);
+          return;
+        }
+        log('warn', '投屏', `投屏窗口未能显示（${why}）：${res.reason ?? '未知原因'}`);
+      });
+    };
+    attempt(1);
+  };
+
+  /*
+   * 首帧信号：scrcpy 解码出第一帧后打印 `INFO: Texture: <宽>x<高>`。
+   * ⚠️ stdout 的 data 事件不保证按行到达，"Texture:" 可能被切成两段 ——
+   *    所以累积末尾一小段再判断，不能只看单次 chunk。
+   * ⚠️ 两路都听：scrcpy 正常走 stdout（SDL_Log），但换版本/换平台后谁写哪一路
+   *    不该成为「窗口永远不出现」的理由。
+   */
+  let probe = '';
+  const onChunk = (d: Buffer | string) => {
+    if (revealed) return;
+    probe = (probe + d.toString()).slice(-256);
+    if (probe.includes('Texture:')) tryReveal('首帧就绪');
+  };
+  child.stdout?.on('data', onChunk);
+  child.stderr?.on('data', onChunk);
+  revealTimer = setTimeout(() => tryReveal('等待首帧超时'), MIRROR_REVEAL_TIMEOUT_MS);
+
+  /*
    * 熬过稳定期就认为「这台设备在本机投屏成功过」，记进自动投屏白名单。
    * 这是 v1.1.9 那个开关唯一会更新白名单的地方 —— 用户手动投成功过，才允许自动投。
    */
@@ -132,6 +208,11 @@ export async function startMirror(options: MirrorOptions): Promise<MirrorStatus>
   // 仅当句柄仍是本次启动的实例时才清理，避免误杀后续启动的投屏
   const clearIfCurrent = () => {
     clearTimeout(confirmTimer);
+    // 进程都没了，别再排「放出窗口」的超时（窗口也随之消失）
+    if (revealTimer) {
+      clearTimeout(revealTimer);
+      revealTimer = null;
+    }
     if (current === handle) {
       current = null;
       emitStatus();

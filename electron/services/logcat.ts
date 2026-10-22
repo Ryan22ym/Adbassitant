@@ -1,7 +1,7 @@
 import { writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 import { spawnBinary, adbPath, ensureDevice, log } from './adb';
-import type { LogcatFilter, LogcatLevel, LogcatLine, LogcatStatus } from '../../shared/types';
+import type { LogcatFilter, LogcatHistory, LogcatLevel, LogcatLine, LogcatStatus } from '../../shared/types';
 
 /**
  * 实时 Logcat 服务
@@ -36,6 +36,14 @@ interface Session {
   filter: LogcatFilter;
   /** 原始行环形缓冲（用于导出） */
   buffer: string[];
+  /**
+   * 已解析行的环形缓冲（v1.1.15，用于「切页回来还能接上」）。
+   *
+   * 与上面的 buffer 分开：buffer 是给导出用的原文，recent 是给界面回放用的
+   * 结构化行。渲染层的 Logcat 页是路由组件，切走就卸载，lines 跟着没了；
+   * 有了这份缓冲，重新挂载时 `logcat:history` 就能把最近的内容铺回去。
+   */
+  recent: LogcatLine[];
   /** 待推送批次 */
   pending: LogcatLine[];
   flushTimer: NodeJS.Timeout | null;
@@ -45,9 +53,20 @@ interface Session {
 }
 
 const MAX_BUFFER = 20000;
+/** 回放缓冲上限（行）。与渲染层 MAX_LINES 对齐，多了也画不出来 */
+const MAX_RECENT = 4000;
 const FLUSH_INTERVAL = 120;
 
 let session: Session | null = null;
+
+/**
+ * 停掉抓取后留下的最近行（v1.1.15）。
+ *
+ * 用户「停止抓取 → 切到别的页面 → 切回来」时，页面上那份内容不该凭空消失 ——
+ * 停止只是不再拉新日志，已经看到的东西还在。所以 stopLogcat 会把 session 的
+ * recent 移交到这里，下一次 logcat:history 从这儿取。
+ */
+let orphanRecent: LogcatLine[] = [];
 
 type LinesSink = (lines: LogcatLine[]) => void;
 type StatusSink = (status: LogcatStatus) => void;
@@ -126,12 +145,15 @@ export async function startLogcat(
     startedAt: Date.now(),
     filter: merged,
     buffer: [],
+    recent: [],
     pending: [],
     flushTimer: null,
     seq: 0,
     stderrTail: [],
   };
   session = sess;
+  // 新会话从空白开始：上一次停止后留下的那份不算这次的内容
+  orphanRecent = [];
 
   const handleChunk = (data: Buffer) => {
     const text = data.toString('utf8');
@@ -160,6 +182,8 @@ export async function startLogcat(
     if (session === sess) {
       session = null;
       flush(sess);
+      // 设备掉线 / 主动 kill 都会走到这里：同上，把最近行留给界面回放
+      orphanRecent = sess.recent;
       log('info', 'Logcat', `已停止（exit ${code}）`);
       emitStatus();
     }
@@ -180,6 +204,9 @@ export async function stopLogcat(): Promise<boolean> {
     sess.flushTimer = null;
   }
   flush(sess);
+
+  // 把最近行留给界面：停止 ≠ 清空，用户切页回来还要看得见刚才那些
+  orphanRecent = sess.recent;
 
   try {
     sess.child.kill();
@@ -222,6 +249,16 @@ function onRawLine(sess: Session, raw: string) {
   sess.buffer.push(raw);
   if (sess.buffer.length > MAX_BUFFER) {
     sess.buffer.splice(0, sess.buffer.length - MAX_BUFFER);
+  }
+
+  /*
+   * 回放缓冲（v1.1.15）：只留最近 MAX_RECENT 行。
+   * 用「超一块再裁」而不是每行都 splice：一行一裁在刷屏时是 O(n) 的移动开销，
+   * 两者在稳定性上没有差别，但后者会让高日志量场景雪上加霜。
+   */
+  sess.recent.push(line);
+  if (sess.recent.length > MAX_RECENT + 512) {
+    sess.recent.splice(0, sess.recent.length - MAX_RECENT);
   }
 
   sess.pending.push(line);
@@ -343,12 +380,30 @@ function escapeRe(s: string): string {
 /* ------------------------------------------------------------------ */
 
 export function clearLogcatBuffer(): boolean {
+  orphanRecent = [];
   if (session) {
     session.buffer.length = 0;
+    session.recent.length = 0;
     session.seq = 0;
     session.pending = [];
   }
   return true;
+}
+
+/**
+ * 取回最近抓到的行（v1.1.15）。
+ *
+ * 用途只有一个：Logcat 页重新挂载时（切走再切回来 / 从别的模块回来）把内容铺回去。
+ * 所以它必须**不改变任何状态** —— 不重启会话、不清缓冲、不推状态。
+ *
+ * limit 默认 800：页面一次能画的就是视口那几十行，多给的只是白占内存和序列化时间；
+ * 但给 800 是为了让「暂停滚动、往上翻两屏」这种感觉还在。
+ */
+export function getLogcatHistory(limit = 800): LogcatHistory {
+  const src = session ? session.recent : orphanRecent;
+  const n = Math.max(0, Math.min(MAX_RECENT, Math.floor(limit)));
+  const lines = src.length > n ? src.slice(src.length - n) : src.slice();
+  return { status: getLogcatStatus(), lines, buffered: src.length };
 }
 
 export function saveLogcat(filePath: string, meta?: Record<string, string>): {

@@ -203,6 +203,16 @@ export function spawnBinary(
   args: string[],
   source: string,
   extraEnv?: NodeJS.ProcessEnv,
+  opts?: {
+    /**
+     * 让子进程的窗口**一开始就不可见**（STARTUPINFO + SW_HIDE）。
+     *
+     * ⚠️ 单用这个选项会让 GUI 程序的窗口**永远不出现** —— 见下方长注释，
+     *    只有配合 services/win-reveal.ts 主动 ShowWindow 才是完整方案。
+     *    目前仅投屏窗口这么用（首帧到了再放出来，见 mirror.ts）。
+     */
+    hideOwnWindow?: boolean;
+  },
 ): ChildProcess {
   log('command', source, `"${basename(file)}" ${args.map(quoteArg).join(' ')}`);
 
@@ -214,17 +224,27 @@ export function spawnBinary(
   };
 
   const child = spawn(file, args, {
-    // ⚠️ 绝对不要加 windowsHide: true。
-    //
-    // windowsHide 会在子进程 STARTUPINFO 里设置 STARTF_USESHOWWINDOW + SW_HIDE，
-    // 这个"默认隐藏窗口"的首选项会被 scrcpy(SDL2) 继承：SDL_CreateWindow 之后
-    // 调用 ShowWindow 时受该首选项影响而无效，结果是——
-    //   scrcpy 进程存活、日志显示 "Renderer: direct3d" / "Texture: WxH" 渲染正常、
-    //   窗口对象也被创建（有 HWND、尺寸位置都对），
-    //   但 IsWindowVisible() 恒为 false，屏幕上和任务栏里都看不到窗口。
-    // 该参数只适用于"不希望弹出控制台"的 CLI 程序（见 runBinary 里的用法），
-    // GUI 程序必须让它自己决定窗口可见性。
-    // 实测对照：windowsHide:false → 3s 内可见；windowsHide:true → 15s+ 仍不可见。
+    /*
+     * ⚠️ 默认绝对不要加 windowsHide: true —— 唯一例外是 opts.hideOwnWindow。
+     *
+     * windowsHide 会在子进程 STARTUPINFO 里设置 STARTF_USESHOWWINDOW + SW_HIDE，
+     * 这个"默认隐藏窗口"的首选项会被 scrcpy(SDL2) 继承：SDL_CreateWindow 之后
+     * 调用 ShowWindow 时受该首选项影响而无效，结果是——
+     *   scrcpy 进程存活、日志显示 "Renderer: direct3d" / "Texture: WxH" 渲染正常、
+     *   窗口对象也被创建（有 HWND、尺寸位置都对），
+     *   但 IsWindowVisible() 恒为 false，屏幕上和任务栏里都看不到窗口。
+     * 该参数只适用于"不希望弹出控制台"的 CLI 程序（见 runBinary 里的用法），
+     * GUI 程序必须让它自己决定窗口可见性。
+     * 实测对照：windowsHide:false → 3s 内可见；windowsHide:true → 15s+ 仍不可见。
+     *
+     * 🔴 2026-10-22 例外（投屏窗口「藏到首帧」）：
+     *    上面那条「永不出现」正好可以被我们利用 —— 先让系统吞掉 scrcpy 的首次
+     *    ShowWindow（屏幕上不出黑窗），等日志出现 `Texture:` 首帧后，再由
+     *    services/win-reveal.ts 用 Win32 ShowWindow(SW_SHOW) 把窗口带出来。
+     *    代价是**必须保证 reveal 一定被调用**，否则用户看不到投屏窗口 ——
+     *    mirror.ts 为此加了 4s 超时兜底。
+     */
+    windowsHide: opts?.hideOwnWindow === true,
     cwd: dirname(file),
     env,
   });

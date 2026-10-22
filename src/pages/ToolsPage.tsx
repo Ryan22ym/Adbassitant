@@ -931,7 +931,8 @@ function ApkPanel() {
 
   /**
    * 拖入的安装包直接开装（与「拖动安装」语义一致），
-   * 页面上的「安装方式 / 自动授权」开关同样作用于拖放。
+   * 页面上的「安装方式 / 自动授权」开关只当默认值用 —— 真正开装前还会让用户
+   * 确认一次安装方式（单设备也一样），所以这里必须传 fromDrop。
    */
   const handleDroppedFiles = async (files: File[]) => {
     if (busy) {
@@ -958,7 +959,7 @@ function ApkPanel() {
     setApkPath(apks[0].path);
     setApkSize(apks[0].size);
     setLastResult('');
-    await installApkFiles(apks, { mode, grantAll });
+    await installApkFiles(apks, { mode, grantAll, fromDrop: true });
   };
 
   const open = usePanelOpen('tools', 'apk');
@@ -1001,11 +1002,15 @@ function ApkPanel() {
                     ? '正在安装 APKS…'
                     : '正在安装…'
                 : pendingInstall
-                  ? '请先选择安装到哪台设备'
+                  ? pendingInstall.single
+                    ? '请先在上面确认安装方式'
+                    : '请先选择安装到哪台设备'
                   : '把 APK / AAB / APKS 拖到这里，或点击选择文件'}
             </p>
             <p className="apk-drop-hint">
-              {busy ? '完成当前任务后才能开始下一个' : '松手即开始安装，并弹出进度'}
+              {busy
+                ? '完成当前任务后才能开始下一个'
+                : '松手后先确认安装方式，再开始安装'}
             </p>
 
             {apkPath && (
@@ -1152,7 +1157,13 @@ function ApkPanel() {
           {installing && <span className="text-dim">正在安装中，请勿重复操作…</span>}
           {converting && <span className="text-dim">正在拆包，请勿重复操作…</span>}
           {exporting && <span className="text-dim">正在生成通用 APK，请勿重复操作…</span>}
-          {pendingInstall && <span className="text-dim">请先在上方弹窗里选择装到哪台设备…</span>}
+          {pendingInstall && (
+            <span className="text-dim">
+              {pendingInstall.single
+                ? '请先在上方弹窗里确认安装方式…'
+                : '请先在上方弹窗里选择装到哪台设备…'}
+            </span>
+          )}
         </div>
 
         {/*

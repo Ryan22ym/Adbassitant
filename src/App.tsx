@@ -5,8 +5,9 @@ import DragInstallHost from './components/DragInstallHost';
 import { useApp } from './store/app';
 import { toHexColor, dimOver } from './lib/color';
 import { applyCustomAccent, clearCustomAccent, customAccentApplies } from './lib/accent-custom';
+import { useUpdateWatcher } from './lib/update-watch';
 import { IPC } from '@shared/types';
-import type { UpdateResult, UpdateCheckResult, AabSigningInfo, CrashReportMeta, CrashWatchStatus } from '@shared/types';
+import type { UpdateResult, AabSigningInfo, CrashReportMeta, CrashWatchStatus } from '@shared/types';
 import type { UiConf } from '@shared/ui-conf';
 
 import DevicePage from './pages/DevicePage';
@@ -99,6 +100,13 @@ export default function App() {
   const settingsReady = useApp((s) => s.settings !== null);
   // 当前页面上有没有全屏遮罩（弹窗变暗时右上角系统按钮区要跟着一起压暗）
   const [scrimActive, setScrimActive] = useState(false);
+
+  /*
+   * 在线更新的常规检测：启动时一次 + 按设置的间隔轮询（v1.1.15）。
+   * 放在这里而不是塞进下面那段初始化 effect：它依赖当前路由（在设置页要让位给
+   * UpdatePanel 自己的检查），而那段 effect 的依赖是空的。
+   */
+  useUpdateWatcher();
 
   /* 初始化：读取设置、订阅推送（仅执行一次） */
   useEffect(() => {
@@ -198,38 +206,13 @@ export default function App() {
       }
 
       /*
-       * 在线更新静默自检（v1.0.22）。
+       * 在线更新的常规检测（v1.1.15）。
        *
-       * 三条约定：
-       *  1. 延迟 8 秒再发 —— 别和启动时的设备扫描 / 环境自检抢带宽与 CPU；
-       *  2. 必须真的配了更新源才发（服务器没就绪时 updateBaseUrl 为空，发了也是白跑）；
-       *  3. 任何失败都**不打扰用户** —— 只在有新版时提示一次，其余情况静默（理由写进运行日志）。
-       *     手动的「检查更新」在「关于」页，那条路才需要把失败原因摆出来。
+       * 以前这里是「启动 8 秒后查一次，之后再没有人查」，现在整条逻辑搬进
+       * lib/update-watch.ts 的 useUpdateWatcher（启动一次 + 按配置的间隔轮询，
+       * 设置页不轮询）。挪出去还有个原因：它要读当前路由，
+       * 写在 App 的初始化 effect 里会跟着 location 变化重跑整段初始化。
        */
-      const maybeAutoCheck = useApp.getState().settings;
-      if (alive && maybeAutoCheck?.autoCheckUpdate && String(maybeAutoCheck.updateBaseUrl || '').trim()) {
-        setTimeout(() => {
-          if (!alive) return;
-          void window.adbApi
-            .checkUpdate(false)
-            .then((r) => {
-              const res2 = r?.data as UpdateCheckResult | undefined;
-              if (alive && res2?.ok && res2.hasUpdate) {
-                useApp.getState().setUpdateAvailable(true);
-                useApp
-                  .getState()
-                  .toast(
-                    'info',
-                    `发现新版本 v${res2.latest?.version ?? ''}`,
-                    '可在「设置 → 软件更新」里一键更新',
-                  );
-              }
-            })
-            .catch(() => {
-              /* 静默自检失败不打扰 */
-            });
-        }, 8000);
-      }
     })();
 
     /* 订阅主进程推送 */

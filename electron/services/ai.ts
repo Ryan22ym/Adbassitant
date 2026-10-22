@@ -5,6 +5,15 @@ import { randomUUID } from 'crypto';
 import { log } from './adb';
 import { resolveUiConfDir } from './ui-conf';
 import {
+  ADB_GUIDE,
+  MAX_TOOL_ROUNDS,
+  deviceSummary,
+  execAdb,
+  parseAdbCommands,
+  pickSerial,
+  resultsPrompt,
+} from './ai-adb';
+import {
   activeProviderOf,
   cloneDefaultAiConfig,
   normalizeAiConfig,
@@ -12,6 +21,7 @@ import {
   type AiProvider,
 } from '../../shared/ai-conf';
 import type {
+  AiAdbStep,
   AiAttachment,
   AiChatMessage,
   AiChatRequest,
@@ -579,7 +589,54 @@ async function callProvider(
 /* 对外：对话 / 自检                                                    */
 /* ------------------------------------------------------------------ */
 
-export async function aiChat(req: AiChatRequest): Promise<AiChatResult> {
+/**
+ * 对话过程中的回调（IPC 层用它把每条命令的执行情况实时推给界面）。
+ */
+export interface AiChatHooks {
+  onStep?: (step: AiAdbStep, index: number) => void;
+}
+
+/**
+ * 正在跑的对话（runId 集合）。
+ *
+ * 为什么要「取消」：
+ *   v1.1.15 起一次提问可能连续跑六七轮、几十秒甚至几分钟，用户中途想放弃是很正常的。
+ *   `ipcRenderer.invoke` 是单向等待，渲染层没法打断 —— 只能由主进程在每轮 / 每条命令
+ *   之前自己检查这个集合。取消粒度就是「一条命令」，够用了。
+ */
+const cancelledRuns = new Set<string>();
+
+export function cancelAiChat(runId?: string): boolean {
+  const id = String(runId || '');
+  if (!id) return false;
+  cancelledRuns.add(id);
+  log('warn', 'AI', `收到停止请求（${id}）`);
+  return true;
+}
+
+/** 落盘时单条输出的上限：会话文件要能一直读得动，明细留给界面那一份 */
+const PERSIST_OUTPUT_CHARS = 1200;
+
+function slimSteps(steps: AiAdbStep[]): AiAdbStep[] {
+  return steps.map((s) =>
+    s.output.length > PERSIST_OUTPUT_CHARS
+      ? { ...s, output: `${s.output.slice(0, PERSIST_OUTPUT_CHARS)}\n…（会话记录已截断）` }
+      : s,
+  );
+}
+
+type Usage = { prompt: number; completion: number; total: number };
+
+/**
+ * 一场对话。
+ *
+ * 🔴 v1.1.15 起的核心变化：**这里是一个循环，不是一次请求**。
+ *   模型给出 ```adb 命令块 → 执行 → 把输出当 user 消息发回去 → 再问 →
+ *   直到它不再给命令块（= 它认为目标完成了）或者用满 MAX_TOOL_ROUNDS 轮。
+ *   「完成目标后停止」在实现上就是「模型这一轮没有输出 adb 代码块」——
+ *   所以 ADB_GUIDE 里那句「信息够了就别再输出代码块」是整个循环的刹车片。
+ */
+export async function aiChat(req: AiChatRequest, hooks?: AiChatHooks): Promise<AiChatResult> {
   const provider = requireProvider(req.providerId);
   const history = (req.messages || []).filter((m) => m && m.role && typeof m.content === 'string');
   if (history.length === 0) throw new Error('没有可发送的消息');
@@ -588,25 +645,136 @@ export async function aiChat(req: AiChatRequest): Promise<AiChatResult> {
   const started = Date.now();
   const { built } = await buildMessages(history);
 
-  const reply = await callProvider(provider, built, cfg.systemPrompt);
-  const content = (reply.content || '').trim() || '（模型返回了空内容）';
+  const runId = String(req.runId || '');
+  const allowAdb = req.allowAdb !== false;
+  const isCancelled = () => !!runId && cancelledRuns.has(runId);
+
+  const steps: AiAdbStep[] = [];
+  let usage: Usage | undefined;
+
+  // 允许执行命令时，先把「这台机器是谁」和协议说明塞进系统提示词 ——
+  // 用户自己写的 systemPrompt 仍然在最前面生效，后面只追加协议。
+  let system = cfg.systemPrompt;
+  let serial: string | undefined;
+  if (allowAdb) {
+    serial = await pickSerial();
+    system = `${cfg.systemPrompt}\n\n${await deviceSummary()}\n${ADB_GUIDE}`;
+  }
+
+  let turns: BuiltMessage[] = built;
+  let content = '';
+  let model = provider.model;
+  let rounds = 0;
+  let stopped = false;
+
+  const accumulate = (u?: RawReply['usage']) => {
+    if (!u) return;
+    usage = usage
+      ? {
+          prompt: usage.prompt + u.prompt,
+          completion: usage.completion + u.completion,
+          total: usage.total + u.total,
+        }
+      : { ...u };
+  };
+
+  try {
+    for (;;) {
+      if (isCancelled()) {
+        stopped = true;
+        content = '（已停止：AI 还没给出结论）';
+        break;
+      }
+
+      const reply = await callProvider(provider, turns, system);
+      model = reply.model || model;
+      accumulate(reply.usage);
+      rounds += 1;
+      const raw = (reply.content || '').trim();
+
+      if (!allowAdb) {
+        content = raw || '（模型返回了空内容）';
+        break;
+      }
+
+      const { commands, body } = parseAdbCommands(raw);
+      // ★ 刹车：这一轮没有命令块 = 模型认为目标已经完成
+      if (commands.length === 0) {
+        content = raw || '（模型返回了空内容）';
+        break;
+      }
+
+      const from = steps.length;
+      for (let i = 0; i < commands.length; i++) {
+        if (isCancelled()) break;
+        const step = await execAdb(commands[i], serial);
+        // 同轮几条命令共享模型那句说明，只挂在第一条上，回看时知道它当时想干嘛
+        if (i === 0 && body) step.reason = body.slice(0, 300);
+        steps.push(step);
+        hooks?.onStep?.(step, steps.length);
+      }
+
+      if (isCancelled()) {
+        stopped = true;
+        break; // 已经跑完的结果留在 steps 里，界面照样能看到
+      }
+
+      const finalRound = rounds >= MAX_TOOL_ROUNDS;
+      const batch = steps.slice(from);
+      turns = [
+        ...turns,
+        { role: 'assistant', parts: [{ kind: 'text', text: raw }] },
+        {
+          role: 'user',
+          parts: [
+            {
+              kind: 'text',
+              text: finalRound
+                ? `${resultsPrompt(batch, from)}\n\n【最后一次】本次已经执行到上限（${MAX_TOOL_ROUNDS} 轮），不要再输出 adb 代码块，请基于以上全部结果直接给出最终结论。`
+                : resultsPrompt(batch, from),
+            },
+          ],
+        },
+      ];
+
+      if (finalRound) {
+        const fin = await callProvider(provider, turns, system);
+        model = fin.model || model;
+        accumulate(fin.usage);
+        content = (fin.content || '').trim() || '（命令已执行完，但模型没有给出总结）';
+        break;
+      }
+    }
+  } finally {
+    if (runId) cancelledRuns.delete(runId);
+  }
+
+  if (!content) content = stopped ? '（已停止：AI 还没给出结论）' : '（模型返回了空内容）';
 
   const assistant: AiChatMessage = {
     id: randomUUID(),
     role: 'assistant',
     content,
-    model: reply.model,
+    model,
     time: Date.now(),
+    steps: steps.length ? slimSteps(steps) : undefined,
   };
   const sessionId = appendToSession(req.sessionId, [...history, assistant]);
 
-  log('success', 'AI', `对话完成（${provider.name} · ${reply.model}，${Date.now() - started}ms）`);
+  log(
+    'success',
+    'AI',
+    `对话完成（${provider.name} · ${model}，${rounds} 轮 / ${steps.length} 条指令，${Date.now() - started}ms）`,
+  );
   return {
     sessionId,
     content,
-    model: reply.model,
+    model,
     durationMs: Date.now() - started,
-    usage: reply.usage,
+    usage,
+    steps,
+    rounds,
+    stopped: stopped || undefined,
   };
 }
 

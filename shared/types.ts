@@ -583,6 +583,24 @@ export interface LogcatStatus {
   filter?: LogcatFilter;
 }
 
+/**
+ * 一次「回放」的结果（v1.1.15）。
+ *
+ * 为什么需要它：Logcat 页是一个路由组件，切到别的模块就**卸载**了，
+ * 页面自己的 lines 跟着没了，而主进程那条 adb logcat 还在继续推 ——
+ * 于是「切走再回来，日志一片空白」，看起来像抓取自己停了。
+ *
+ * 主进程现在额外保留一份**已解析行**的环形缓冲，页面挂载时用这个接口
+ * 把最近的内容取回来铺上，再接着收推送。
+ */
+export interface LogcatHistory {
+  status: LogcatStatus;
+  /** 最近 N 行（按 seq 升序；seq 与页面用于 React key 的序号一致） */
+  lines: LogcatLine[];
+  /** 主进程缓冲里实际保留的总行数（可能大于 lines.length） */
+  buffered: number;
+}
+
 /* ------------------------------------------------------------------ */
 /* Logcat 导出工具（常用工具页，一次性 dump）                          */
 /* ------------------------------------------------------------------ */
@@ -1214,6 +1232,32 @@ export interface AppSettings {
    * 模型调用，属于必须由用户明确同意的行为。
    */
   crashAutoAnalyze: boolean;
+
+  /*
+   * 实时 Logcat 的后台抓取（v1.1.15）
+   */
+  /**
+   * 「后台保持抓取」：切到别的模块时，主进程那条 `adb logcat` 是否继续跑。
+   *
+   * 默认 **true** —— 用户对 Logcat 的典型用法就是「开着抓、去别的页面操作设备、
+   * 回来接着看」，默认停掉反而会把这个流程打断。关掉后离开页面即停（省 CPU/流量）。
+   *
+   * ⚠️ 它只管「抓不抓」；页面回来能不能接着看，靠主进程的环形缓冲回放（见
+   *    services/logcat.ts 的 recent），与这个开关无关。
+   */
+  logcatKeepBackground: boolean;
+
+  /*
+   * 非设置页的自动更新检测（v1.1.15）
+   */
+  /**
+   * 自动检查更新的间隔（分钟）。
+   *
+   * 0 或负数 = 只在启动时查一次、之后不再轮询。
+   * 默认 **10**（用户要求「每隔十分钟检测一次」）；下限按 1 分钟算，
+   * 上限 24 小时 —— 再大没有意义，再小等于持续打更新源。
+   */
+  updateCheckIntervalMin: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1466,6 +1510,31 @@ export interface AiAttachment {
   previewUrl?: string;
 }
 
+/**
+ * AI 自动执行的一条 adb 指令（v1.1.15）。
+ *
+ * 与「AI 让我们执行什么」强相关，所以随助手消息一起持久化 ——
+ * 下次翻回这段对话还能看到当时到底跑了什么、返回了什么。
+ */
+export interface AiAdbStep {
+  id: string;
+  /** 完整命令行，如 `adb shell getprop ro.product.model` */
+  command: string;
+  /** 该轮模型在命令前说的那句话（同轮只有第一条带，回看时能知道「它当时想干嘛」） */
+  reason?: string;
+  ok: boolean;
+  /** adb 退出码；被拦截 / 未执行时是 -1 */
+  code: number;
+  /** 回传给模型的输出（已截断，中间省略的部分有明确标记） */
+  output: string;
+  /** output 是否被截断过 */
+  truncated: boolean;
+  /** 被安全检查拦下时的原因；此时 ok=false 且没有真正执行 */
+  blocked?: string;
+  durationMs: number;
+  at: number;
+}
+
 /** 一条对话消息（界面与后端共用同一份形状） */
 export interface AiChatMessage {
   id: string;
@@ -1473,6 +1542,8 @@ export interface AiChatMessage {
   content: string;
   /** 仅用户消息可能带附件 */
   attachments?: AiAttachment[];
+  /** 助手消息：这一轮自动执行的 adb 指令（按时间顺序） */
+  steps?: AiAdbStep[];
   /** 这一条实际用的模型（助手消息回填，便于回溯是哪家答的） */
   model?: string;
   time: number;
@@ -1508,6 +1579,16 @@ export interface AiChatRequest {
    * 这样「编辑重发 / 删掉中间某条」不需要额外接口。
    */
   messages: AiChatMessage[];
+  /**
+   * 本次请求的标识（v1.1.15）。
+   * 主进程在「AI 执行 adb 指令」的多轮循环里靠它认领取消请求，也用它给进度推送打标。
+   */
+  runId?: string;
+  /**
+   * 是否允许 AI 自动执行 adb 指令（v1.1.15），缺省 true。
+   * 关掉之后行为与 v1.1.14 完全一致：只聊，不碰设备。
+   */
+  allowAdb?: boolean;
 }
 
 export interface AiChatResult {
@@ -1518,6 +1599,20 @@ export interface AiChatResult {
   /** 本次耗时（毫秒） */
   durationMs: number;
   usage?: { prompt: number; completion: number; total: number };
+  /** 这一轮自动执行过的 adb 指令（按顺序；没执行就是空数组） */
+  steps: AiAdbStep[];
+  /** 实际问了几轮模型（1 = 一次答完，没触发工具循环） */
+  rounds: number;
+  /** 用户中途点了「停止」 */
+  stopped?: boolean;
+}
+
+/** 执行过程中的实时进度推送（push:aiAgentStep 的载荷） */
+export interface AiAgentStepEvent {
+  runId: string;
+  step: AiAdbStep;
+  /** 这是第几条（从 1 开始），界面用它显示「第 n 条」 */
+  index: number;
 }
 
 /** 连通性自检结果（AI 页面「测试连接」用） */
@@ -1700,6 +1795,8 @@ export const IPC = {
   LOGCAT_START: 'logcat:start',
   LOGCAT_STOP: 'logcat:stop',
   LOGCAT_STATUS: 'logcat:status',
+  /** 回放最近抓到的行（v1.1.15） */
+  LOGCAT_HISTORY: 'logcat:history',
   LOGCAT_CLEAR: 'logcat:clear',
   LOGCAT_SAVE: 'logcat:save',
   LOGCAT_PROCESSES: 'logcat:processes',
@@ -1773,6 +1870,8 @@ export const IPC = {
   AI_CONFIG_DIR: 'ai:configDir',
   /** 发一次对话（后端无状态，带全量历史） */
   AI_CHAT: 'ai:chat',
+  /** 取消正在跑的对话（v1.1.15：AI 执行 adb 指令是多轮的，必须能叫停） */
+  AI_CANCEL: 'ai:cancel',
   /** 连通性自检（发一句「你好」验证 key / 地址 / 模型） */
   AI_TEST: 'ai:test',
   /** 会话列表（不含消息体） */
@@ -1898,6 +1997,8 @@ export const IPC = {
   PUSH_AI_CRASH_REPORT: 'push:aiCrashReport',
   /** 崩溃监听器状态变化（开关 / 投屏 / 前台应用变了） */
   PUSH_AI_CRASH_STATUS: 'push:aiCrashStatus',
+  /** AI 每执行完一条 adb 指令就推一次（v1.1.15），界面上实时看到它在干什么 */
+  PUSH_AI_AGENT_STEP: 'push:aiAgentStep',
 } as const;
 
 /**
@@ -2169,4 +2270,23 @@ export interface UpdateCheckResult {
     /** 为什么选了它 / 为什么一个都没选上（面向用户的一句话，界面可直接展示） */
     pkgNote?: string;
   };
+}
+
+/**
+ * 侧栏左下角「检测到新版本」卡片所需的最小信息（v1.1.15）。
+ *
+ * 从 UpdateCheckResult.latest 里挑三项存进 store，**不要把整份结果塞进去** ——
+ * 侧栏是每次状态变化都会重渲染的地方，没必要拖着包地址、校验和这些字段跑。
+ */
+export interface UpdateTipInfo {
+  version: string;
+  /** 是否重要更新（更新源标记为 critical，建议尽快升级） */
+  critical?: boolean;
+  /**
+   * 更新说明（与 latest.notes 同源）。
+   *
+   * 纯文本、可能多行、行首可能自带「·」之类的符号 —— 展示端按 pre-line 处理即可，
+   * 不要再自己拼 bullet，否则会和源里的符号叠成两层。
+   */
+  notes?: string;
 }

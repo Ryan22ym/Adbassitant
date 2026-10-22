@@ -87,6 +87,11 @@ const DEFAULTS: AppSettings = {
    *    贸然打开只会在运行日志里刷一屏失败。所以必须由用户显式点头。
    */
   crashAutoAnalyze: false,
+  // 实时 Logcat：切走模块后继续在后台抓（v1.1.15）。默认开 —— 「开着抓、去别的
+  // 页面操作设备、回来接着看」才是 Logcat 的典型用法，默认停掉会打断它。
+  logcatKeepBackground: true,
+  // 自动检查更新间隔（v1.1.15）：10 分钟。0 = 只在启动时查一次
+  updateCheckIntervalMin: 10,
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -172,6 +177,9 @@ function defaultDirs(): AppSettings {
     glassTint: 'blue',
     // 崩溃自动 AI 分析（v1.1.14）：与 DEFAULTS 一致，默认关
     crashAutoAnalyze: false,
+    // Logcat 后台抓取 / 更新检测间隔（v1.1.15）：与 DEFAULTS 保持一致
+    logcatKeepBackground: true,
+    updateCheckIntervalMin: 10,
   };
 }
 

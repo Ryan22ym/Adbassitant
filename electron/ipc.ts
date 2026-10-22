@@ -81,6 +81,7 @@ import {
   startLogcat,
   stopLogcat,
   getLogcatStatus,
+  getLogcatHistory,
   clearLogcatBuffer,
   saveLogcat,
   listProcesses,
@@ -129,6 +130,7 @@ import {
   aiChat,
   aiConfigDir,
   aiTest,
+  cancelAiChat,
   clearSessions,
   deleteSession,
   getAiConfig,
@@ -146,7 +148,7 @@ import {
   setCrashWatchSink,
   syncCrashWatch,
 } from './services/crash';
-import type { AiChatRequest } from '../shared/types';
+import type { AiAgentStepEvent, AiChatRequest } from '../shared/types';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
 import { getWallpaperDataURL } from './services/wallpaper';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
@@ -952,6 +954,16 @@ export function registerIpc() {
   ipcMain.handle(IPC.LOGCAT_STOP, wrap(() => stopLogcat()));
   ipcMain.handle(IPC.LOGCAT_STATUS, wrap(() => getLogcatStatus()));
 
+  /*
+   * 回放最近抓到的行（v1.1.15）。
+   * Logcat 页是路由组件，切走即卸载、lines 也随之销毁 —— 页面回来时靠这个接口
+   * 把主进程环形缓冲里的内容铺回去，否则「切走再回来一片空白」。
+   */
+  ipcMain.handle(
+    IPC.LOGCAT_HISTORY,
+    wrap((_e, limit?: number) => getLogcatHistory(limit)),
+  );
+
   ipcMain.handle(IPC.LOGCAT_CLEAR, wrap(() => clearLogcatBuffer()));
 
   ipcMain.handle(
@@ -1235,7 +1247,29 @@ export function registerIpc() {
 
   ipcMain.handle(IPC.AI_CONFIG_DIR, wrap(() => aiConfigDir()));
 
-  ipcMain.handle(IPC.AI_CHAT, wrap((_e, req: AiChatRequest) => aiChat(req)));
+  /*
+   * 一场对话（后端无状态，渲染层每次带全量历史）。
+   *
+   * v1.1.15 起主进程会在这里跑「模型给命令 → 执行 → 结果回传」的多轮循环，
+   * 所以多挂了一条实时推送：每执行完一条 adb 指令就推给发起方那次窗口，
+   * 界面上能立刻看到它在干什么，而不是对着一个转圈等一分钟。
+   * 用 e.sender 而不是全局广播 —— 推送只和发起这次对话的窗口有关。
+   */
+  ipcMain.handle(
+    IPC.AI_CHAT,
+    wrap((e, req: AiChatRequest) =>
+      aiChat(req, {
+        onStep: (step, index) => {
+          if (e.sender.isDestroyed()) return;
+          const ev: AiAgentStepEvent = { runId: String(req?.runId || ''), step, index };
+          e.sender.send(IPC.PUSH_AI_AGENT_STEP, ev);
+        },
+      }),
+    ),
+  );
+
+  /** 停止正在跑的对话。取消粒度是「一条命令」，主进程每轮/每条前检查一次 */
+  ipcMain.handle(IPC.AI_CANCEL, wrap((_e, runId?: string) => cancelAiChat(runId)));
 
   ipcMain.handle(IPC.AI_TEST, wrap((_e, providerId?: string) => aiTest(providerId)));
 

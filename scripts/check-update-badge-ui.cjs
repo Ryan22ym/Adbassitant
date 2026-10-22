@@ -273,7 +273,7 @@ app.whenReady().then(async () => {
     win.show();
     await sleep(1500); // 等首屏 + 面板挂载
 
-    const initial = await waitFor(win, (s) => s.panel && s.checkState !== 'checking', 6000, 200);
+    let initial = await waitFor(win, (s) => s.panel && s.checkState !== 'checking', 6000, 200);
     ok(!!initial.panel, '设置页渲染出「软件更新」面板');
     if (!initial.panel) throw new Error('面板没渲染出来，先 npm run build:renderer 再跑');
     ok(
@@ -281,8 +281,21 @@ app.whenReady().then(async () => {
       '注入「有新版本 + 有包」后进入 available 态',
       `checkState=${initial.checkState}`,
     );
-    // 更新栏默认就是收起的（Card defaultOpen={false}）—— 用户报的正是这个状态
-    ok(initial.collapsed && !initial.bodyVisible, '更新栏默认收起（body 不可见）', `collapsed=${initial.collapsed}`);
+    /*
+     * 前置：先把更新栏收起来。
+     *
+     * 🔴 原先这里断言的是「默认就收起」，但 Conf/panels.json 的 `settings.update`
+     *    自 v1.1.12 起一直是 true（默认展开）—— 那条断言早就过期了，
+     *    本脚本真正要验的是「**收起态**下 New 还看得清吗、按钮还点得到吗」。
+     *    所以把前置动作显式做掉，别依赖某个会变的默认值（默认值变了就假 FAIL，
+     *    而下面那些断言其实是好的）。
+     */
+    if (!initial.collapsed) {
+      await clickSel(win, '[data-update-panel] .card-head');
+      await sleep(400);
+      initial = (await waitFor(win, (s) => s.collapsed, 3000, 150)) || initial;
+    }
+    ok(initial.collapsed && !initial.bodyVisible, '更新栏收起后 body 不可见（前置状态）', `collapsed=${initial.collapsed}`);
 
     /* ---- 段一：收起态下的红字 New（纯文字：无底、无边框、无红点） ---- */
     const collapsed = initial;

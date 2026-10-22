@@ -834,6 +834,69 @@
   max-height: calc(100vh - 360px);
   border: none;
   border-radius: 0;
+  /*
+   * 虚拟滚动（v1.1.15）的两个前提：
+   *   · position:relative —— 内层 .log-window 用 transform 定位，需要它做参照；
+   *   · contain:content —— 把内部布局/绘制的重排范围限制在这一块里，
+   *     否则每 120ms 一批新日志都会触发整页（侧栏、卡片、底栏）的 reflow。
+   */
+  position: relative;
+  contain: content;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/*
+ * 撑出完整滚动高度的那一层：高度 = 行数 × ROW_H（由 JS 内联给）。
+ * 它自己不画东西，只负责让滚动条的长度与内容一致。
+ */
+.log-spacer {
+  position: relative;
+  width: 100%;
+}
+
+/* 真正承载可见行的那一层，用 translateY 挪到对应位置（不触发重排） */
+.log-window {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+
+/*
+ * 🔴 固定行高（必须与 LogcatPage.tsx 的 ROW_H 一致，当前 22）。
+ * 虚拟滚动靠「行号 × 行高」算位置，任何一行高出/矮于 22px，
+ * 往后所有行都会跟着错位（越往下偏得越多）。
+ * 所以这里强制单行 + ellipsis，全文靠 title 悬浮看。
+ */
+.logcat-line {
+  height: 22px;
+  padding: 0 12px;
+  line-height: 21px;
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.logcat-line .log-msg {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+/* 工具栏右侧的两个勾选项：自动滚动 + 后台保持抓取（v1.1.15） */
+.log-toolbar-toggles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+}
+
+/* 组内不再各自往右推，靠外层 margin-left:auto 统一靠右 */
+.log-toolbar-toggles .auto-scroll {
+  margin-left: 0;
 }
 
 .logcat-pid {
@@ -1459,6 +1522,22 @@
 .update-note {
   font-size: 12px;
   line-height: 1.7;
+}
+
+/*
+ * 「自动检查更新 + 间隔」（v1.1.15）。
+ * 一行排开：开关 / 文案 / 数字输入 / 补充说明，窄窗口自动折行（.row-wrap）。
+ */
+.update-auto {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 2px;
+  border-top: 1px dashed var(--border);
+}
+
+.update-auto-label {
+  font-size: 12.5px;
+  color: var(--text-primary);
 }
 
 .update-ready {
@@ -2675,6 +2754,177 @@
   gap: 6px;
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+/* ---------------- AI 自动执行的 adb 指令（v1.1.15） ---------------- */
+
+.ai-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-step {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+  font-size: 12px;
+}
+
+/* 左边一条色条 = 这条命令的结果，扫一眼就能分辨成败 */
+.ai-step.ok {
+  border-left-color: var(--success);
+}
+
+.ai-step.bad {
+  border-left-color: var(--danger);
+}
+
+.ai-step.blocked {
+  border-left-color: var(--warn);
+}
+
+.ai-step-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg-surface-2);
+}
+
+.ai-step-idx {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
+}
+
+.ai-step-cmd {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-step-badge {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.ai-step.ok .ai-step-badge {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.ai-step.bad .ai-step-badge {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.ai-step.blocked .ai-step-badge {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.ai-step-ms {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.ai-step-reason {
+  padding: 5px 8px 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.ai-step-why {
+  padding: 4px 8px 7px;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+.ai-step-out {
+  padding: 0 8px 6px;
+}
+
+.ai-step-toggle {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.ai-step-toggle:hover {
+  color: var(--text-primary);
+}
+
+.ai-step-out pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+/* 实时进度气泡：和最终答复同一个主播区，但窄一点，别把输入框顶太远 */
+.ai-bubble.live {
+  max-width: min(720px, 82%);
+}
+
+/* 「执行 adb 指令」开关 */
+.ai-adb-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ai-adb-toggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ai-adb-toggle:hover {
+  color: var(--text-primary);
+}
+
+.ai-adb-toggle.on {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
 }
 
 /* ---------------- 输入区 ---------------- */

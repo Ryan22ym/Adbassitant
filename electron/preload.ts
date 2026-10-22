@@ -92,6 +92,8 @@ const IPC = {
   LOGCAT_START: 'logcat:start',
   LOGCAT_STOP: 'logcat:stop',
   LOGCAT_STATUS: 'logcat:status',
+  /* 回放最近的行（v1.1.15）：页面重新挂载时用 */
+  LOGCAT_HISTORY: 'logcat:history',
   LOGCAT_CLEAR: 'logcat:clear',
   LOGCAT_SAVE: 'logcat:save',
   LOGCAT_PROCESSES: 'logcat:processes',
@@ -177,6 +179,7 @@ const IPC = {
   AI_CONFIG_SET: 'ai:configSet',
   AI_CONFIG_DIR: 'ai:configDir',
   AI_CHAT: 'ai:chat',
+  AI_CANCEL: 'ai:cancel',
   AI_TEST: 'ai:test',
   AI_SESSION_LIST: 'ai:sessionList',
   AI_SESSION_GET: 'ai:sessionGet',
@@ -219,6 +222,8 @@ const IPC = {
   /* AI 崩溃分析（v1.1.14）：报告生成 / 监听状态变化 */
   PUSH_AI_CRASH_REPORT: 'push:aiCrashReport',
   PUSH_AI_CRASH_STATUS: 'push:aiCrashStatus',
+  /* AI 自动执行 adb 指令（v1.1.15）：每执行完一条推一次 */
+  PUSH_AI_AGENT_STEP: 'push:aiAgentStep',
 } as const;
 
 /**
@@ -428,6 +433,8 @@ const api = {
     invoke(IPC.LOGCAT_START, serial, filter),
   stopLogcat: () => invoke(IPC.LOGCAT_STOP),
   logcatStatus: () => invoke(IPC.LOGCAT_STATUS),
+  /** 回放最近的行（页面重新挂载时铺回来，见 shared/types.ts 的 LogcatHistory） */
+  logcatHistory: (limit?: number) => invoke(IPC.LOGCAT_HISTORY, limit),
   clearLogcat: () => invoke(IPC.LOGCAT_CLEAR),
   saveLogcat: (meta?: Record<string, string>) => invoke(IPC.LOGCAT_SAVE, meta),
   logcatProcesses: (serial?: string) => invoke(IPC.LOGCAT_PROCESSES, serial),
@@ -547,6 +554,8 @@ const api = {
   setAiConfig: (patch: any) => invoke(IPC.AI_CONFIG_SET, patch),
   aiConfigDir: () => invoke(IPC.AI_CONFIG_DIR),
   aiChat: (req: any) => invoke(IPC.AI_CHAT, req),
+  /** 停止正在跑的对话（多轮执行 adb 指令时用） */
+  aiCancel: (runId?: string) => invoke(IPC.AI_CANCEL, runId),
   aiTest: (providerId?: string) => invoke(IPC.AI_TEST, providerId),
   aiSessions: () => invoke(IPC.AI_SESSION_LIST),
   aiSession: (id: string) => invoke(IPC.AI_SESSION_GET, id),
@@ -604,6 +613,7 @@ const api = {
       IPC.PUSH_RECORDER_STATUS,
       IPC.PUSH_AI_CRASH_REPORT,
       IPC.PUSH_AI_CRASH_STATUS,
+      IPC.PUSH_AI_AGENT_STEP,
       'push:screenshot',
     ];
     if (!allowed.includes(channel as any)) {

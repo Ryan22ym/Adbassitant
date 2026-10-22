@@ -32,6 +32,18 @@ const PICK_MODE_HINT: Record<InstallMode, string> = {
 };
 
 /**
+ * 只有一台设备在线时，「装到哪台」没有可选项 —— 这一屏只剩「怎么装」要问。
+ *
+ * 文案必须换一套：单设备时写「点某台设备即开始安装」是废话（就一台），
+ * 而且真正的确认动作变成了底部那个「开始安装」按钮。
+ */
+const PICK_MODE_HINT_SINGLE: Record<InstallMode, string> = {
+  overwrite: '保留应用数据，直接覆盖升级',
+  clean: '⚠️ 会先卸载旧版本，应用数据一起清除',
+  fresh: '设备上已有该应用时直接报错，不动旧数据',
+};
+
+/**
  * 勾选了多台设备（批量安装）时的安装方式说明。
  *
  * 批量只提供覆盖 / 清洁两种。「全新安装」在多台机器上必然结果不一致
@@ -125,7 +137,7 @@ export default function DragInstallHost() {
             <p className="drop-veil-title">松开鼠标即可安装</p>
             <p className="drop-veil-hint">
               支持 .apk、.aab 与 .apks，可一次拖多个，按顺序安装；其他文件会被忽略。
-              多台设备在线时，会先问一下装到哪台
+              松手后会先确认安装方式（覆盖 / 清洁 / 全新），多台设备在线时再选装到哪台
             </p>
           </div>
         </div>
@@ -149,10 +161,11 @@ async function handleWindowDrop(files: File[]) {
   const st = useApp.getState();
 
   if (isBusy()) {
+    const pending = st.pendingInstall;
     st.toast(
       'warn',
-      st.pendingInstall ? '请先选择安装到哪台设备' : '正在安装中，请稍候',
-      st.pendingInstall ? undefined : '同一时间只允许一个安装任务',
+      pending ? (pending.single ? '请先确认安装方式' : '请先选择安装到哪台设备') : '正在安装中，请稍候',
+      pending ? undefined : '同一时间只允许一个安装任务',
     );
     return;
   }
@@ -184,12 +197,30 @@ async function handleWindowDrop(files: File[]) {
  * 这一屏是「界面显示安装成功、手机上却没有」的根治办法：
  * 装到别的设备上时，装后复核也照样通过（包真的装上了），
  * 只有把「装哪台」变成用户明确回答过的问题，才不会出错。
+ *
+ * 安装前的那一屏有两种形态（同一套骨架）：
+ *
+ * · **多台设备在线** → 「装到哪台设备？」点哪台装哪台，左侧勾选框可多选批量；
+ * · **单台设备（拖放进来）** → 「确认安装方式」，没有可挑的目标，
+ *   只剩覆盖 / 清洁 / 全新三选一，底部一个「开始安装」。
+ *
+ * 为什么单台也要停下来问：多设备时会问、单设备时反而不问，行为不一致，
+ * 而且拖放的包会静默按页面上那个值（默认覆盖安装）跑掉 —— 用户既看不到这一步，
+ * 也没机会选清洁 / 全新安装。单选一屏的成本远低于「以为是清洁装、其实没清」。
  */
 function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
   // 订阅设备列表，设备上下线时这一屏要跟着变
   useApp((s) => s.devices);
   const currentSerial = useApp((s) => s.currentSerial);
   const devices = selectableDevices();
+
+  /**
+   * 单设备形态。
+   *
+   * 以 pending.single 为准（进入这一屏时就定了），设备掉到一台时也自然退化成它 ——
+   * 但反过来不行：多台时插上一台新设备，不该把「确认方式」那一屏变回「选设备」。
+   */
+  const single = pending.single === true || devices.length === 1;
 
   /**
    * 勾选的设备（只用于批量安装）。
@@ -251,11 +282,16 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
       ];
 
   return (
-    <div className="install-mask" role="dialog" aria-modal="true" aria-label="选择安装目标">
-      <div className="install-card fade-in" data-pick-device="1">
+    <div
+      className="install-mask"
+      role="dialog"
+      aria-modal="true"
+      aria-label={single ? '确认安装方式' : '选择安装目标'}
+    >
+      <div className="install-card fade-in" data-pick-device={single ? 'single' : '1'}>
         <div className="install-badge pick">?</div>
 
-        <p className="install-title pick">装到哪台设备？</p>
+        <p className="install-title pick">{single ? '确认安装方式' : '装到哪台设备？'}</p>
         <p className="install-file" title={pending.files[0]?.path}>
           {label}
         </p>
@@ -263,7 +299,8 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
         {/* 安装方式在这里是可改的 —— 拖放走的是页面上选的默认值，
             用户点到这一屏才想起「这次要清洁装」时，不必退出去改一遍。
             只作用于这一次安装，不写回全局默认。
-            勾了多台设备（批量）时只剩覆盖 / 清洁两项，见 PICK_MODE_HINT_BATCH。 */}
+            勾了多台设备（批量）时只剩覆盖 / 清洁两项，见 PICK_MODE_HINT_BATCH；
+            单设备时这一屏存在的主要目的就是问它，见 PICK_MODE_HINT_SINGLE。 */}
         <div className="install-mode">
           <div data-pick-mode={mode}>
             <Segmented<InstallMode>
@@ -275,12 +312,16 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
           <p className="install-mode-hint">
             {batch
               ? PICK_MODE_HINT_BATCH[mode === 'clean' ? 'clean' : 'overwrite']
-              : PICK_MODE_HINT[mode]}
+              : single
+                ? PICK_MODE_HINT_SINGLE[mode]
+                : PICK_MODE_HINT[mode]}
           </p>
         </div>
 
         <div className="install-meta">
-          <span className="install-chip ghost">{devices.length} 台设备在线</span>
+          <span className="install-chip ghost">
+            {single ? `仅 ${devices.length} 台设备在线` : `${devices.length} 台设备在线`}
+          </span>
           {batch && <span className="install-chip">已选 {picked.length} 台</span>}
         </div>
 
@@ -289,17 +330,20 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
             const on = picked.includes(d.serial);
             return (
               <div className="install-device-row" key={d.serial} data-checked={on ? '1' : undefined}>
-                <button
-                  type="button"
-                  className="install-device-check"
-                  data-pick-select={d.serial}
-                  role="checkbox"
-                  aria-checked={on}
-                  title={on ? '取消勾选' : '勾选后可一次装到多台设备'}
-                  onClick={() => toggle(d.serial)}
-                >
-                  {on ? '✓' : ''}
-                </button>
+                {/* 单设备时勾选框没有意义（勾不出批量），直接不渲染 */}
+                {!single && (
+                  <button
+                    type="button"
+                    className="install-device-check"
+                    data-pick-select={d.serial}
+                    role="checkbox"
+                    aria-checked={on}
+                    title={on ? '取消勾选' : '勾选后可一次装到多台设备'}
+                    onClick={() => toggle(d.serial)}
+                  >
+                    {on ? '✓' : ''}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="install-device"
@@ -326,6 +370,11 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
               会把这一批包依次装到勾选的 {picked.length} 台设备上，
               整批只用一种安装方式（不能逐台各自选）
             </>
+          ) : single ? (
+            <>
+              只有一台设备在线，装到哪台没有可选项 —— 这里确认的是「怎么装」；
+              上面选的方式只作用于这一次，不会改掉全局默认
+            </>
           ) : (
             <>
               多台设备同时在线时不会替你挑一台 —— 点哪台就装到哪台；
@@ -335,7 +384,9 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
           {hasAab && (
             <>
               <br />
-              AAB 要先按所选设备的配置拆包，比 APK 慢一些；装到多台时逐台拆
+              {single
+                ? 'AAB 要先按这台设备的配置拆包，比 APK 慢一些'
+                : 'AAB 要先按所选设备的配置拆包，比 APK 慢一些；装到多台时逐台拆'}
             </>
           )}
           {hasApks && !hasAab && (
@@ -348,7 +399,18 @@ function PickDeviceDialog({ pending }: { pending: PendingInstall }) {
         </p>
 
         <div className="install-actions">
-          {devices.length >= 2 && (
+          {/* 单设备：确认动作落在主按钮上（设备行也可以直接点） */}
+          {single && devices[0] && (
+            <Button
+              variant="primary"
+              size="sm"
+              data-pick-start="1"
+              onClick={() => void startInstallOn(devices[0].serial)}
+            >
+              开始安装
+            </Button>
+          )}
+          {!single && devices.length >= 2 && (
             <Button
               variant="ghost"
               size="sm"

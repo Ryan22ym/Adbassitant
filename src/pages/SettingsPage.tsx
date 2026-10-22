@@ -146,6 +146,8 @@ const THEME_MODES: { value: 'light' | 'dark' | 'genshin' | 'glass'; label: strin
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.15':
+    '拖入安装包时，只有一台设备在线也会先让你确认覆盖 / 清洁 / 全新安装，不再默认静默覆盖安装。左下角新增「检测到新版本」提示，卡片上直接显示新版本号与更新内容（长说明按条列出、可在卡片里滚动看全），点「更新」直达设置页并自动开始下载；不在设置页时程序也会每 10 分钟自动检测一次（间隔可改，也可关）。实时 Logcat 切到其它模块再回来日志不再消失，新增「后台保持抓取」开关，日志列表改为只渲染可见行，设备刷屏时不再卡顿。AI 助手现在能自己动手查设备：提问后它会根据目标生成 adb 指令、程序自动执行并把返回结果交回对话，一轮轮查到你问的那个目标有结论为止（最多 6 轮），执行过程在对话里逐条显示、可随时点「停止」中断；卸载应用、清应用数据、刷机等破坏性命令会被拦下不执行，也可以关掉「执行 adb 指令」开关让它只回答问题。',
   '1.1.14':
     '新增「AI 助手」：模型接口写在程序目录的 Conf\\ai.json 里，DeepSeek / 通义千问 / Kimi / 智谱 GLM / OpenAI / Claude 已预填好地址与模型，填上自己的 Key 即可用，也能在页面里直接改；对话支持图片、文件与网页链接三种附件。设置页最后一行新增「检测崩溃自动AI分析日志」开关，开启后投屏中的前台应用一发生闪退就自动导出日志、把最近 10 分钟的日志与崩溃前的操作记录交给 AI 分析，并生成含崩溃时间、设备、崩溃前操作与原因分析的报告；侧栏 AI 入口亮红点提醒，报告页可一键定位到日志与报告所在的文件夹。新增淡粉、樱花两套主题色与自定义主题色（色盘自由选色，整套界面配色自动派生）；透明玻璃主题新增淡蓝 / 淡粉 / 雅灰 / 珍珠白四种主题色底图（低饱和柔光底，与桌面壁纸模式二选一互斥）；修复玻璃主题切回其它主题后右上角窗口按钮消失。',
   '1.1.13':
@@ -940,6 +942,34 @@ function UpdatePanel() {
   }, [updatePanelDefaultOpen]);
   const ensureOpen = () => setPanelOpen(true);
 
+  /*
+   * 左下角「更新」按钮交过来的动作（v1.1.15，见 components/layout.tsx 的 UpdateTip）。
+   * 置位后本面板要做三件事：展开 → 滚到视野里 → 检查并直接开始下载。
+   */
+  const updateIntent = useApp((s) => s.updateIntent);
+  const setUpdateIntent = useApp((s) => s.setUpdateIntent);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 检查间隔的输入草稿（v1.1.15）。
+   *
+   * 不能直接绑到 settings.updateCheckIntervalMin 上：用户清空输入框准备重打时，
+   * 值会先变成空/0，那一瞬间落盘等于把轮询关掉。所以打字只改草稿，
+   * 失焦（onBlur）才写回设置。
+   */
+  const [intervalDraft, setIntervalDraft] = useState(settings?.updateCheckIntervalMin ?? 10);
+  useEffect(() => {
+    setIntervalDraft(settings?.updateCheckIntervalMin ?? 10);
+  }, [settings?.updateCheckIntervalMin]);
+
+  /** 就地改一条设置并同步本地副本（UpdatePanel 拿不到父组件的 update） */
+  const patchSettings = async (patch: Record<string, unknown>) => {
+    const r = await call<NonNullable<typeof settings>>(() => window.adbApi.setSettings(patch), {
+      silent: true,
+    });
+    if (r) setSettings(r);
+  };
+
   const refresh = async () => {
     const r = await call<UpdateContext>(() => window.adbApi.updateContext(), { silent: true });
     setCtx(r ?? null);
@@ -961,7 +991,7 @@ function UpdatePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const runCheck = async (force: boolean, silent = false) => {
+  const runCheck = async (force: boolean, silent = false): Promise<UpdateCheckResult | null> => {
     setChecking(true);
     if (!silent) setConfirming(null);
     try {
@@ -970,10 +1000,24 @@ function UpdatePanel() {
       setCheck(res);
       if (!res) {
         if (!silent) toast('warn', '检查更新失败', r?.error);
-        return;
+        return null;
       }
       // 侧栏红点跟着结果走
       setUpdateAvailable(!!(res.ok && res.hasUpdate));
+      /*
+       * 左下角那张「检测到新版本」卡片要版本号，一并写进 store。
+       * 查成功且没有新版时把它清掉，否则卡片会一直挂着一个过期的版本号。
+       */
+      if (res.ok && res.hasUpdate && res.latest?.version) {
+        useApp.getState().setUpdateInfo({
+          version: res.latest.version,
+          critical: res.latest.critical,
+          // 左下角那张卡片现在也要把更新内容摊出来，所以 notes 一并带过去
+          notes: res.latest.notes,
+        });
+      } else if (res.ok && !res.hasUpdate) {
+        useApp.getState().setUpdateInfo(null);
+      }
       /*
        * 主进程会把这次检查时间写进设置（lastCheckAt），但渲染层的 settings 是启动时
        * 读的那一份副本 —— 不同步的话界面上「最近检查」会一直停在旧值。
@@ -981,19 +1025,25 @@ function UpdatePanel() {
       void window.adbApi.getSettings().then((s2) => {
         if (s2?.ok && s2.data) setSettings(s2.data);
       });
-      if (silent) return;
+      if (silent) return res;
       if (!res.configured) toast('info', '还没有配置更新源', res.reason);
       else if (!res.ok) toast('warn', '检查更新失败', res.reason);
       else if (res.hasUpdate) toast('success', `发现新版本 v${res.latest?.version ?? ''}`, res.reason);
       else toast('success', '已是最新版本', `当前 v${res.currentVersion}`);
+      return res;
     } finally {
       setChecking(false);
     }
   };
 
-  /** 在线下载（下载完的校验与替换，跟「选择更新包…」走同一条链路） */
-  const download = async () => {
-    const pkg = check?.latest?.pkg;
+  /**
+   * 在线下载（下载完的校验与替换，跟「选择更新包…」走同一条链路）。
+   *
+   * 参数可以显式传入：从「左下角卡片」那条路进来时，检查结果刚拿到手、还没落进
+   * `check` state（setState 是异步的），闭包里读 check 会读到上一轮的值。
+   */
+  const download = async (explicitPkg?: { url: string; sha256?: string }) => {
+    const pkg = explicitPkg ?? check?.latest?.pkg;
     if (!pkg) return;
     // 收起态点进来的：先把卡片摊开，进度与后续步骤才看得见
     ensureOpen();
@@ -1029,6 +1079,38 @@ function UpdatePanel() {
     await window.adbApi.cancelUpdateDownload();
     toast('info', '已取消下载');
   };
+
+  /*
+   * 「左下角卡片 → 更新」这条路的落地（v1.1.15）。
+   *
+   * 三件事按顺序做：把卡片摊开 → 滚进视野 → 检查并**直接开始下载**。
+   * 用户点的就是「更新」，所以不能再让他去点一次「下载并更新」。
+   *
+   * 🔴 触发器是 store 里的 updateIntent，不是路由 state：
+   *    用户很可能本来就停在设置页，page 不会重新挂载，路由 state 也就不会变化。
+   * 🔴 一进来就把它清掉（消费语义）：否则从别的页面再切回设置页时，
+   *    这段逻辑会因为读到残留的 intent 又下载一遍。
+   */
+  useEffect(() => {
+    if (updateIntent !== 'download') return;
+    setUpdateIntent(null);
+    ensureOpen();
+    // 等展开后再滚：收起 → 展开会把后面的内容整体下推
+    requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+
+    void (async () => {
+      const res = await runCheck(false, true);
+      const pkg = res?.ok && res.hasUpdate ? res.latest?.pkg : undefined;
+      if (!pkg) {
+        toast('info', '暂时没有可下载的更新包', res?.reason ?? `当前已是最新版本 v${res?.currentVersion ?? ''}`);
+        return;
+      }
+      // 包已经下好并校验过（info.ok）：直接停在「立即更新并重启」，别重复下载
+      if (info?.ok) return;
+      await download(pkg);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [updateIntent]);
 
   const pick = async () => {
     const files = await call<string[]>(
@@ -1106,6 +1188,7 @@ function UpdatePanel() {
      * 卡片默认收起也要能拿到（收起只是视觉隐藏，DOM 一直在）。
      */
     <div
+      ref={panelRef}
       data-update-panel="1"
       data-update-kind={ctx?.kind ?? 'unknown'}
       data-update-check={checkState}
@@ -1149,7 +1232,7 @@ function UpdatePanel() {
                 <Button
                   size="sm"
                   variant="primary"
-                  onClick={download}
+                  onClick={() => download()}
                   loading={busy === 'download'}
                   disabled={busyNow}
                   data-update-download="1"
@@ -1205,6 +1288,39 @@ function UpdatePanel() {
             <About k="运行时" v={`Electron ${ctx.electronVersion || '未知'}`} />
             {/* 运行库指纹：更新包被「运行库不一致」拒掉时，拿它跟包里记录的一对就知道差在哪 */}
             <About k="运行库指纹" v={ctx.runtimeHash ? `${ctx.runtimeHash.slice(0, 16)}…` : '—'} />
+          </div>
+
+          {/*
+            自动检测（v1.1.15）。
+            以前只有「启动时查一次」这个开关，而且没有间隔可调；现在检测是「启动一次 +
+            按间隔轮询」，间隔就摆在这里。落在 settings.json（updateCheckIntervalMin），
+            改完立刻生效 —— 轮询的定时器挂在 App 的 useUpdateWatcher 上，依赖 settings。
+          */}
+          <div className="row row-wrap update-auto" data-update-auto="1">
+            <Switch
+              checked={!!settings?.autoCheckUpdate}
+              onChange={(v) => patchSettings({ autoCheckUpdate: v })}
+            />
+            <span className="update-auto-label">自动检查更新</span>
+            <span className="text-dim">每</span>
+            <Input
+              type="number"
+              min={0}
+              max={1440}
+              value={String(settings?.updateCheckIntervalMin ?? 10)}
+              onChange={(e) => {
+                /*
+                 * 空串 / 非法值先当 0 处理但**不落盘** —— 用户清空输入框准备重打时，
+                 * 立刻把 0 写进设置会让轮询停下来。失焦（onBlur）才真正保存。
+                 */
+                const n = parseInt(e.target.value, 10);
+                setIntervalDraft(Number.isFinite(n) ? Math.max(0, Math.min(1440, n)) : 0);
+              }}
+              onBlur={() => patchSettings({ updateCheckIntervalMin: intervalDraft })}
+              style={{ width: 72, height: 28 }}
+              data-update-interval="1"
+            />
+            <span className="text-dim">分钟检查一次（0 = 只在启动时查）</span>
           </div>
 
           {/* ---------------- 在线检查结果（六态，见 CheckState 注释） ---------------- */}

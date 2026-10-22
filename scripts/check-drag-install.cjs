@@ -705,6 +705,29 @@ async function runChecks(page) {
   );
   await page.screenshot(path.join(OUT, 'drag-install-7-pick-device.png'));
 
+  /*
+   * 13.1 单设备形态：只有一台在线时，拖放同样要先确认安装方式。
+   *
+   * 本机常年三台设备在线，这条只能有条件覆盖 —— 真要把环境缩到一台，
+   * 代价是断开其它设备（模拟器断不掉、真机要拔线），不值当。
+   * 设备数从页面上的设备选择器取，与弹窗状态判据相互独立。
+   */
+  if (options.length === 1) {
+    record(
+      !!(pick && pick.title === '确认安装方式'),
+      '只有一台设备时，拖入安装包先确认安装方式（不再静默覆盖安装）',
+      safe(pick && pick.title),
+    );
+    record(
+      !!(pick && (pick.buttons || []).includes('开始安装')
+        && !(pick.buttons || []).some((b) => b.indexOf('安装到全部设备') >= 0)),
+      '单设备确认屏给「开始安装」，不出现批量按钮',
+      safe(JSON.stringify(pick && pick.buttons)),
+    );
+  } else {
+    log(`跳过「单设备确认安装方式」断言：在线 ${options.length} 台（该用例需要只有一台在线设备）`);
+  }
+
   /* 取消后不得开装 */
   await page.evalJS(`window.__dnd.pickCancel()`);
   await sleep(700);
@@ -880,7 +903,7 @@ async function resolvePick(page, serial = SERIAL) {
       sawPick = true;
       break;
     }
-    // 单设备场景不会出现这一屏，直接就有进度弹窗了
+    // 没出现这一屏就已经在装了（如安装页按钮那条路径）；拖放现在单设备也会问，见 13.1
     if (st.mask) return { sawPick: false, mask: st.mask };
   }
   if (!sawPick) return { sawPick: false, mask: null };

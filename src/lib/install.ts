@@ -167,13 +167,19 @@ export function currentTarget(): DeviceInfo | undefined {
  *
  * 目标设备的确定顺序（关键）：
  *   1. 调用方明确指定的 serial（且那台在线）；
- *   2. 只有一台在线设备 → 就是它，无歧义；
- *   3. **多台在线 → 不猜**，把请求挂到 pendingInstall 上，由弹窗问用户装到哪台。
+ *   2. 只有一台在线设备、且不是拖放来源 → 就是它，无歧义，直接装；
+ *   3. **多台在线 → 不猜**，把请求挂到 pendingInstall 上，由弹窗问用户装到哪台；
+ *   4. **只有一台在线、但是拖放来的 → 也挂上去**，让用户先确认安装方式。
  *
  * 第 3 条是这个模块存在的最大理由：多设备同时在线时，界面上的「当前设备」
  * 很可能不是用户以为的那台（模拟器先连上、或被点过一次就一直沿用），
  * 于是出现「显示安装成功、手机上没有」—— 而且装后复核也查不出问题，
  * 因为包确实装上了，只是装到了另一台设备上。
+ *
+ * 第 4 条补的是另一类「替用户做决定」：单设备时目标没歧义，但**安装方式有**。
+ * 拖进来的包以前会静默按页面上的值（默认覆盖安装）直接跑，
+ * 用户既看不到这一步、也没机会选清洁 / 全新安装 —— 多设备时会问、单设备时反而不问，
+ * 行为不一致。安装页点「开始安装」按钮不弹：那个选择器已经是用户的明确回答。
  *
  * AAB 尤其不能猜：拆一次包要十几秒到几十秒，装错机器等于白等一场。
  */
@@ -187,9 +193,14 @@ export async function installApkFiles(
 
   /* ---- 防重复：安装中 / 正在选设备，一律拒绝新任务 ---- */
   if (isBusy()) {
+    const pending = st.pendingInstall;
     st.toast(
       'warn',
-      isInstalling() ? '正在安装中，请稍候' : '请先选择安装到哪台设备',
+      isInstalling()
+        ? '正在安装中，请稍候'
+        : pending?.single
+          ? '请先确认安装方式'
+          : '请先选择安装到哪台设备',
       isInstalling() ? `当前任务：${st.install?.fileName ?? '安装中'}` : undefined,
     );
     return;
@@ -199,7 +210,7 @@ export async function installApkFiles(
   const grantAll = options.grantAll ?? false;
   // 签名：调用方没给就用 store 里那份（用户在上次安装页选的、已持久化的）
   const signing = options.signing ?? st.installSigning;
-  // 拖放来源（只影响「装到哪台」那一屏的文案）
+  // 拖放来源（决定单设备时要不要停下来确认安装方式，也影响那一屏的文案）
   const fromDrop = options.fromDrop ?? false;
 
   const online = selectableDevices();
@@ -218,15 +229,23 @@ export async function installApkFiles(
     st.toast('warn', `指定的设备 ${options.serial} 不在线`, '请重新选择安装目标');
   }
 
-  // 2. 只有一台在线设备 → 没有歧义，直接装
-  if (online.length === 1) {
+  // 2. 只有一台在线设备、且是用户在安装页明确点了「开始安装」→ 没有歧义，直接装
+  // 3. 只有一台在线设备、但是拖进来的 → 目标没歧义，安装方式有，停下来问一次
+  if (online.length === 1 && !fromDrop) {
     await runInstall(files, mode, grantAll, online[0], signing);
     return;
   }
 
-  // 3. 多台在线 → 问用户，不猜
+  // 4. 需要用户回答：多台设备（问装哪台）/ 单台拖放（问怎么装）
   st.setInstall(null);
-  st.setPendingInstall({ files, mode, grantAll, signing, fromDrop });
+  st.setPendingInstall({
+    files,
+    mode,
+    grantAll,
+    signing,
+    fromDrop,
+    single: online.length === 1,
+  });
 }
 
 /**

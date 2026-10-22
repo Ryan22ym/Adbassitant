@@ -13,6 +13,7 @@ import type {
   GlassTintId,
   CrashReportMeta,
   CrashWatchStatus,
+  UpdateTipInfo,
 } from '@shared/types';
 import { cloneDefaultUiConf, type UiConf } from '@shared/ui-conf';
 
@@ -134,11 +135,14 @@ export interface InstallFile {
 }
 
 /**
- * 已接下、但还没确定装到哪台设备的安装请求。
+ * 已接下、但还没确定「装到哪台、怎么装」的安装请求。
  *
- * 多台设备同时在线时，安装目标是个必须由用户回答的问题：
- * 谁也没法从「拖了一个 APK 进来」推断出用户想装到手机还是模拟器。
- * 交给用户点一下，比默默挑一台然后显示「安装成功」安全得多。
+ * 两种情况会挂到这里，都是为了不让程序替用户做决定：
+ * 1. **多台设备在线** —— 安装目标必须由用户回答（谁也没法从「拖了一个 APK 进来」
+ *    推断出用户想装到手机还是模拟器）；
+ * 2. **单台设备 + 拖放来源** —— 目标没有歧义，但安装方式有：拖进来的包如果
+ *    一声不响按默认的覆盖安装跑掉，用户就没有机会选清洁 / 全新安装。
+ *    （点「开始安装」按钮那条路不算 —— 页面上那个选择器已经是用户的明确回答。）
  */
 export interface PendingInstall {
   files: InstallFile[];
@@ -148,6 +152,13 @@ export interface PendingInstall {
   signing?: InstallSigningOverride;
   /** 这次待定安装是不是「整窗拖放」来的（只影响那一屏的文案） */
   fromDrop?: boolean;
+  /**
+   * 只有一台在线设备：这一屏退化成「确认安装方式」，没有可挑的目标。
+   *
+   * 不能靠 `devices.length === 1` 现推 —— 弹窗开着时插拔设备会让标题/按钮
+   * 在「装到哪台」和「确认方式」之间来回跳。
+   */
+  single?: boolean;
 }
 
 /**
@@ -312,6 +323,34 @@ interface AppState {
    */
   updateAvailable: boolean;
   setUpdateAvailable: (v: boolean) => void;
+
+  /*
+   * 左下角「检测到新版本」小卡片要用的最小信息（v1.1.15）。
+   *
+   * 只存版本号 / 是否重要 / 更新说明 —— 包地址之类仍由设置页自己按需拉。
+   * 整份 UpdateCheckResult 放进来会让侧栏的任何一次重渲染都拖着几十个字段跑。
+   */
+  updateInfo: UpdateTipInfo | null;
+  setUpdateInfo: (v: UpdateTipInfo | null) => void;
+  /**
+   * 用户点过「取消」的那个版本号（v1.1.15）。
+   *
+   * 语义是「这个版本别再提醒我了」，不是「永远别提醒」—— 换了新版本还会再出来。
+   * 落盘在 localStorage（不是 settings.json）：它只是一次界面取舍，
+   * 不进主进程的设置模型；而且主进程那份设置要重启才刷新，这里不必绕一圈。
+   */
+  updateTipDismissed: string;
+  dismissUpdateTip: (version: string) => void;
+
+  /**
+   * 「去设置页下载」的一次性交接条（v1.1.15）。
+   *
+   * 点左下角卡片的「更新」时置位，跳到设置页后由 UpdatePanel 消费：
+   * 展开更新卡片 → 检查 → 直接开始下载。用 store 而不是路由 state，
+   * 是因为这块是「跨页面的动作交接」，而且消费完要能可靠地清掉。
+   */
+  updateIntent: 'download' | null;
+  setUpdateIntent: (v: 'download' | null) => void;
 
   /*
    * AI 崩溃分析（v1.1.14）。
@@ -608,6 +647,23 @@ export const useApp = create<AppState>((set, get) => ({
 
   updateAvailable: false,
   setUpdateAvailable: (updateAvailable) => set({ updateAvailable }),
+
+  updateInfo: null,
+  setUpdateInfo: (updateInfo) => set({ updateInfo }),
+
+  updateTipDismissed:
+    (typeof localStorage !== 'undefined' && localStorage.getItem('adb-update-tip-dismissed')) || '',
+  dismissUpdateTip: (version) => {
+    try {
+      localStorage.setItem('adb-update-tip-dismissed', version);
+    } catch {
+      /* 隐私模式等写不进去：本次会话内仍然生效，只是下次启动会再提醒一次 */
+    }
+    set({ updateTipDismissed: version });
+  },
+
+  updateIntent: null,
+  setUpdateIntent: (updateIntent) => set({ updateIntent }),
 
   /* ---------------- AI 崩溃分析（v1.1.14） ---------------- */
   crashReports: [],
