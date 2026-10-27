@@ -2099,19 +2099,6 @@ function LogcatExportPanel() {
             </div>
           </div>
         )}
-
-        <Notice tone="accent">
-          导出的是<b>设备当前缓冲区里已有的日志</b>（<span className="mono">adb logcat -d</span>，读完即退），
-          不是从此刻开始抓取 —— 想边跑边抓请用左侧「实时 Logcat」页。
-          <br />
-          级别 / TAG / 关键字都在导出时统一筛，所见即所得；缓冲区容量有限，
-          设备可能已把较早的日志滚动覆盖掉，越早导出越完整。
-          <br />
-          文件按 <span className="mono">
-            {dirInfo?.root || 'D:\\adblogs'}\{shortName('设备 型号 序列号')}\{'{日期}'}\
-          </span>{' '}
-          自动归档，导出结束后会自动打开该目录。
-        </Notice>
       </div>
     </Card>
   );

@@ -259,6 +259,21 @@ export const Icon = {
       <path d="M12 11.8v8.7" strokeLinecap="round" />
     </svg>
   ),
+  /** 复制：两张叠起来的纸（与「另存为」的向下箭头区分开） */
+  copy: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="9" y="9" width="11" height="11" rx="2" strokeLinejoin="round" />
+      <path d="M15 6.6V5.4A1.4 1.4 0 0013.6 4H5.4A1.4 1.4 0 004 5.4v8.2A1.4 1.4 0 005.4 15h1.2" strokeLinecap="round" />
+    </svg>
+  ),
+  /** 导出：向下的箭头落到托盘上（= 存成文件） */
+  download: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3.8v10.4" strokeLinecap="round" />
+      <path d="M8.2 10.6L12 14.4l3.8-3.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.6 16.2v2.6a1.4 1.4 0 001.4 1.4h12a1.4 1.4 0 001.4-1.4v-2.6" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 /* ------------------------------------------------------------------ */

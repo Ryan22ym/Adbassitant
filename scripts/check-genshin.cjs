@@ -226,6 +226,16 @@ app.whenReady().then(async () => {
   const { registerIpc } = require('../dist-electron/electron/ipc.js');
   registerIpc();
 
+  /*
+   * 🔴 建窗之前先把主题重置成浅色。
+   * run-electron.py 给的临时 userData 是**跨轮复用**的，上一轮跑 check-arknights
+   * 之类切到哪个主题，这一轮启动就是哪个（实测启动成 glass，本脚本头两条断言
+   * 「默认主题是浅色」直接假 FAIL）。
+   * 断言要验的是「从已知起点出发」，不是「外部残留是什么」，所以这里先归零。
+   */
+  const { saveSettings } = require('../dist-electron/electron/services/settings.js');
+  saveSettings({ theme: 'light' });
+
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -292,11 +302,13 @@ app.whenReady().then(async () => {
   /*
    * 🔴 「原神和浅色、深色同一级」——这条就靠分段控件的选项表钉住：
    * 并列在同一行，而不是「主题模式」之外另开一行「外观皮肤」。
-   * ⚠️ v1.1.13 起多了「透明玻璃」，名单要跟着加 —— 否则这条会因为脚本自己过期而假 FAIL。
+   * ⚠️ v1.1.13 加「透明玻璃」、v1.1.17 加「明日方舟」，名单要跟着加 ——
+   *    否则这条会因为脚本自己过期而假 FAIL（已经栽过一次）。
    */
   ok(
-    JSON.stringify(a.themeModeLabels) === JSON.stringify(['浅色', '深色', '原神', '透明玻璃']),
-    '🔴 主题模式是「浅色 / 深色 / 原神 / 透明玻璃」同级并列',
+    JSON.stringify(a.themeModeLabels) ===
+      JSON.stringify(['浅色', '深色', '原神', '明日方舟', '透明玻璃']),
+    '🔴 主题模式是「浅色 / 深色 / 原神 / 明日方舟 / 透明玻璃」同级并列',
     JSON.stringify(a.themeModeLabels),
   );
   /* 浅色下必须还是原来那枚冷色图标（主题 logo 不能无差别地全局替换） */
@@ -317,7 +329,9 @@ app.whenReady().then(async () => {
   ok(b.themeAttr === 'genshin', 'data-theme 切成 genshin', `data-theme=${b.themeAttr}`);
   ok(b.skinAttr === null, '原神下依然没有 data-skin 属性', `data-skin=${b.skinAttr}`);
   ok(b.accentPicker === 0, '原神不给主题色入口', `picker=${b.accentPicker}`);
-  ok(/固定配色/.test(b.themeNote), '原神给出「配色固定」说明', b.themeNote.trim());
+  /* 原先这里断言「原神给出配色固定说明」；该说明文字已按用户要求去掉（整块不再渲染），
+     改成断言它确实不在，防止以后又被加回来。 */
+  ok(!/固定配色/.test(b.themeNote), '原神不再显示「配色固定」说明', b.themeNote.trim());
   ok(
     b.accent.toLowerCase() === '#a8853c',
     '米白底上的 --accent = 金（写死在主题里）',

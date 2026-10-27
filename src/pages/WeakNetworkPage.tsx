@@ -115,7 +115,6 @@ export default function WeakNetworkPage() {
   const scopeOpen = usePanelOpen('weaknet', 'scope');
   const presetsOpen = usePanelOpen('weaknet', 'presets');
   const deviceOpen = usePanelOpen('weaknet', 'device');
-  const howtoOpen = usePanelOpen('weaknet', 'howto');
 
   const [params, setParams] = useState<WeakNetParams>(DEFAULT_PARAMS);
   const [presets, setPresets] = useState<WeakNetPreset[]>([]);
@@ -541,6 +540,7 @@ export default function WeakNetworkPage() {
                 {status.running && awaitingManual ? '通道已就绪 · 待设置' : engineLabel}
               </Badge>
             </div>
+            {(status.running || hasShaping) && (
             <p className="text-dim wn-launch-desc">
               {status.running
                 ? status.mode === 'vpn'
@@ -555,10 +555,9 @@ export default function WeakNetworkPage() {
                       ? `tc/netem · 网卡 ${status.iface} ·
                          ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
                       : `svc 开关模式 · ${status.params?.durationSec ? `剩余 ${remain > 0 ? remain : 0} 秒` : '不限时'}`
-                : hasShaping
-                  ? `当前参数：${summaryText}`
-                  : '点「启动弱网模拟」会先套用默认弱网档（下行 1Mbps · 延迟 300ms），也可在下方自定义'}
+                : `当前参数：${summaryText}`}
             </p>
+            )}
           </div>
           <div className="wn-launch-actions">
             {status.running ? (
@@ -660,7 +659,6 @@ export default function WeakNetworkPage() {
             collapsible
             defaultOpen={paramsOpen}
             title="弱网参数"
-            subtitle="分别控制上行（设备发出）与下行（设备接收）"
             extra={
               <div className="row" style={{ gap: 6 }}>
                 <Button size="sm" variant="ghost" onClick={() => setParams({ ...DEFAULT_PARAMS, engine: params.engine })}>
@@ -694,8 +692,8 @@ export default function WeakNetworkPage() {
                 value={dirTab}
                 onChange={setDirTab}
                 options={[
-                  { value: 'up', label: '↑ 上行（设备发出）' },
-                  { value: 'down', label: '↓ 下行（设备接收）' },
+                  { value: 'up', label: '↑ 上行' },
+                  { value: 'down', label: '↓ 下行' },
                 ]}
               />
 
@@ -823,7 +821,7 @@ export default function WeakNetworkPage() {
           <Card collapsible defaultOpen={scopeOpen} title="生效范围与时长">
             <div className="col">
               <div className="grid-2">
-                <Field label="持续时长" hint="秒，0 = 直到手动停止">
+                <Field label="持续时长" hint="秒">
                   <Input
                     type="number"
                     min={0}
@@ -876,7 +874,6 @@ export default function WeakNetworkPage() {
             collapsible
             defaultOpen={presetsOpen}
             title="参数预设"
-            subtitle="保存当前参数，随时一键复用"
             extra={<Badge tone="default">{presets.length} 个</Badge>}
           >
             <div className="col">
@@ -917,7 +914,6 @@ export default function WeakNetworkPage() {
             collapsible
             defaultOpen={deviceOpen}
             title="设备能力"
-            subtitle="设备侧 VPN 的就绪情况"
             extra={
               <Button size="sm" variant="ghost" onClick={probeDevice} loading={probing} disabled={!current}>
                 重新探测
@@ -952,30 +948,6 @@ export default function WeakNetworkPage() {
                 <Notice tone={probe.vpnAuthorized ? 'accent' : 'warn'}>{probe.note}</Notice>
               </div>
             )}
-          </Card>
-
-          <Card collapsible defaultOpen={howtoOpen} title="实现原理与限制">
-            <div className="col" style={{ gap: 8 }}>
-              <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                <strong>上行</strong>指设备发出的流量（上传、请求），
-                <strong>下行</strong>指设备收到的流量（下载、响应）。两者可独立设置，模拟真实网络的不对称特性。
-              </p>
-              <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                <strong>设备侧 VPN</strong>：随包配套 App 在设备上建一条 tun 虚拟网卡，
-                把全部 IPv4 流量接进程序，在 IP 层逐包整形 ——
-                覆盖设备上<strong>所有 App</strong>（包括不走系统代理的原生 socket、QUIC/UDP 与游戏），
-                且<strong>不需要 Root</strong>。
-                丢包、乱序、错报都是真的在网络层发/丢/改包，不是应用层的等效近似。
-              </p>
-              <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                首次使用需要在手机上点一次系统授权：VPN 会看到设备全部流量，Android 强制要求用户亲自确认。
-                授权一次即可，之后直接启动。
-              </p>
-              <p className="text-dim" style={{ lineHeight: 1.7 }}>
-                设置持续时长后到点会自动恢复；也可以随时点「立即恢复网络」，
-                或直接在设备通知栏里关掉这条 VPN。若程序异常退出，下次启动会按落盘的会话标记自动把设备恢复干净。
-              </p>
-            </div>
           </Card>
         </div>
       </div>

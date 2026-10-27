@@ -16,6 +16,12 @@ export const MIRROR_DEFAULTS: Omit<MirrorOptions, 'serial'> = {
   maxFps: 60,
   noAudio: true,
   stayAwake: true,
+  /*
+   * 双击投屏窗口 = 点亮手机屏幕。
+   * 手机熄屏后 scrcpy 是一块黑板（熄屏状态 Android 会丢掉注入的 touch），
+   * 这个开关省掉"伸手按电源键"。默认开：keyevent 224 是幂等的，亮屏时无副作用。
+   */
+  wakeOnDoubleClick: true,
   alwaysOnTop: false,
   /*
    * 默认用 uhid：scrcpy 的 sdk 模式只能注入 ASCII、走不了设备的中文输入法

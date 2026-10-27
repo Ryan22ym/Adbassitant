@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, BrowserWindow, app, desktopCapturer, screen } from 'electron';
+import { ipcMain, dialog, shell, clipboard, BrowserWindow, app, desktopCapturer, screen } from 'electron';
 import { existsSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import {
@@ -148,7 +148,13 @@ import {
   setCrashWatchSink,
   syncCrashWatch,
 } from './services/crash';
-import type { AiAgentStepEvent, AiChatRequest } from '../shared/types';
+import {
+  defaultAiExportDir,
+  exportAiDoc,
+  pickAiExportPath,
+  savePastedImage,
+} from './services/ai-export';
+import type { AiAgentStepEvent, AiChatRequest, AiExportRequest } from '../shared/types';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
 import { getWallpaperDataURL } from './services/wallpaper';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
@@ -1313,6 +1319,45 @@ export function registerIpc() {
   );
 
   ipcMain.handle(IPC.AI_CRASH_STATUS, wrap(() => getCrashWatchStatus()));
+
+  /* ---------------- AI 回复转存 / 粘贴图片（v1.1.17） ---------------- */
+
+  /*
+   * 导出：docx 与 pdf 的生成都在主进程（写 ZIP / 起隐藏窗口打印）。
+   * 其余格式的正文是渲染层转好的，这里只落盘。
+   */
+  ipcMain.handle(
+    IPC.AI_EXPORT_SAVE,
+    wrap((_e, req: AiExportRequest) => exportAiDoc(req)),
+  );
+  ipcMain.handle(
+    IPC.AI_EXPORT_PICK,
+    wrap((_e, req: AiExportRequest) => pickAiExportPath(req)),
+  );
+  ipcMain.handle(IPC.AI_EXPORT_DIR, wrap(() => defaultAiExportDir()));
+
+  /*
+   * 写系统剪贴板（v1.1.17，「复制 AI 回复」用）。
+   *
+   * 🔴 为什么不让渲染层直接 navigator.clipboard.writeText：
+   *    那条路要求**文档处于焦点状态**。本程序是自绘无边框窗口，焦点很容易被
+   *    投屏窗口（scrcpy 的原生窗口）或资源管理器抢走，此时 writeText 会
+   *    静默失败（Promise resolve 了、剪贴板却是空的）—— 用户看到
+   *    「已复制」，粘贴出来什么都没有。主进程的 clipboard 模块没有这个前提。
+   */
+  ipcMain.handle(IPC.CLIPBOARD_WRITE, wrap((_e, text: string) => {
+    clipboard.writeText(String(text ?? ''));
+    return true;
+  }));
+
+  /*
+   * 剪贴板图片 → 临时文件。
+   * 渲染层给的是 Uint8Array（结构化克隆能直接过），这里转成 Buffer 落盘。
+   */
+  ipcMain.handle(
+    IPC.AI_PASTE_IMAGE,
+    wrap((_e, bytes: Uint8Array, mime?: string) => savePastedImage(bytes, mime || 'image/png')),
+  );
 
   /* ---------------- 设置 ---------------- */
 

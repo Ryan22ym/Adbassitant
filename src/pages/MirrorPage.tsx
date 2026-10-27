@@ -57,6 +57,9 @@ export default function MirrorPage() {
   const [alwaysOnTop, setAlwaysOnTop] = useState(
     initial.alwaysOnTop ?? MIRROR_DEFAULTS.alwaysOnTop!,
   );
+  const [wakeOnDblClick, setWakeOnDblClick] = useState(
+    initial.wakeOnDoubleClick ?? MIRROR_DEFAULTS.wakeOnDoubleClick!,
+  );
   const [keyboard, setKeyboard] = useState<'sdk' | 'uhid' | 'disabled'>(
     (initial.keyboard as 'sdk' | 'uhid' | 'disabled') ?? 'uhid',
   );
@@ -85,6 +88,7 @@ export default function MirrorPage() {
       noAudio,
       stayAwake,
       alwaysOnTop,
+      wakeOnDoubleClick: wakeOnDblClick,
       keyboard,
     };
     try {
@@ -247,6 +251,11 @@ export default function MirrorPage() {
               <Switch checked={noAudio} onChange={setNoAudio} label="关闭音频（推荐，更流畅）" />
               <Switch checked={stayAwake} onChange={setStayAwake} label="投屏期间保持设备唤醒" />
               <Switch checked={alwaysOnTop} onChange={setAlwaysOnTop} label="投屏窗口置顶" />
+              <Switch
+                checked={wakeOnDblClick}
+                onChange={setWakeOnDblClick}
+                label="双击投屏窗口点亮手机屏幕"
+              />
             </div>
           </div>
 
@@ -265,10 +274,12 @@ export default function MirrorPage() {
           <SC keys="Ctrl + H" desc="返回 / Home" />
           <SC keys="Ctrl + B" desc="返回键" />
           <SC keys="Ctrl + S" desc="多任务切换" />
-          <SC keys="Ctrl + P" desc="电源键（熄屏）" />
-          <SC keys="Ctrl + O" desc="打开屏幕" />
+          <SC keys="Ctrl + P" desc="电源键（熄屏 / 亮屏切换）" />
+          <SC keys="Ctrl + O" desc="只关闭屏幕（投屏继续，不锁屏）" />
+          <SC keys="Ctrl + Shift + O" desc="打开屏幕（锁屏时仍需在画面里上滑解锁）" />
           <SC keys="Ctrl + W" desc="关闭投屏窗口" />
           <SC keys="Ctrl + C / V" desc="双向剪贴板同步" />
+          <SC keys="双击投屏窗口" desc="点亮手机屏幕（熄屏时，省得去按电源键）" />
           <SC keys="拖到投屏窗口" desc="APK 自动安装，其他文件存入 Download" />
           <SC keys="拖到本程序窗口" desc="APK 安装并显示进度，防止重复安装" />
         </div>

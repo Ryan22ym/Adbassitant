@@ -381,10 +381,12 @@ app.whenReady().then(async () => {
     '🔴 主题色底图是生成的渐变（不是图片）',
     String(g2.backdropBg).slice(0, 48),
   );
+  /* 原先断言「主题色模式明确提示壁纸已停用」；那句提示已按用户要求删掉，
+     改成断言它不在，避免以后又被加回来。 */
   ok(
-    (g2.notes || []).some((n) => n.includes('壁纸已停用') || n.includes('停用')),
-    '🔴 主题色模式明确提示「壁纸已停用」',
-    (g2.notes || []).find((n) => n.includes('停用'))?.slice(0, 48),
+    !(g2.notes || []).some((n) => n.includes('停用')),
+    '主题色模式不再堆一句「壁纸已停用」的说明',
+    (g2.notes || []).find((n) => n.includes('停用'))?.slice(0, 48) || '(none)',
   );
   const blueBg = g2.backdropBg;
   ok(g2.tintAttr === 'blue', '默认色系 = 淡蓝', `data-glass-tint=${g2.tintAttr}`);
@@ -437,10 +439,11 @@ app.whenReady().then(async () => {
     '🔴 原神侧栏是深靛蓝 #4f515d（不是自定义色那套）',
     `sidebarBg=${n1.sidebarBg}`,
   );
+  /* 原神那句「配色固定」说明已按用户要求去掉（整块不渲染），断言反过来钉住 */
   ok(
-    n1.fixedNote.includes('固定配色'),
-    '原神仍给出「配色固定」说明',
-    n1.fixedNote.slice(0, 30),
+    !n1.fixedNote.includes('固定配色'),
+    '原神不再显示「配色固定」说明',
+    n1.fixedNote.slice(0, 30) || '(none)',
   );
 
   /* ================= 收尾 ================= */

@@ -114,27 +114,57 @@ const GLASS_BACKDROPS: { value: GlassBackdropMode; label: string }[] = [
 ];
 
 /**
- * 主题模式清单（v1.1.11 起三选一，同一级）。
+ * 主题模式清单（v1.1.11 起同级多选一）。
  *
- * 「原神」和浅色/深色是**平级**的第三个选项，不是主题色、也不是浅/深的下级：
- * 它是一整套自成一体、且**没有深色变体**的视觉方案
+ * 「原神」「明日方舟」和浅色/深色是**平级**的选项，不是主题色、也不是浅/深的下级：
+ * 它们是一整套自成一体、且**没有深色变体**的视觉方案
  * （配色 + 描边 + 角饰 + 圆角尺度，见 shared/types.ts 的 ThemeId）。
  *
- * ⚠️ 主题自带固定配色（原神就是暖金），所以它生效时主题色那一行换成一句说明 ——
+ * ⚠️ 这类主题自带固定配色，所以它生效时主题色那一行换成一句说明 ——
  *    不给入口，但要让用户知道为什么没有，否则会以为是坏了。
+ *    说明文案统一放在 FIXED_ACCENT_NOTE 里，别在这里散着写。
  *
- * ⚠️ 扩展位：加「崩铁」这类主题时，这里加一项 + 建一个 theme-<id>.css 即可。
+ * 扩展位：加新主题时这里加一项 + 建一个 theme-<id>.css + 往
+ *    store/app.ts 的 UI_THEMES 里加 id 即可（那张清单的注释列了全部五处）。
+ *
+ * 🔴 v1.1.17：**「明日方舟」暂时不对外露出**，用 `hidden: true` 收起来 ——
+ *    它这一轮还在打磨（底图 / 玻璃面板都还在调），不想让用户切进去。
+ *    注意是「留在数组里 + hidden」而不是从数组删掉，两个理由：
+ *      ① 回归脚本靠真实点击这个分段项切主题（check-arknights 全程如此）；
+ *      ② 当前主题本来就是 arknights 时，删掉选项会让分段控件一个都不高亮。
+ *    ⚠️ 恢复入口：把那行的 `hidden: true` 删掉即可，别去动别的地方。
+ *    ⚠️ 收起入口 ≠ 撤掉主题：`data-theme='arknights'`、theme-arknights.css、
+ *       UI_THEMES 白名单全都照常生效，已经停在这个主题上的用户不受影响。
  *
  * 「透明玻璃」（v1.1.13）和原神同类（都是自成一套的主题），但改造范围更大：
  * 它还要**窗口本身**透明无边框（主进程配合），并自带两个可调参数 ——
  * 见下面 theme === 'glass' 那两个滑杆。
  */
-const THEME_MODES: { value: 'light' | 'dark' | 'genshin' | 'glass'; label: string }[] = [
+const THEME_MODES: {
+  value: 'light' | 'dark' | 'genshin' | 'glass' | 'arknights';
+  label: string;
+  hidden?: boolean;
+}[] = [
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' },
   { value: 'genshin', label: '原神' },
+  { value: 'arknights', label: '明日方舟', hidden: true },
   { value: 'glass', label: '透明玻璃' },
 ];
+
+/**
+ * 「配色写死在主题里、不给切」的主题 → 设置页那一行显示的解释。
+ *
+ * 用一张表而不是 `theme === 'genshin' ? … : theme === 'arknights' ? …`：
+ * 加第三个同类主题时只要加一行，渲染处不用动（以前那种写法每加一个主题
+ * 就得改一遍嵌套三元，最容易在渲染分支里漏掉新主题，症状是明明锁了色、
+ * 设置页却还摆着主题色选择器，用户点了没反应）。
+ */
+const FIXED_ACCENT_NOTE: Partial<Record<'genshin' | 'arknights', string>> = {
+  // 原神主题的配色说明已去掉（用户反馈是废话），保留空串就不会渲染那一行
+  genshin: '',
+  arknights: '明日方舟主题使用固定配色（白面板 / 标志蓝），不提供主题色切换',
+};
 
 /**
  * 每个版本的一句话更新说明，key 为 package.json 的完整版本号。
@@ -146,6 +176,11 @@ const THEME_MODES: { value: 'light' | 'dark' | 'genshin' | 'glass'; label: strin
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.18':
+    '投屏新增「双击亮屏」：手机熄屏后投屏窗口就是一块黑的，这时对着投屏画面双击一下就能点亮手机屏幕，不用再伸手去按电源键（投屏页可以关掉这个行为）。顺带修正投屏页的快捷键说明 —— 原来写的「Ctrl + O 打开屏幕」是错的，Ctrl + O 是关闭屏幕，打开屏幕是 Ctrl + Shift + O。修复实时 Logcat 日志一多就把「开始抓取 / 保存为文件」那排按钮顶到屏幕外的问题，现在按钮固定贴在卡片底部、只有日志区滚动。各页面多余的说明小字也一并清掉了。',
+  '1.1.17':
+    '新增「明日方舟」主题：标志蓝 #49aefb、全直角、卡片带斜切角标，配色固定不提供切换。界面底色铺了工程网格与网点纸纹理；右侧功能块改成透明模糊的毛玻璃面板，能透出底下的分区网格与明暗走向，边缘一圈亮白反光；左侧功能栏不再是整块纯色，带斜纹、刻度尺和斜切的选中块，每一格左侧压着一枚放大的浅灰图标当底纹。白色与深蓝按钮都压上了工业风的斜向条纹。该主题下左侧功能栏换成配套的蓝色标志与蓝色应用名。\n' +
+    'AI 助手回复可一键复制；整篇回复或其中的表格、代码块能导出成 md / docx / pdf / html / csv 文件，默认存到 D:\\adbdocs，导出时可改目录或另存为，同名不覆盖；输入框支持 Ctrl + V 直接贴图、也支持把文件拖进来当附件（仅 AI 页，其它页仍是拖入安装）；回复里的表格改为渲染成真表格。',
   '1.1.16':
     '新增「记录窗口大小」：拖动改变窗口大小或位置后会自动记下，下次启动按上次的样子打开；最大化的状态也会记住，点还原能回到你上次调好的尺寸，不会弹回一整屏。设置页新增「窗口」卡片，可随时关掉这个记录，或一键恢复默认的 1280 × 860。',
   '1.1.15':
@@ -302,7 +337,7 @@ export default function SettingsPage() {
     }
   };
 
-  const changeTheme = (t: 'light' | 'dark' | 'genshin' | 'glass') => {
+  const changeTheme = (t: 'light' | 'dark' | 'genshin' | 'glass' | 'arknights') => {
     applyTheme(t);
     update({ theme: t });
   };
@@ -443,27 +478,39 @@ export default function SettingsPage() {
         collapsible
         defaultOpen={appearanceOpen}
         title="外观"
-        subtitle="主题模式、主题色与底图"
       >
         <Field label="主题模式">
           <Segmented
             value={theme}
-            onChange={(v) => changeTheme(v as 'light' | 'dark' | 'genshin' | 'glass')}
+            onChange={(v) => changeTheme(v as 'light' | 'dark' | 'genshin' | 'glass' | 'arknights')}
             options={THEME_MODES}
           />
+          {/*
+            入口收起期间（THEME_MODES 里 arknights 带 hidden）当前主题不在可见选项里，
+            分段控件会「一个都不高亮」—— 不交代一句，正在用这个主题的人会以为界面坏了。
+            ⚠️ 恢复入口时这段一起删掉。
+          */}
+          {theme === 'arknights' && (
+            <div className="text-dim">
+              当前使用的主题还在调整中，暂不提供切换入口；点上面任意一项即可换到其它主题。
+            </div>
+          )}
         </Field>
 
         {/*
-          主题色 / 底图那一块，按主题分三种形态（v1.1.14 起）：
-          · 原神        → 配色是它世界观的一部分（暖金），不提供切换，只留一句交代；
-          · 透明玻璃    → 「底图模式（壁纸 / 主题色）」+ 色系选择，两者**互斥**；
-          · 浅色 / 深色 → 主题色（7 套 + 自定义色盘）。
+          主题色 / 底图那一块，按主题分三种形态（v1.1.14 起，v1.1.17 起用表驱动）：
+          · 原神 / 明日方舟 → 配色是它视觉的一部分（暖金 / 标志蓝），不提供切换，
+                              只留一句交代（文案见 FIXED_ACCENT_NOTE）；
+          · 透明玻璃        → 「底图模式（壁纸 / 主题色）」+ 色系选择，两者**互斥**；
+          · 浅色 / 深色     → 主题色（7 套 + 自定义色盘）。
         */}
-        {theme === 'genshin' ? (
-          <div className="field accent-field">
-            <span className="field-label">主题色</span>
-            <div className="text-dim">原神主题使用固定配色（米白 / 淡金），不提供主题色切换</div>
-          </div>
+        {theme === 'genshin' || theme === 'arknights' ? (
+          FIXED_ACCENT_NOTE[theme] ? (
+            <div className="field accent-field">
+              <span className="field-label">主题色</span>
+              <div className="text-dim">{FIXED_ACCENT_NOTE[theme]}</div>
+            </div>
+          ) : null
         ) : theme === 'glass' ? (
           /*
             透明玻璃主题的底图（v1.1.14 重构）。
@@ -471,7 +518,7 @@ export default function SettingsPage() {
             底图模式二选一（互斥），主题色模式下再挑色系。
           */
           <>
-            <Field label="底图模式" hint="两者互斥，一次只能用一种">
+            <Field label="底图模式">
               <Segmented
                 value={glassBackdrop}
                 onChange={(v) => changeGlassBackdrop(v as GlassBackdropMode)}
@@ -514,11 +561,11 @@ export default function SettingsPage() {
                 选中一种模式后，另一种就是**不可用**状态，而不是「两个都能开」。
                 不把话说出来的话，用户会以为色系旁边少了什么开关。
               */}
-              <div className="text-dim accent-note">
-                {glassBackdrop === 'tint'
-                  ? '底图按所选色系自动生成（低饱和柔和渐变），桌面壁纸已停用。需要用壁纸请先把上面的「底图模式」切回「桌面壁纸」。'
-                  : '当前用你电脑的桌面壁纸当底图。想换成主题色底图，先把上面的「底图模式」切到「主题色」。'}
-              </div>
+              {glassBackdrop !== 'tint' && (
+                <div className="text-dim accent-note">
+                  当前用你电脑的桌面壁纸当底图。想换成主题色底图，先把上面的「底图模式」切到「主题色」。
+                </div>
+              )}
             </div>
 
             {glassBackdrop === 'wallpaper' && (
@@ -645,7 +692,7 @@ export default function SettingsPage() {
         */}
         {theme === 'glass' && (
           <div className="glass-tune">
-            <Field label="不透明度" hint="数值越小越通透，越大越实">
+            <Field label="不透明度">
               <Slider
                 value={glassOpacity}
                 onInput={(v) => onGlassInput(v, glassRoughness)}
@@ -653,28 +700,13 @@ export default function SettingsPage() {
               />
             </Field>
 
-            <Field label="模糊程度" hint="数值越大底图磨得越糊（只剩色块）；0 为不模糊">
+            <Field label="模糊程度">
               <Slider
                 value={glassRoughness}
                 onInput={(v) => onGlassInput(glassOpacity, v)}
                 onCommit={(v) => commitGlass(glassOpacity, v)}
               />
             </Field>
-
-            {/*
-              一句必要的提醒：这里说的是**两个滑杆的关系**。
-              不写清楚的话，用户在浅色底图上把模糊拉满却觉得「本来就挺清楚」，
-              会以为滑杆坏了。
-              ⚠️ 别写「桌面那层磨砂由系统提供，需要 Win10 1809+」——
-                 那是 v1.1.13 之前走系统 Acrylic 时代的说法，现在是「模拟玻璃」：
-                 底图由程序自己铺（壁纸文件或现画的渐变），模糊由 CSS backdrop-filter
-                 做，跟系统版本无关（Win10 也能用）。
-            */}
-            <div className="text-dim glass-tune-hint">
-              模糊程度决定「看得见多少细节」：45 左右底图只剩柔和的色块（默认）；
-              调到 20 以下会重新认出图标和文字轮廓；拉到 0 则完全清晰。
-              两个滑杆对「桌面壁纸」与「主题色」两种底图都生效。
-            </div>
           </div>
         )}
 
@@ -691,7 +723,6 @@ export default function SettingsPage() {
       */}
       <Card
         title="窗口"
-        subtitle="记住窗口大小和位置，下次打开还是这个样子"
         collapsible
         defaultOpen={windowOpen}
       >
@@ -720,17 +751,10 @@ export default function SettingsPage() {
           </Button>
         </div>
 
-        <p className="setting-note">
-          拖过窗口边缘后会自动记下大小和位置，下次启动按这个样子打开（最大化状态也会记住，
-          点还原能回到你上次调好的尺寸）。这里的数字是界面逻辑像素，不受系统缩放影响。
-          关掉开关后下次启动回到默认的 1280 × 860 居中，但已记下的尺寸会保留 ——
-          重新打开开关就能回到原来的样子。
-        </p>
       </Card>
 
       <Card
         title="关于"
-        subtitle="程序信息与当前版本的更新说明"
         collapsible
         defaultOpen={aboutOpen}
       >
@@ -749,7 +773,6 @@ export default function SettingsPage() {
 
       <Card
         title="默认保存目录"
-        subtitle="截图、录屏、日志导出与文件拉取的默认位置"
         collapsible
         defaultOpen={dirsOpen}
       >
@@ -777,7 +800,6 @@ export default function SettingsPage() {
 
       <Card
         title="运行日志"
-        subtitle="操作记录按日期存成本地文件，只保留最近 24 小时"
         collapsible
         defaultOpen={logsOpen}
       >
@@ -806,7 +828,6 @@ export default function SettingsPage() {
       {envCheckOn && (
         <Card
           title="环境自检"
-          subtitle="检查 adb、scrcpy 等组件是否完整"
           collapsible
           defaultOpen={envOpen}
         extra={
@@ -906,13 +927,6 @@ export default function SettingsPage() {
             aria-label="插入手机自动投屏"
           />
         </div>
-        <p className="setting-note">
-          只对同时满足三条的设备生效：USB 连接的真机、已授权、且曾在本机手动投屏成功过。
-          {mirroredCount > 0
-            ? `当前已记录 ${mirroredCount} 台。`
-            : '目前还没记录到设备 —— 先手动投屏成功一次，那台设备才会进入自动投屏范围。'}{' '}
-          开启后关闭窗口会改为最小化到托盘（否则程序退出后没人监听插入），双击托盘图标可重新打开。
-        </p>
         </Card>
       )}
 
@@ -1599,14 +1613,6 @@ function UpdatePanel() {
               <span className="text-dim">正在交接给更新助手，程序马上退出…</span>
             </div>
           )}
-
-          <div className="text-dim update-note">
-            两条更新入口：<b>在线更新</b>从「更新源设置」里的地址取版本与更新包（下载过程可取消，
-            中途断网不会留下坏包）；<b>选择更新包…</b>用于离线 / 内网环境，行为与以前完全一致。
-            更新包校验项：产品与版本号、Electron 运行时、运行库指纹（adb / scrcpy 等）、
-            每个文件的 SHA-256。任一项不符都会拒绝，并提示改用完整安装包。
-            日志与备份在 <span className="mono">{ctx.updateDir}</span>。
-          </div>
         </div>
         )}
       </Card>

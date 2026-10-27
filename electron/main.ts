@@ -6,6 +6,7 @@ import { registerIpc, setSettingsChangedHook, setGlassWindowHook } from './ipc';
 import { cleanupLogs } from './services/logger';
 import { listDevices, log, binDir } from './services/adb';
 import { startMirror } from './services/mirror';
+import { stopWakeWatch } from './services/wake-window';
 import { getSettings } from './services/settings';
 import { getUiConf, resolveUiConfDir } from './services/ui-conf';
 import { pickAutoConnectTarget } from './services/auto-connect';
@@ -760,6 +761,8 @@ app.on('before-quit', () => {
   appQuitting = true;
   /* 崩溃监听挂着一条 adb logcat 子进程，退出时收干净（否则它会变成孤儿进程） */
   shutdownCrashWatch();
+  /* 投屏窗口的鼠标钩子同理：拆掉，别留一个进程在后台吃全局鼠标事件 */
+  stopWakeWatch();
 });
 
 let quitting = false;

@@ -26,15 +26,16 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/': { title: '设备', desc: '查看设备状态与详细信息' },
   '/mirror': { title: '投屏', desc: '通过 scrcpy 实时投屏并控制设备' },
   '/tools': { title: '常用工具', desc: '截图、录屏、分辨率、应用安装与文件传输' },
-  '/apps': { title: '应用管理', desc: '已装应用的管理，以及本地安装包按版本自动归类' },
-  '/logcat': { title: '实时 Logcat', desc: '流式抓取设备日志，过滤与一键保存' },
-  '/weaknet': { title: '弱网模拟', desc: '模拟带宽、延迟、抖动、丢包等真实网络状况' },
+  // 以下这些页面顶栏描述也是废话，一并去掉（标题本身已说明用途）
+  '/apps': { title: '应用管理', desc: '' },
+  '/logcat': { title: '实时 Logcat', desc: '' },
+  '/weaknet': { title: '弱网模拟', desc: '' },
   // 连点器页的顶栏描述去掉了（用户反馈这句是废话）：标题「自动连点器」已经说清楚了
   '/clicker': { title: '自动连点器', desc: '' },
-  '/command': { title: '命令终端', desc: '直接执行任意 adb 命令' },
+  '/command': { title: '命令终端', desc: '' },
   '/logs': { title: '运行日志', desc: '实时查看操作记录并一键导出' },
-  '/ai': { title: 'AI 助手', desc: '与大模型对话，查看崩溃自动分析报告' },
-  '/settings': { title: '设置', desc: '外观、默认目录与环境自检' },
+  '/ai': { title: 'AI 助手', desc: '' },
+  '/settings': { title: '设置', desc: '' },
 };
 
 /**
@@ -444,6 +445,22 @@ export default function App() {
    */
   const isGlass = theme === 'glass';
 
+  /*
+   * 明日方舟主题的「底纹层」（v1.1.17 悬浮化改造）。
+   *
+   * 和玻璃主题的 .glass-backdrop 同一个套路、同一条硬约束：
+   *   · `position:fixed; inset:0; z-index:-1` —— 铺满视口、压在 .app-shell 内容之下；
+   *   · **必须是页面内真实 DOM 元素**，不能是 .app-shell 的 CSS background-image
+   *     —— 半透明面板的 backdrop-filter 只采样「页面内、自己背后已绘制的像素」，
+   *       祖先的 CSS 背景图不算（这个坑在玻璃主题里踩过一次，见 MEMORY）。
+   *
+   * 区别：玻璃那边是主进程抓来的真实桌面（IPC 送进来），这边**全部由 CSS 画**
+   * （网格 / 光晕 / 斜纹 / 噪点），不需要主进程配合，也不需要 IPC。
+   *
+   * 没有它，面板就是「半透明压在纯色上」，等于把纯色刷淡一档 —— 悬浮感是假的。
+   */
+  const isArknights = theme === 'arknights';
+
   return (
     <div className="app-shell">
       {/*
@@ -473,6 +490,13 @@ export default function App() {
           aria-hidden="true"
         />
       )}
+
+      {/*
+        明日方舟主题的底纹层。内容全在 theme-arknights.css 的 .ark-backdrop 里，
+        这里只负责「存在」—— 它不在的时候（主题切走）整层直接被移除，
+        不留一个空盒子占着负 z-index（那会让玻璃主题的层序判断变复杂）。
+      */}
+      {isArknights && <div className="ark-backdrop" aria-hidden="true" />}
 
       {/*
         自绘标题栏。窗口已经没有系统标题栏了，这一条既提供底色（跟着主题色走），

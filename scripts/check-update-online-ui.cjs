@@ -444,8 +444,9 @@ function ensureBuilt() {
     check('未选包时不出现「立即更新并重启」（不会误点）', !/立即更新并重启/.test(part1.text));
     check('未配置态不出现「下载并更新」', !part1.hasDownloadBtn);
     check('「更新源」设置卡片存在（输入框 + 保存）', part1.hasSourceInput && part1.hasSourceSave);
-    check('面板仍写明校验项（含 SHA-256）', /SHA-256/.test(part1.text));
-    check('面板写明两条更新入口', /在线更新/.test(part1.text) && /选择更新包/.test(part1.text));
+    /* 面板底部那段「两条更新入口 / 校验项 SHA-256」的说明文字已被去掉（用户反馈是废话），
+       原先针对它的两条断言（写明 SHA-256、写明两条入口）随之删除；入口本身由按钮承载，
+       仍在上面「保留「选择更新包…」离线兜底入口」这条里覆盖。 */
 
     /* ---------------- 段二：填地址 → 保存 → 检查更新 ---------------- */
 

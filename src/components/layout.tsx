@@ -7,11 +7,22 @@ import { Badge, Button } from './ui';
 import { Icon } from './icons';
 import brandIcon from '@/assets/app-icon.png';
 /*
- * 「原神」主题专用的品牌标记（同形换色，见 scripts/make-logo-genshin.py）。
+ * 主题专用品牌标记（同形换色，见 scripts/make-logo-*.py）。
  * 只在应用界面里按主题切换，exe / 任务栏 / 快捷方式仍用 app-icon.png。
+ *
+ * 🔴 加新主题时这里要同步：THEME_BRAND 里加一条映射 + 生成对应 png。
+ *    漏了这一处不会报错，表现是「主题切过去了，左上角还是那枚冷色原图标」——
+ *    在主色和侧栏都换掉之后，那块图标是整屏唯一的异色，特别扎眼。
  */
 import brandIconGenshin from '@/assets/logo-genshin.png';
+import brandIconArknights from '@/assets/logo-arknights.png';
 import './layout.css';
+
+/** 主题 → 配套品牌标记。表里没有的主题用主图标（浅色 / 深色 / 透明玻璃） */
+const THEME_BRAND: Record<string, string> = {
+  genshin: brandIconGenshin,
+  arknights: brandIconArknights,
+};
 
 /* ------------------------------------------------------------------ */
 /* 侧边导航                                                            */
@@ -57,9 +68,9 @@ export function Sidebar() {
   // 左侧功能栏收起状态（收起后只显示图标，见 layout.css 的 .sidebar.collapsed）
   const collapsed = useApp((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useApp((s) => s.setSidebarCollapsed);
-  // 当前主题：原神主题要用配套的那枚 logo（冷色图标压在暖调侧栏上很突兀）
+  // 当前主题：自带配色的主题要用配套的那枚 logo（冷色图标压在暖调/近黑侧栏上很突兀）
   const theme = useApp((s) => s.theme);
-  const brandMark = theme === 'genshin' ? brandIconGenshin : brandIcon;
+  const brandMark = THEME_BRAND[theme] ?? brandIcon;
 
   /*
    * 导航项 = 定义表 ∩ Conf。
@@ -134,6 +145,17 @@ export function Sidebar() {
             title={collapsed ? item.label : undefined}
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
+            {/*
+              放大版同款图标，只当底图（v1.1.17 明日方舟主题）：
+              同一枚 svg 再渲染一次，CSS 放到 62px、灰化、压到 9% 不透明度，
+              由外层 span 裁掉下半截，露出「上半个放大图标」当每一格的刻印。
+              🔴 不用伪元素是因为图标是 React 节点、伪元素拿不到；
+                 不用 background-image 引 png 是因为要跟着图标集同步改。
+              ⚠️ 除 arknights 外的主题靠 CSS display:none 关掉，DOM 常驻不影响它们。
+            */}
+            <span className="nav-ghost" aria-hidden="true">
+              {item.icon}
+            </span>
             <span className="nav-icon">{item.icon}</span>
             <span className="nav-label">{item.label}</span>
             {item.to === '/' && onlineCount > 0 && (

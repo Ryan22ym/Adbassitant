@@ -127,6 +127,7 @@ function serializeAiConfig(cfg: AiConfig): Record<string, unknown> {
     crashPrompt: cfg.crashPrompt,
     crashDir: cfg.crashDir,
     crashLogMinutes: cfg.crashLogMinutes,
+    exportDir: cfg.exportDir,
   };
 }
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Card, Button, Badge, Empty, Segmented, Input, Field, Select, Notice } from '@/components/ui';
+import { Card, Button, Badge, Empty, Segmented, Input, Field, Select } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
 import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
@@ -443,10 +443,12 @@ export default function LogcatPage() {
     <>
       <Card
         collapsible
+        /* logcat-card：让整张卡片吃满可视高度，日志区自己伸缩，底栏按钮永远贴在卡片底部。
+           见 pages.css 的「实时 Logcat —— 高度分配」一段。 */
+        className="logcat-card"
         defaultOpen={streamOpen}
         padding={false}
         title="实时 Logcat"
-        subtitle="流式抓取设备日志，支持级别 / TAG / 关键字 / 进程过滤，可一键保存"
         extra={
           <>
             {running ? (
@@ -590,11 +592,6 @@ export default function LogcatPage() {
                 </div>
               </Field>
             </div>
-
-            <Notice tone="accent">
-              抓取过程中修改级别 / TAG / 关键字会自动生效，不需要重新开始。
-              缓冲区变更需要重启抓取。建议先用「main + system + crash」覆盖常见排障场景。
-            </Notice>
           </div>
         )}
 

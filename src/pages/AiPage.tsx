@@ -18,6 +18,15 @@ import { call, tryCall } from '@/lib/ipc';
 import { fileName, formatTime } from '@/lib/format';
 import { activeProviderOf, isAiUsable } from '@shared/ai-conf';
 import type { AiConfig, AiProvider } from '@shared/ai-conf';
+import {
+  detectDocParts,
+  extOfFormat,
+  formatsOf,
+  mdToHtml,
+  partToText,
+  readMdTable,
+} from '@shared/ai-export';
+import type { AiDocFormat, AiDocPart } from '@shared/ai-export';
 import { IPC } from '@shared/types';
 import type {
   AiAdbStep,
@@ -25,6 +34,8 @@ import type {
   AiAttachment,
   AiChatMessage,
   AiChatResult,
+  AiExportRequest,
+  AiExportResult,
   AiSession,
   AiSessionMeta,
   AiTestResult,
@@ -64,6 +75,51 @@ function uid(): string {
   msgSeq += 1;
   return `m${Date.now().toString(36)}-${msgSeq.toString(36)}`;
 }
+
+/**
+ * 把一段文本放进剪贴板（v1.1.17）。
+ *
+ * 三级链，从最可靠的往下退：
+ *   ① **主进程 clipboard** —— 不要求窗口焦点，自绘窗口里唯一稳的一条路；
+ *   ② `navigator.clipboard.writeText()` —— 需要安全上下文 + 文档有焦点；
+ *   ③ `execCommand('copy')` —— 最后的兜底。
+ *
+ * 🔴 把 ① 放最前面是有实测依据的：窗口被投屏窗口（scrcpy 原生窗口）抢走焦点时，
+ *    ② 不会报错，而是**静默失败**（Promise resolve、剪贴板仍是空的）——
+ *    界面显示「已复制」，粘出来什么都没有。只有 ① 没有这个前提。
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    const done = await window.adbApi.clipboardWrite(text);
+    if (done) return true;
+  } catch {
+    /* IPC 不可用（理论上不会）→ 往下退 */
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 落到下面的兜底 */
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 图片扩展名（拖放 / 粘贴时用来判断该不该按「图片附件」处理） */
+const IMG_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
 
 export default function AiPage() {
   /*
@@ -197,6 +253,7 @@ function ConfigCard({
             crashPrompt: draft.crashPrompt,
             crashDir: draft.crashDir,
             crashLogMinutes: draft.crashLogMinutes,
+            exportDir: draft.exportDir,
           }),
         { silent: true },
       );
@@ -341,7 +398,7 @@ function ConfigCard({
           )}
 
           <details className="ai-cfg-more">
-            <summary>提示词与崩溃分析设置</summary>
+            <summary>提示词、崩溃分析与导出目录</summary>
             <div className="ai-cfg-col">
               <Field label="日常对话系统提示词">
                 <Textarea
@@ -390,6 +447,29 @@ function ConfigCard({
                   />
                 </Field>
               </div>
+              <Field
+                label="AI 文档导出目录"
+                hint="对话框里点「保存」默认存到这里；每次导出也可以临时改或另存为"
+              >
+                <Input
+                  value={draft.exportDir}
+                  placeholder="D:\adbdocs"
+                  onChange={(e) => setDraft({ ...draft, exportDir: e.target.value })}
+                  suffix={
+                    <button
+                      type="button"
+                      className="ai-key-toggle"
+                      onClick={() =>
+                        void tryCall<string>(() => window.adbApi.pickDir()).then((d) => {
+                          if (d) setDraft({ ...draft, exportDir: d });
+                        })
+                      }
+                    >
+                      选择
+                    </button>
+                  }
+                />
+              </Field>
             </div>
           </details>
         </div>
@@ -506,6 +586,12 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
   const [allowAdb, setAllowAdb] = useState(readAllowAdb);
   const [liveSteps, setLiveSteps] = useState<AiAdbStep[]>([]);
   const [stopping, setStopping] = useState(false);
+  /** 正在准备导出的那条助手消息（null = 对话框关着） */
+  const [exportMsg, setExportMsg] = useState<AiChatMessage | null>(null);
+  /** 有文件拖到输入区上方（只影响这块的描边与提示，不影响整窗拖放安装） */
+  const [dragOn, setDragOn] = useState(false);
+  /** dragenter/dragleave 会在子元素间反复触发，用计数器判断是否真的离开 */
+  const dragDepth = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
 
   /* 本次请求的标识：既用来认领推送，也用来发「停止」。
@@ -619,6 +705,106 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
     const paths = await tryCall<string[]>(() => window.adbApi.pickFiles(true));
     if (!paths?.length) return;
     setAtts((a) => [...a, ...paths.map((p) => ({ kind: 'file' as const, path: p, name: fileName(p) }))]);
+  };
+
+  /**
+   * 把「拖进来 / 粘贴进来」的 File 对象变成附件（v1.1.17）。
+   *
+   * 两种来源的差别只在拿不拿得到路径：
+   *   · 从资源管理器拖 / 复制文件 —— `webUtils.getPathForFile()` 有值，直接用；
+   *   · 剪贴板里的截图、网页里拖出来的图、压缩包内直接拖出来的虚拟文件 ——
+   *     没有路径，但**图片本身有字节**，于是存成临时文件换一个路径（主进程做）。
+   *     非图片又没路径的一律跳过（二进制内容既没法给模型看，也没法落盘取名）。
+   *
+   * 🔴 图片按扩展名 / MIME 双判：从某些软件拖出来的文件 MIME 是空字符串，
+   *    `file.type` 靠不住；而剪贴板截图常常有 MIME 却没有文件名后缀。
+   */
+  const attachFromFiles = async (files: File[], from: 'paste' | 'drop') => {
+    if (!files.length) return;
+    const added: AiAttachment[] = [];
+    let skipped = 0;
+    for (const f of files) {
+      const path =
+        (typeof window.adbApi.getPathForFile === 'function'
+          ? window.adbApi.getPathForFile(f)
+          : '') ||
+        (f as File & { path?: string }).path ||
+        '';
+      if (path) {
+        const isImg = IMG_EXT_RE.test(path) || /^image\//.test(f.type);
+        added.push({ kind: isImg ? 'image' : 'file', path, name: f.name || fileName(path) });
+        continue;
+      }
+      if (/^image\//.test(f.type)) {
+        const saved = await tryCall<string>(async () => {
+          const buf = new Uint8Array(await f.arrayBuffer());
+          return window.adbApi.aiPasteImage(buf, f.type);
+        });
+        if (saved) added.push({ kind: 'image', path: saved, name: fileName(saved) });
+        else skipped += 1;
+        continue;
+      }
+      skipped += 1;
+    }
+    if (added.length) setAtts((a) => [...a, ...added]);
+    if (skipped > 0) {
+      useApp
+        .getState()
+        .toast(
+          'warn',
+          `已忽略 ${skipped} 个文件`,
+          from === 'paste' ? '剪贴板里只有文本/无法读取的内容' : '拿不到这些文件的本地路径（试试先存到磁盘再拖进来）',
+        );
+    }
+  };
+
+  /**
+   * Ctrl+V 粘贴（v1.1.17）。
+   *
+   * 只在拿到**文件/图片**时才接管；纯文本一律放行走默认粘贴 ——
+   * 输入框最主要的功能还是打字，绝不能因为这段逻辑把文字粘贴弄坏。
+   * 接管时必须 preventDefault，否则从资源管理器复制的文件会以「路径文本」的形式
+   * 插进输入框，同时附件里多一份，变成用户看不懂的重复。
+   */
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const files: File[] = [];
+    for (const it of Array.from(dt.items || [])) {
+      if (it.kind !== 'file') continue;
+      const f = it.getAsFile();
+      if (f) files.push(f);
+    }
+    if (files.length === 0 && dt.files?.length) files.push(...Array.from(dt.files));
+    if (files.length === 0) return;
+    e.preventDefault();
+    void attachFromFiles(files, 'paste');
+  };
+
+  /** 拖放（v1.1.17）：只在这个输入区生效，页面其它地方的整窗拖放安装不受影响 */
+  const hasFilesIn = (e: React.DragEvent) => Array.from(e.dataTransfer?.types || []).includes('Files');
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!hasFilesIn(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOn(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    if (!hasFilesIn(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!hasFilesIn(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOn(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    if (!hasFilesIn(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragOn(false);
+    void attachFromFiles(Array.from(e.dataTransfer?.files || []), 'drop');
   };
 
   const addLink = () => {
@@ -784,7 +970,7 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
           ) : (
             <>
               {messages.map((m) => (
-                <ChatBubble key={m.id} msg={m} />
+                <ChatBubble key={m.id} msg={m} onExport={setExportMsg} />
               ))}
               {sending && liveSteps.length > 0 && (
                 <div className="ai-bubble assistant live">
@@ -803,7 +989,28 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
           )}
         </div>
 
-        <div className="ai-composer">
+        {/*
+          输入区同时是拖放区（v1.1.17）。
+          🔴 `data-dropzone` 是 DragInstallHost 认的标记：窗级 dragenter/dragover
+            看到事件落在带这个属性的元素里就不再显示「松开即可安装」那层遮罩、
+            也不会把文件当安装包 —— 这样「只有 AI 页支持拖文件」这件事不需要改
+            全局拖放逻辑，其它页面行为一个字都没动。
+        */}
+        <div
+          className={`ai-composer ${dragOn ? 'drag-on' : ''}`}
+          data-dropzone="ai-input"
+          onDragEnter={onDragEnter}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+        >
+          {dragOn && (
+            <div className="ai-drop-hint">
+              <i>{Icon.paperclip}</i>
+              <span>松开鼠标，把文件添加到这段对话</span>
+            </div>
+          )}
+
           {atts.length > 0 && (
             <div className="ai-atts">
               {atts.map((a, i) => (
@@ -852,10 +1059,11 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
           <Textarea
             className="ai-input"
             rows={3}
-            placeholder="输入内容…（Ctrl + Enter 发送，Enter 换行）"
+            placeholder="输入内容…（Ctrl + Enter 发送，Enter 换行；可直接粘贴截图、拖入文件）"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
+            onPaste={onPaste}
           />
 
           <div className="ai-composer-bar">
@@ -902,6 +1110,9 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
           </div>
         </div>
       </section>
+
+      {/* 导出对话框挂在最外层：它用的是 position:fixed 遮罩，放在两栏网格里会变成网格项 */}
+      {exportMsg && <ExportDialog msg={exportMsg} onClose={() => setExportMsg(null)} />}
     </div>
   );
 }
@@ -912,8 +1123,38 @@ const ATT_LABEL: Record<AiAttachment['kind'], string> = {
   link: '链接',
 };
 
-function ChatBubble({ msg }: { msg: AiChatMessage }) {
+function ChatBubble({
+  msg,
+  onExport,
+}: {
+  msg: AiChatMessage;
+  onExport?: (m: AiChatMessage) => void;
+}) {
   const isUser = msg.role === 'user';
+  /*
+   * 「已复制」只用本地状态就够了，不走 toast：
+   * 复制是高频、低风险动作，弹 toast 反而要等它自己消失；
+   * 按钮文字就地变一下，1.6 秒后自己变回来最省事。
+   */
+  const [copyState, setCopyState] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const copyTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+
+  const doCopy = async () => {
+    const ok = await copyToClipboard(msg.content);
+    setCopyState(ok ? 'ok' : 'fail');
+    if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 1600);
+  };
+
+  const canExport = !isUser && !msg.error && !!msg.content.trim();
+
   return (
     <div className={`ai-bubble ${isUser ? 'user' : 'assistant'} ${msg.error ? 'err' : ''}`}>
       {isUser && msg.attachments && msg.attachments.length > 0 && (
@@ -938,6 +1179,226 @@ function ChatBubble({ msg }: { msg: AiChatMessage }) {
       <div className="ai-bubble-foot">
         <span>{formatTime(msg.time)}</span>
         {msg.model && <span>· {msg.model}</span>}
+        {!isUser && (
+          <span className="ai-bubble-acts">
+            {!!msg.content.trim() && (
+              <button
+                type="button"
+                className={`ai-bubble-act ${copyState === 'ok' ? 'ok' : copyState === 'fail' ? 'fail' : ''}`}
+                data-act="copy"
+                title="复制这条回复的全部内容"
+                onClick={() => void doCopy()}
+              >
+                {Icon.copy}
+                <span>{copyState === 'ok' ? '已复制' : copyState === 'fail' ? '复制失败' : '复制'}</span>
+              </button>
+            )}
+            {canExport && (
+              <button
+                type="button"
+                className="ai-bubble-act"
+                data-act="export"
+                title="导出成 Markdown / Word / PDF 等文件"
+                onClick={() => onExport?.(msg)}
+              >
+                {Icon.download}
+                <span>导出</span>
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* 导出为文件（v1.1.17）                                               */
+/* ================================================================== */
+
+/**
+ * 「把这条回复存成文件」对话框。
+ *
+ * 三件事要在一屏里说清楚：
+ *   ① **导出什么** —— 一条回复里可能既有整篇文档，又有代码块和表格，
+ *      各自该存成什么文件并不一样（见 `detectDocParts`）；
+ *   ② **存成什么格式** —— 选项跟着内容块走：整篇文档可 md/docx/pdf/html/txt，
+ *      代码块只给「原样」和 txt，表格只给 csv 和 txt；
+ *   ③ **存到哪** —— 默认目录来自 `Conf/ai.json` 的 `exportDir`（可在这里临时改），
+ *      另外给一个「另存为…」把选择权完全交给系统对话框。
+ *
+ * 🔴 转换分工：正文的格式转换全在渲染层（`shared/ai-export.ts`，纯字符串），
+ *    docx / pdf 交给主进程（写 ZIP、起隐藏窗口打印）。所以这里传过去的
+ *    `text` 已经是目标格式的正文，主进程不需要懂 Markdown。
+ */
+function ExportDialog({ msg, onClose }: { msg: AiChatMessage; onClose: () => void }) {
+  const toast = useApp((s) => s.toast);
+  const parts = useMemo(() => detectDocParts(msg.content), [msg.content]);
+  const [partId, setPartId] = useState(parts[0]?.id || '');
+  const part: AiDocPart | null = parts.find((p) => p.id === partId) || parts[0] || null;
+  const opts = part ? formatsOf(part) : [];
+  const [format, setFormat] = useState<AiDocFormat>(part?.format || 'md');
+  const [dir, setDir] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<AiExportResult | null>(null);
+
+  /* 默认目录从主进程取（那边已经处理了「机器上没有 D 盘」的回落） */
+  useEffect(() => {
+    void tryCall<string>(() => window.adbApi.aiExportDir()).then((d) => {
+      if (d) setDir(d);
+    });
+  }, []);
+
+  /* 换内容块 → 格式回到它自己的默认值。不这么做的话，从「整篇(pdf)」切到
+     只有 csv/txt 的表格块时，下拉会停在一个不存在的选项上。 */
+  useEffect(() => {
+    const p = parts.find((x) => x.id === partId);
+    if (p) setFormat(p.format);
+  }, [partId, parts]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const ext = part ? extOfFormat(part, format) : '';
+  const fileName = part ? `${part.baseName}${ext}` : '';
+  const hint = opts.find((o) => o.value === format)?.hint || '';
+
+  const buildReq = (): AiExportRequest => {
+    const p = part!;
+    const needHtml = format === 'html' || format === 'pdf';
+    return {
+      format,
+      fileName: p.baseName,
+      title: p.baseName,
+      // md / txt / csv / 代码 / html 走 text；docx 与 pdf 另外要 markdown / html
+      text: partToText(p, format),
+      html: needHtml ? mdToHtml(p.content, p.baseName) : undefined,
+      markdown: p.content,
+      dir: dir.trim() || undefined,
+      ext: p.ext,
+    };
+  };
+
+  const save = async (asNew: boolean) => {
+    if (!part || busy) return;
+    setBusy(true);
+    try {
+      const base = buildReq();
+      let targetPath: string | undefined;
+      if (asNew) {
+        const picked = await tryCall<string | null>(() => window.adbApi.aiExportPick(base));
+        if (!picked) {
+          setBusy(false);
+          return; // 用户取消了「另存为」，什么都不做
+        }
+        targetPath = picked;
+      }
+      const r = await call<AiExportResult>(
+        () => window.adbApi.aiExportSave({ ...base, targetPath }),
+        { silent: true },
+      );
+      setSaved(r);
+      toast(
+        'success',
+        '已导出',
+        `${r.path}${r.renamed ? '（同名文件已存在，自动加了序号）' : ''}`,
+      );
+    } catch (e) {
+      toast('error', '导出失败', (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pickDir = async () => {
+    const d = await tryCall<string>(() => window.adbApi.pickDir());
+    if (d) setDir(d);
+  };
+
+  return (
+    <div className="ai-export-mask" role="dialog" aria-modal="true" aria-label="导出为文件">
+      <div className="ai-export-card fade-in" data-export-dialog="1">
+        <div className="ai-export-head">
+          <strong>导出为文件</strong>
+          <button type="button" className="ai-export-x" title="关闭" onClick={onClose}>
+            {Icon.close}
+          </button>
+        </div>
+
+        {!part ? (
+          <p className="ai-export-empty">这条回复里没有可导出的内容</p>
+        ) : (
+          <>
+            <Field label="导出内容" hint={`${part.chars.toLocaleString('zh-CN')} 字符`}>
+              <Select
+                value={part.id}
+                onChange={(e) => setPartId(e.target.value)}
+                options={parts.map((p) => ({ value: p.id, label: p.title }))}
+              />
+            </Field>
+
+            <Field label="文件格式" hint={hint}>
+              <Select
+                value={format}
+                onChange={(e) => setFormat(e.target.value as AiDocFormat)}
+                options={opts.map((o) => ({ value: o.value, label: o.label }))}
+              />
+            </Field>
+
+            <Field label="保存目录">
+              <Input
+                value={dir}
+                placeholder="选择或输入一个目录"
+                onChange={(e) => setDir(e.target.value)}
+                suffix={
+                  <button type="button" className="ai-key-toggle" onClick={() => void pickDir()}>
+                    更改
+                  </button>
+                }
+              />
+            </Field>
+
+            <p className="ai-export-name">
+              文件名：<code>{fileName}</code>
+              {!saved && <span className="ai-export-tip">同名文件已存在时会自动加序号，不会覆盖</span>}
+            </p>
+
+            {saved && (
+              <Notice tone="success" onClose={() => setSaved(null)}>
+                <div className="ai-export-saved">
+                  <span className="ai-export-path" title={saved.path}>
+                    {saved.path}
+                  </span>
+                  <span className="ai-export-saved-acts">
+                    <button type="button" onClick={() => void window.adbApi.openPath(saved.path)}>
+                      打开文件
+                    </button>
+                    <button type="button" onClick={() => void window.adbApi.reveal(saved.path)}>
+                      打开文件夹
+                    </button>
+                  </span>
+                </div>
+              </Notice>
+            )}
+
+            <div className="ai-export-actions">
+              <Button size="sm" variant="primary" loading={busy} onClick={() => void save(false)}>
+                保存
+              </Button>
+              <Button size="sm" loading={busy} onClick={() => void save(true)}>
+                另存为…
+              </Button>
+              <Button size="sm" variant="ghost" onClick={onClose}>
+                关闭
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1213,7 +1674,9 @@ function renderInline(text: string, keyBase: string): React.ReactNode[] {
   return out;
 }
 
-type MdBlock = { type: 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'quote' | 'hr' | 'pre'; text: string };
+type MdBlock =
+  | { type: 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'quote' | 'hr' | 'pre'; text: string }
+  | { type: 'table'; text: string; head: string[]; rows: string[][] };
 
 export function MdView({ text }: { text: string }) {
   const blocks = useMemo<MdBlock[]>(() => {
@@ -1222,7 +1685,8 @@ export function MdView({ text }: { text: string }) {
       .split(/\r?\n/);
     const out: MdBlock[] = [];
     let fence: string[] | null = null;
-    for (const raw of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i];
       if (/^\s*```/.test(raw)) {
         if (fence) {
           out.push({ type: 'pre', text: fence.join('\n') });
@@ -1234,6 +1698,17 @@ export function MdView({ text }: { text: string }) {
       }
       if (fence) {
         fence.push(raw);
+        continue;
+      }
+      /*
+       * 表格：AI 回答里到处都是「字段 → 值」两列表（崩溃分析尤其多）。
+       * 不认它的话，屏幕上就是一排原始竖线，和旁边能导出 csv 的能力完全对不上。
+       * 判定与拆列复用 shared/ai-export 的 readMdTable —— 和导出走同一份实现。
+       */
+      const tbl = readMdTable(lines, i);
+      if (tbl) {
+        out.push({ type: 'table', text: '', head: tbl.head, rows: tbl.rows });
+        i = tbl.next - 1;
         continue;
       }
       const l = raw.replace(/\s+$/, '');
@@ -1262,6 +1737,29 @@ export function MdView({ text }: { text: string }) {
             return <hr key={k} />;
           case 'pre':
             return <pre key={k}>{b.text}</pre>;
+          case 'table':
+            return (
+              <div className="ai-md-table-wrap" key={k}>
+                <table className="ai-md-table">
+                  <thead>
+                    <tr>
+                      {b.head.map((c, ci) => (
+                        <th key={`h${ci}`}>{renderInline(c, `${k}-h${ci}`)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {b.rows.map((r, ri) => (
+                      <tr key={`r${ri}`}>
+                        {b.head.map((_, ci) => (
+                          <td key={`c${ci}`}>{renderInline(r[ci] ?? '', `${k}-${ri}-${ci}`)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
           case 'h1':
             return <h2 key={k}>{renderInline(b.text, k)}</h2>;
           case 'h2':

@@ -13,6 +13,7 @@ import {
 import type { MirrorOptions, MirrorStatus } from '../../shared/types';
 import { rememberMirroredSerial } from './auto-connect';
 import { revealWindow } from './win-reveal';
+import { startWakeWatch, stopWakeWatch } from './wake-window';
 
 /**
  * 「这次投屏算成功了」的判定延时。
@@ -135,6 +136,20 @@ export async function startMirror(options: MirrorOptions): Promise<MirrorStatus>
   current = handle;
 
   /*
+   * ── 双击投屏窗口亮屏（2026-10-26）────────────────────────────────────
+   *
+   * 手机一熄屏，scrcpy 窗口就是一块全黑的板子：熄屏时 Android 会丢掉注入的
+   * touch，而 scrcpy 没有"唤醒设备"的快捷键。这里给窗口装一个低级鼠标钩子，
+   * 双击就发 `input keyevent 224`（幂等，亮屏时无副作用）。细节见 wake-window.ts。
+   *
+   * 🔊 不阻塞、不影响投屏：钩子进程起得慢（PowerShell + Add-Type 约 1s），
+   *    窗口建好前的点击由 C# 侧的 FindTarget 兜住，不需要在这里等。
+   */
+  if (options.wakeOnDoubleClick !== false && child.pid) {
+    startWakeWatch(child.pid, serial);
+  }
+
+  /*
    * ── 投屏窗口「藏到首帧」的放行逻辑（v1.1.15，2026-10-22）───────────────
    *
    * 小杨反馈：投屏成功时窗口会先黑一会儿。原因是 scrcpy 在拿到第一帧视频之前
@@ -213,6 +228,8 @@ export async function startMirror(options: MirrorOptions): Promise<MirrorStatus>
       clearTimeout(revealTimer);
       revealTimer = null;
     }
+    // 窗口没了，鼠标钩子也就没有目标，拆掉（否则它还在后台吃全局鼠标事件）
+    stopWakeWatch();
     if (current === handle) {
       current = null;
       emitStatus();
@@ -248,6 +265,9 @@ export async function stopMirror(): Promise<void> {
   const { child, serial } = current;
   const handle = current;
   log('info', '投屏', '正在停止投屏…');
+
+  // 先拆鼠标钩子：窗口马上要没了，多留一秒就会在残留窗口上误触发
+  stopWakeWatch();
 
   try {
     child.kill();

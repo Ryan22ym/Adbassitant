@@ -3,6 +3,9 @@
  * 这是整个项目的通信契约，任何 IPC 接口都必须在此声明
  */
 
+// 仅类型导入：编译后擦除，不会把 ai-export 的相对路径带进 preload 运行时
+import type { AiDocFormat } from './ai-export';
+
 /* ------------------------------------------------------------------ */
 /* 设备                                                                */
 /* ------------------------------------------------------------------ */
@@ -110,6 +113,8 @@ export interface MirrorOptions {
   keyboard?: 'sdk' | 'uhid' | 'aoa' | 'disabled';
   /** 常亮 */
   stayAwake?: boolean;
+  /** 双击投屏窗口点亮手机屏幕（默认 true） */
+  wakeOnDoubleClick?: boolean;
   /** 置顶 */
   alwaysOnTop?: boolean;
   /** 录制到文件（可选，传入路径则同时录制） */
@@ -1033,6 +1038,7 @@ export type GlassTintId = 'blue' | 'pink' | 'gray' | 'pearl';
  *   'genshin' 原神 —— 一套**自成一体**的视觉方案：自带配色（暖金写死，不给切）、
  *             描边、角饰、圆角尺度。它**没有深色变体**：选中即锁定这一套外观，
  *             不参与浅/深切换（所以它和 light/dark 是并列关系，不是 light/dark 的下级）。
+ *   'arknights' 明日方舟 —— 同上一条的定位，白面板 / 近黑侧栏 / 标志蓝 / 全直角。
  *
  * 和「主题色」是两条**互相独立**的轴，别混：
  *   accent（主题色）只换一组颜色，界面骨架、质感、形状全不变；
@@ -1054,8 +1060,13 @@ export type GlassTintId = 'blue' | 'pink' | 'gray' | 'pearl';
  *   所以除了 CSS，主进程也要配合（见 electron/main.ts 的 applyGlassWindow）。
  *   两个专属参数（glassOpacity / glassRoughness）存在 AppSettings 里。
  *   它同样没有深色变体：选中即锁定这一套外观。
+ *
+ * 'arknights'（v1.1.17）：**明日方舟** —— 和 genshin 同一个级、同一套接入方式：
+ *   白面板 + 近黑侧栏 + 标志蓝 #49aefb + 全直角 + 右上角斜切角标。
+ *   配色按用户三张实机截图逐点取样（见 theme-arknights.css 文件头）。
+ *   同样锁死 accent（蓝是它视觉的一部分），同样没有深色变体。
  */
-export type ThemeId = 'light' | 'dark' | 'system' | 'genshin' | 'glass';
+export type ThemeId = 'light' | 'dark' | 'system' | 'genshin' | 'glass' | 'arknights';
 
 /**
  * 主窗口的尺寸与位置（v1.1.16）。
@@ -1673,6 +1684,49 @@ export interface AiTestResult {
 }
 
 /* ------------------------------------------------------------------ */
+/* AI 回复导出成文件（v1.1.17）                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 一次导出请求。
+ *
+ * 🔴 **转换在渲染层做、落盘在主进程做**：
+ *    md / txt / csv / code / html 都是纯字符串处理（`shared/ai-export.ts`），
+ *    界面里同步就能算完；docx / pdf 要写 ZIP、要起一个隐藏窗口打印，
+ *    只有主进程能做。所以这里把「已经是目标格式的文本」直接传过去，
+ *    主进程只管写盘 —— 它不需要再懂 Markdown。
+ */
+export interface AiExportRequest {
+  format: AiDocFormat;
+  /** 建议文件名（不含扩展名；主进程还会再净化一次） */
+  fileName: string;
+  /** 目标格式的正文（md/txt/csv/code/html 用它） */
+  text: string;
+  /** docx / pdf 用：已转好的自包含 HTML */
+  html?: string;
+  /** 文档标题（docx 需要原始 md 来分段，这里同时把它带上） */
+  title?: string;
+  /** docx / pdf 的原始 Markdown（主进程按行拆成段落、表格、代码块） */
+  markdown?: string;
+  /** 「另存为」选定的完整路径；给了就直接写这里，不再拼目录 */
+  targetPath?: string;
+  /** 目标目录；不传则用 ai.json 的 exportDir */
+  dir?: string;
+  /** code 格式的扩展名（不含点），其余格式由 format 决定 */
+  ext?: string;
+}
+
+export interface AiExportResult {
+  /** 实际落盘的完整路径 */
+  path: string;
+  /** 所在目录（界面上的「打开文件夹」用它） */
+  dir: string;
+  bytes: number;
+  /** 因为重名被自动改成了「名字 (1).md」这类 */
+  renamed: boolean;
+}
+
+/* ------------------------------------------------------------------ */
 /* 崩溃分析（v1.1.14）                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -1936,6 +1990,18 @@ export const IPC = {
   AI_REPORT_REVEAL: 'ai:reportReveal',
   /** 崩溃监听器当前状态 */
   AI_CRASH_STATUS: 'ai:crashStatus',
+
+  /* AI 回复转存成文件 / 粘贴图片（v1.1.17） */
+  /** 把一段内容写成文件（docx / pdf 的生成也在主进程做） */
+  AI_EXPORT_SAVE: 'ai:exportSave',
+  /** 弹「另存为」对话框，返回用户选定的完整路径（取消返回 null） */
+  AI_EXPORT_PICK: 'ai:exportPick',
+  /** 导出默认目录（ai.json 的 exportDir，无 D 盘时已解析成实际可用目录） */
+  AI_EXPORT_DIR: 'ai:exportDir',
+  /** 把剪贴板里的图片字节落成临时文件，返回绝对路径（附件按路径走） */
+  AI_PASTE_IMAGE: 'ai:pasteImage',
+  /** 写系统剪贴板（「复制 AI 回复」用；不受窗口焦点影响） */
+  CLIPBOARD_WRITE: 'clipboard:write',
 
   /* 日志 */
   LOG_EXPORT: 'log:export',

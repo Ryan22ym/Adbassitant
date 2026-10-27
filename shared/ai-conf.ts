@@ -78,6 +78,12 @@ export interface AiConfig {
   crashDir: string;
   /** 交给 AI 的日志取多少分钟（缺省 10，与需求一致） */
   crashLogMinutes: number;
+  /**
+   * AI 回复「导出成文件」的默认保存目录（v1.1.17，缺省 D:\adbdocs）。
+   * 与 crashDir / 日志导出 D:\adblogs 同一个产品约定：产物统一放 D 盘根下。
+   * 用户可以在这里改，也可以在导出对话框里点「更改目录」临时换。
+   */
+  exportDir: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -194,6 +200,14 @@ export const DEFAULT_CRASH_DIR = 'D:\\adbcrash';
 /** 默认取最近多少分钟的日志交给 AI */
 export const DEFAULT_CRASH_LOG_MINUTES = 10;
 
+/**
+ * AI 文档导出的默认目录（v1.1.17）。
+ *
+ * 沿用 D:\adbcrash、D:\adblogs 那套约定 —— 本工具产生的所有产物都在 D 盘根下，
+ * 用户找起来不用记第二套路径。没有 D 盘时由主进程退到「文档」目录（见 services/ai-export.ts）。
+ */
+export const DEFAULT_AI_EXPORT_DIR = 'D:\\adbdocs';
+
 /** 出厂完整配置 */
 export const DEFAULT_AI_CONFIG: AiConfig = {
   activeProvider: 'deepseek',
@@ -202,6 +216,7 @@ export const DEFAULT_AI_CONFIG: AiConfig = {
   crashPrompt: DEFAULT_CRASH_PROMPT,
   crashDir: DEFAULT_CRASH_DIR,
   crashLogMinutes: DEFAULT_CRASH_LOG_MINUTES,
+  exportDir: DEFAULT_AI_EXPORT_DIR,
 };
 
 /* ------------------------------------------------------------------ */
@@ -286,6 +301,7 @@ export function normalizeAiConfig(raw: unknown): AiConfig {
       : DEFAULT_CRASH_PROMPT,
     crashDir: str(raw.crashDir).trim() || DEFAULT_CRASH_DIR,
     crashLogMinutes: Math.min(180, Math.max(1, minutes || DEFAULT_CRASH_LOG_MINUTES)),
+    exportDir: str(raw.exportDir).trim() || DEFAULT_AI_EXPORT_DIR,
   };
 }
 

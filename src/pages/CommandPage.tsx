@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Card, Button, Input, Notice, Badge, Empty } from '@/components/ui';
+import { Card, Button, Input, Badge, Empty } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
 import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
@@ -101,11 +101,6 @@ export default function CommandPage() {
         collapsible
         defaultOpen={inputOpen}
         title="命令输入"
-        subtitle={
-          current
-            ? `命令将自动附加 -s ${current.serial}（如已自带 -s/-d/-e 则不追加）`
-            : '未选择设备，命令将不带 -s 参数执行'
-        }
         extra={current ? <Badge tone="accent">{current.serial}</Badge> : undefined}
       >
         <div className="col">
@@ -123,14 +118,10 @@ export default function CommandPage() {
               执行
             </Button>
           </div>
-          <p className="text-dim">
-            可直接输入 adb 子命令（不必带 adb 前缀）。↑ / ↓ 可翻阅历史命令，
-            Enter 执行。
-          </p>
         </div>
       </Card>
 
-      <Card collapsible defaultOpen={commonOpen} title="常用命令" subtitle="点击直接执行">
+      <Card collapsible defaultOpen={commonOpen} title="常用命令">
         <div className="quick-grid">
           {QUICK_COMMANDS.map((q) => (
             <button
@@ -189,11 +180,6 @@ export default function CommandPage() {
           </div>
         )}
       </Card>
-
-      <Notice tone="accent">
-        提示：带空格或中文的参数请用英文双引号包裹，例如{' '}
-        <span className="mono">shell input text "hello world"</span>。
-      </Notice>
     </>
   );
 }

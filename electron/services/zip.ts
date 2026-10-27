@@ -177,3 +177,104 @@ export function fileSize(p: string): number {
     return 0;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* 写：最简 ZIP（stored，不压缩）                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 生成一个 ZIP 容器（v1.1.17）。
+ *
+ * 用途只有一个：**拼 .docx**。docx 本质就是个 ZIP，里面几个 XML 加起来才几 KB，
+ * 压缩收益可以忽略，所以这里一律用 stored(method=0) —— 少一层 deflate，
+ * 也就少一类「解压后长度不符」的坑，代码短到能一眼看完。
+ *
+ * 不支持：zip64（docx 不可能到 4GB）、加密、目录项（我们的条目全是文件）。
+ */
+const CRC_TABLE: number[] = (() => {
+  const t: number[] = new Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+export interface ZipWriteEntry {
+  /** 容器内路径，用 `/` 分隔（如 `word/document.xml`） */
+  name: string;
+  data: Buffer | string;
+}
+
+export function createZip(entries: ZipWriteEntry[]): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+
+  // 固定的 DOS 时间戳（2024-01-01 00:00），避免每次生成出来的包字节不同
+  const dosTime = 0;
+  const dosDate = ((2024 - 1980) << 9) | (1 << 5) | 1;
+
+  for (const e of entries) {
+    const name = Buffer.from(e.name, 'utf8');
+    const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data, 'utf8');
+    const sum = crc32(data);
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(SIG_LOCAL, 0);
+    local.writeUInt16LE(20, 4); // version needed
+    local.writeUInt16LE(0x0800, 6); // flag: bit11 = UTF-8 文件名
+    local.writeUInt16LE(0, 8); // method = stored
+    local.writeUInt16LE(dosTime, 10);
+    local.writeUInt16LE(dosDate, 12);
+    local.writeUInt32LE(sum, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28); // extra len
+
+    locals.push(local, name, data);
+
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(SIG_CD, 0);
+    cd.writeUInt16LE(20, 4); // version made by
+    cd.writeUInt16LE(20, 6);
+    cd.writeUInt16LE(0x0800, 8);
+    cd.writeUInt16LE(0, 10);
+    cd.writeUInt16LE(dosTime, 12);
+    cd.writeUInt16LE(dosDate, 14);
+    cd.writeUInt32LE(sum, 16);
+    cd.writeUInt32LE(data.length, 20);
+    cd.writeUInt32LE(data.length, 24);
+    cd.writeUInt16LE(name.length, 28);
+    cd.writeUInt16LE(0, 30); // extra
+    cd.writeUInt16LE(0, 32); // comment
+    cd.writeUInt16LE(0, 34); // disk
+    cd.writeUInt16LE(0, 36); // internal attr
+    cd.writeUInt32LE(0, 38); // external attr
+    cd.writeUInt32LE(offset, 42);
+    centrals.push(cd, name);
+
+    offset += local.length + name.length + data.length;
+  }
+
+  const cdBuf = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(SIG_EOCD, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cdBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...locals, cdBuf, eocd]);
+}

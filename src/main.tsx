@@ -11,6 +11,11 @@ import './pages/pages.css';
  */
 import './styles/theme-genshin.css';
 /*
+ * 明日方舟主题（v1.1.17）：白面板 / 近黑侧栏 / 标志蓝 / 全直角。
+ * 同样必须排在 global.css 之后（理由同上面那段）。
+ */
+import './styles/theme-arknights.css';
+/*
  * 透明玻璃主题（v1.1.13）：同样必须排在 global.css 之后，理由同上。
  * 它与原神是两套互斥的 data-theme 值，谁后加载不影响对方（永远只有一个命中）。
  */

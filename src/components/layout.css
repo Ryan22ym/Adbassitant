@@ -275,6 +275,16 @@
   height: 100%;
 }
 
+/*
+ * 导航格底图（放大版同款图标，只有明日方舟主题打开它，见 theme-arknights.css）。
+ *
+ * 🔴 默认必须 display:none —— 里面是一枚 inline <svg>，没有任何尺寸约束时
+ *    会按浏览器默认撑成 300×150，把整列导航挤坏。别的主题看不到它，但布局会坏。
+ */
+.nav-ghost {
+  display: none;
+}
+
 .nav-label {
   flex: 1;
   min-width: 0;

@@ -1,0 +1,982 @@
+/* ==================================================================
+   主题 —— 「明日方舟」（Arknights）
+   ==================================================================
+
+   和「浅色」「深色」「原神」「透明玻璃」**同一级**（<html data-theme="arknights">），
+   不是第 N 个主题色。区别依旧是：
+     主题色（data-accent）只换一组颜色，骨架 / 质感 / 形状全不变；
+     主题=明日方舟 换的是整套视觉方案。
+
+   它**没有深色变体**：选中即锁定下面这一套，不参与浅/深切换。
+   所以本文件里**只有一份变量块**，别照抄 global.css 去补 [data-theme='dark']。
+
+   ------------------------------------------------------------------
+   配色来源：按用户提供的三张明日方舟实机截图逐点取样（Pillow 读像素）。
+   关键实测值（区域众数 / 色相扫描，抗 JPEG 噪声）：
+
+     #49aefb   图1 基建蓝色订单卡（占该色相采样 46.9%）  → 标志蓝（灵魂色）
+     #48a7dd   图3「采购中心」按钮                        → 同族蓝，略暗
+     #2d73a7   图2 设置页蓝色开关                        → 深蓝端（正文级蓝）
+     #ffffff   图3 面板白（最高频）/ #fafafa / #f1f1f1   → 面板白 / 浅灰
+     #dd7038   图3 橙色进度与警告（色相 20~45 扫描）      → 警示橙
+     #161616   图2 设置弹窗底（占该区 9%）                → 近黑
+     #62666e   图1 顶部灰蓝条 / #565b68                  → 中灰蓝（次级文字）
+
+   注：#49aefb 在游戏里是**大面积色块**用色，直接当白底正文只有 2.3:1，
+   所以照原神的套路把「正文可读的蓝」单独派一个值：
+     · --accent #1271b8  = 白底上的蓝（链接 / 标题 / 主按钮底 / 选中字）
+     · --a-blue #49aefb  = 标志蓝（深色底上的字 / 选中条 / 装饰 / 图标）
+   两个都在本文件里，改动时**成对**改。
+
+   ==================================================================
+   v1.1.17 悬浮化改造 —— 为什么要有这一轮
+   ==================================================================
+
+   第一版的反馈是「没有辨识度、左边大色块太死」。问题不在配色（配色是从
+   截图逐点取的，是准的），而在**只有色块、没有底纹和层次**：
+   白卡片铺在平涂浅灰上、侧栏是一整条平涂近黑 —— 那是「蓝色扁平 UI」，
+   换成任何一套蓝都能成立，所以认不出是谁。
+
+   对着公开的《明日方舟》UI/UX 拆解（indienova / 腾讯游戏学堂那篇）核对，
+   它的视觉识别点其实写得很清楚，第一版一条都没做：
+
+     ① **噪点 + 漫画网点纸底纹**（散点 + 粗条纹），"见诸所有视觉出口"，
+        用来「增强画面细腻度」、让留白不显单薄；
+     ② **粗条纹 / 类似警戒线**，用来表现工业感；
+     ③ **元素重叠 + 色块透明度处理**，靠半透明叠层做纵深；
+     ④ **毛玻璃背景模糊覆盖浮窗**——游戏里二级面板就是糊在背景上的；
+     ⑤ 焦点控制：背景失焦、主体清晰。
+
+   所以这一轮把「底」和「层次」补上（本文件的四块）：
+
+     A. .ark-backdrop   —— 真 DOM 底纹层：网格 + 网点斜纹 + 噪点 + 蓝光晕。
+                           它同时是「悬浮感」的物理前提：半透明面板压在
+                           **有内容**的底上才叫悬浮，压在平涂色上只是变淡。
+     B. 侧栏            —— 从「一整条平涂近黑」改成半透明暗玻璃：自带斜纹 +
+                           上下蓝雾渐变 + 向右晕开的阴影，透出背后的光晕。
+     C. 卡片            —— 半透明面板（0.66）+ 轻模糊 + 亮边 + 悬浮投影，
+                           底下的网格从边缘透上来。
+     D. 顶栏 / 标题栏   —— 半透明 + 模糊，底部一条警戒斜纹带。
+
+   ------------------------------------------------------------------
+   🔴 三条不能破的硬约束（都是本项目踩过的）
+   1. **底纹层必须是真 DOM 元素**（App.tsx 的 .ark-backdrop），
+      不能拿 .app-shell 的 background-image 顶替：backdrop-filter 只采样
+      「页面内、自己背后已绘制的像素」，祖先的 CSS 背景图不算。
+      玻璃主题为此专门吃过一次亏（见 MEMORY / theme-glass.css）。
+   2. **大半径模糊必须有「大尺度底纹」兜底**（v1.1.18 改定）。
+      旧版本这条写的是「卡片只能用 3px 模糊」，理由是底纹只有 22px 网格，
+      blur 一大就糊成均匀色、等于糊纯色。
+      现在卡片按参考图改成 blur 18px（毛玻璃），代价必须在**底纹**里补回来：
+      A 段那条跨整屏的明暗场 + 480~1400px 的光晕 + **110px 周期 / 9px 宽的
+      粗网格宽带**，尺度都远大于 22px，模糊之后依然存在，于是卡片里
+      「看不到 22px 细网格、看得到大分区和明暗走向」——这正是磨砂玻璃的定义。
+      🔴 所以：**谁动 A 段那几条 radial/linear 的强度，谁就要重新验卡片的灰度走向**，
+         把它们削平，卡片立刻退化成一块实色板。
+   3. **半透明不要层层叠加**。这里 .main / .page 都是透明的，
+      侧栏 / 顶栏 / 卡片各自**直接**压在同一块底纹上 —— 每层只透一次，
+      不会出现玻璃主题那种「一层套一层，越叠越不透明」的问题。
+      别给 .main 或 .page 加背景色。
+
+   ⚠️ 优先级：本文件必须在 global.css **之后**加载（见 main.tsx 的 import 顺序）。
+   `[data-accent='x']` 与 `[data-theme='arknights']` 都是 0,2,0 的同级选择器，
+   只能靠源码顺序分胜负。
+
+   ------------------------------------------------------------------
+   辨识度清单（这套主题凭什么一眼是它）
+   1. 全直角：--r-* 全 0（游戏里几乎没有圆角）
+   2. 卡片右上角 45° 斜切角标 + 顶部蓝线（图2 面板右上那种切口）
+   3. 卡片标题前 3px 蓝竖条（底部斜切）
+   4. 网点纸底纹：22px 网格 + 45° 细斜纹 + 噪点
+   5. 顶栏底部警戒斜纹带
+   6. 导航项选中 / 悬停是斜切块（右上角切一刀）
+   7. 高对比黑白切割 + 唯一标志蓝
+   ================================================================== */
+
+:root[data-theme='arknights'] {
+  /* ---- 冷白灰：内容区底盘（比第一版提亮一档，给半透明卡片留出层次）---- */
+  --bg-app: #d9dee7;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #f7f8f9;
+  --bg-hover: #eceef1;
+  --bg-active: #e0e4e9;
+  --bg-inset: #f1f3f5;
+
+  /* ---- 近黑：侧栏与标题栏（图2 设置弹窗底实测 #131313 / #161616）---- */
+  --bg-sidebar: #16181c;
+  --bg-sidebar-hover: #21242a;
+  --bg-sidebar-active: #2b3038;
+  --bg-titlebar: #0e1014;
+
+  /*
+   * 🔴 右上角窗口按钮的符号色 = 标志蓝。
+   * 标题栏是近黑，默认的 --text-primary(#17191c) 压上去等于隐形。
+   * 亮蓝在 #0e1014 上 7.5:1，同时和导航图标是同一个色。
+   */
+  --titlebar-symbol: var(--a-blue);
+
+  --border: #d3d8de;
+  --border-strong: #b6bfc8;
+
+  /* ---- 白底上的文字：近黑（图3 面板上的字是纯黑系，不是蓝灰）---- */
+  --text-primary: #17191c;
+  --text-secondary: #545b64;
+  --text-tertiary: #848b94;
+  --text-inverse: #ffffff;
+
+  /* 固定主题色：白底可读的蓝。见文件头说明 */
+  --accent: #1271b8;
+  --accent-hover: #0d5c99;
+  --accent-soft: #e6f2fb;
+  --accent-border: #b9dcf5;
+
+  --success: #2f7d4f;
+  --success-soft: #eaf5ee;
+  --warn: #b8641f;
+  --warn-soft: #fdf0e6;
+  --danger: #c0392b;
+  --danger-soft: #fbeceb;
+
+  --code-bg: #16181c;
+  --code-text: #d7dde3;
+
+  /*
+   * 主题局部变量（--a- = arknights）。
+   * 和原神的 --g-* 同一个定位：本主题内部装饰用色，不参与全局设计系统。
+   */
+  --a-blue: #49aefb; /* 标志蓝（图1 订单卡实测 46.9%） */
+  --a-blue-bright: #7cc8ff;
+  --a-blue-deep: #1271b8;
+  --a-ink: #16181c; /* 近黑（图2 弹窗底） */
+  --a-ink-2: #21242a;
+  --a-ink-3: #0e1014;
+  --a-paper: #ffffff; /* 纯白面板（图3 最高频） */
+  --a-paper-2: #f1f3f5; /* 浅灰（图3 #f1f1f1） */
+  --a-gray: #62666e; /* 中灰蓝（图1 顶栏） */
+  --a-orange: #dd7038; /* 警示橙（图3 色相 20~45 扫描） */
+  --a-on-ink: #f2f4f7; /* 深色容器上的正文 */
+
+  --a-line: rgba(23, 25, 28, 0.14);
+  --a-blue-dim: rgba(73, 174, 251, 0.32);
+  --a-blue-soft: rgba(73, 174, 251, 0.1);
+
+  /*
+   * 网格和斜纹都用**近黑低透明度**而不是白色：
+   * 底是浅冷灰，白色纹理等于看不见，还容易脏。
+   * ⚠️ 这两个值是用截图调出来的，不是拍的：0.052/0.038 时，卡片半透明压上去以后
+   *    网格会从文字底下穿过去（设置页那种长段落最明显，像垫了一块格子布）；
+   *    降到 0.04/0.028 之后，网格只在**卡片外面**清晰，卡内只剩一层很淡的质感。
+   */
+  --a-grid: rgba(23, 25, 28, 0.04); /* 细网格 22px */
+  --a-grid-lg: rgba(23, 25, 28, 0.055); /* 粗网格 110px / 9px 宽带：玻璃背后唯一还看得见的结构 */
+  --a-hatch: rgba(73, 174, 251, 0.05); /* 45° 网点斜纹 */
+  --a-halo: rgba(73, 174, 251, 0.19); /* 左上蓝光晕 */
+  --a-veil: rgba(16, 19, 26, 0.86); /* 侧栏/标题栏的半透明暗面 */
+  /*
+   * 卡片面板（透出底纹的那层）。
+   * 0.62 是从参考图反解出来的：面板底灰度 168、背后 36~88，
+   * 按 168 = α·255 + (1-α)·bg 解得 α ≈ 0.55~0.60；
+   * 落到本项目浅色底上取上限再加一点（0.62）—— 浅色底不做这个补偿，
+   * 面板会和背景一起变灰，读起来是「蒙了层灰的纸」而不是玻璃。
+   */
+  --a-panel: rgba(255, 255, 255, 0.62);
+  --a-panel-edge: rgba(23, 25, 28, 0.1); /* 面板硬描边（替代 border） */
+  --a-panel-hi: rgba(255, 255, 255, 0.95); /* 面板顶部内高光 = 玻璃厚度 */
+
+  /*
+   * ---- 工业风「条状纹理」（v1.1.17 第二轮）----
+   *
+   * 参考来源（三处独立说法一致，且都强调同一件事）：
+   *   · Factory Pomo 的材质对照表：波纹钢板 / 金属压筋 = 明暗交替的细横带；
+   *     警戒胶带 = 对角条纹。两者是**两种不同语气**的材质，不能混用。
+   *   · Outland(1981) 的「Hazard as Hierarchy」：黄黑斜纹是**稀有资源**，
+   *     只给边界、失败态、危险动作；用它框住每张卡片，它就不报警了，变成戏服。
+   *   · Industrial Brutalist：CRT 扫描线 = 1~2px 周期横带，拉丝金属 = 淡横向光条。
+   *
+   * 所以按钮上走的是**波纹板**（细横带），斜纹只留极少一缕，
+   * 警戒斜纹继续只出现在顶栏底边那一处 —— 按钮加斜纹等于把它降级成装饰。
+   *
+   * ⚠️ 周期必须 ≥5px：DPR 1.25 下 1px 的线会被抗锯齿抹平（本轮实测过）。
+   */
+  --a-rib-dark: rgba(23, 25, 28, 0.095); /* 白底按钮上的凹槽 */
+  --a-rib-light: rgba(255, 255, 255, 0.16); /* 深色按钮上的凸筋 */
+  --a-rib-sheen: rgba(255, 255, 255, 0.5); /* 拉丝金属的横向高光 */
+
+  /* 每格导航底图：放大版同款图标，压在左侧当「刻印」 */
+  --a-ghost-tint: #dbe4f0;
+  /*
+   * 38%：v1.1.18 从 7.5% 提上来的（用户反馈「过淡」，要求「显著提高」）。
+   * 7.5% 在 1.25 DPR 的屏幕上几乎看不见；
+   * 但也不能直接拉到 30% —— 那是「两个图标」，会和前景抢注意力。
+   * 配合下面更细的 0.5 线宽（≈1.6px），读起来是「雕刻的底纹」而不是「重影」。
+   */
+  --a-ghost-alpha: 0.38;
+
+  /*
+   * 全直角。明日方舟的界面几乎没有圆角（图2 弹窗、图3 面板都是硬边）。
+   * ⚠️ 写 0px 而不是裸 0：自定义属性不做单位规范化，裸 0 读回来是字符串 "0"，
+   *    回归脚本按 '0px' 断言会假 FAIL（check-arknights.cjs 踩过）。
+   */
+  --r-sm: 0px;
+  --r-md: 0px;
+  --r-lg: 0px;
+  --r-full: 0px;
+
+  /*
+   * 投影：v1.1.17 起不再是 none —— 面板要「浮起来」就必须有影子。
+   * 但走的是**短距离硬阴影**（游戏里没有大面积柔和投影），
+   * 长距离那层只留一点点，负责让卡片从底纹上「抬起」。
+   */
+  --shadow-sm: 0 1px 2px rgba(18, 21, 28, 0.05);
+  --shadow-md: 0 8px 22px -12px rgba(18, 21, 28, 0.28);
+  --shadow-lg: 0 18px 44px -20px rgba(14, 17, 22, 0.42);
+}
+
+/* ==================================================================
+   A. 底纹层 —— 悬浮感的物理前提
+   ==================================================================
+
+   铺满视口，z-index:0 + 内容抬到 1（见 A 段末尾的说明）。
+   它同时承担「页面底色」——body 在这里是透明的。
+
+   五层叠出来，从下到上：
+     1. 底色            冷灰 #e7eaf0
+     2. 22px 细网格     近黑 4%  —— 工程纸的底
+     3. 110px 粗网格    近黑 5.5% / **9px 宽带** —— 分区；也是玻璃背后唯一
+                         还看得见的结构（1px 细线在 18px 模糊下会整个消失）
+     4. 三团径向光晕    左上标志蓝、右上淡蓝、底部偏深 —— 打破平涂
+     5. 噪点（::after） SVG feTurbulence，3.5%
+   再加 ::before 的 45° 全网斜纹（网点纸的「粗条纹」那一半）。
+
+   ⚠️ 层次顺序靠 background-image 的**书写顺序**（第一个在最上），
+      所以网格写在光晕**前面**（网格盖在光晕之上，光晕才不至于糊掉网格）。
+   ================================================================== */
+:root[data-theme='arknights'] .ark-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+
+  background-color: var(--bg-app);
+  background-image:
+    /* 细网格 */
+    linear-gradient(var(--a-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--a-grid) 1px, transparent 1px),
+    /*
+     * 粗网格：14px 宽带（不是 1px 细线）。
+     * 🔴 这层是**卡片玻璃的支撑结构**：22px 的细网格在 18px 模糊下必然消失
+     *    （毛玻璃该有的样子），但 110px 周期的 9px 宽带模糊后还能留六成振幅，
+     *    于是卡片里「看得出后面有分区、看不清线」。
+     *    换成 1px 线实测振幅只剩 20%，卡片立即退化成一块白板。
+     */
+    linear-gradient(var(--a-grid-lg) 9px, transparent 9px),
+    linear-gradient(90deg, var(--a-grid-lg) 9px, transparent 9px),
+    /* 左上蓝光晕（对应图3 界面左上那片冷光） */
+    radial-gradient(760px 540px at 13% -10%, var(--a-halo), transparent 66%),
+    /* 右上淡蓝 */
+    radial-gradient(640px 460px at 102% 2%, rgba(73, 174, 251, 0.1), transparent 68%),
+    /* 底部偏深，把视线压回中间 */
+    radial-gradient(980px 580px at 54% 114%, rgba(30, 62, 98, 0.13), transparent 70%),
+    /*
+     * ---- 大尺度明暗场（v1.1.18 新增，卡片毛玻璃的依赖）----
+     * 从左上的一片冷白斜向右下压深，跨度约 1900px。
+     * 存在的唯一理由：卡片 blur 18px 之后，22px 的网格会整个消失，
+     * 那片区域就只剩「均匀色」= 一块灰板。有了这条 1900px 的渐变，
+     * 即使被 22px 抹过，卡片内部仍有十几级灰度的走向 —— 玻璃后面才有东西。
+     * 🔴 削平这条，卡片立刻退化成纯色块（本轮实测的判据就是
+     *    「卡片左/右边缘灰度差」≥ 8，小于 3 即视为糊成纯色）。
+     */
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.4) 0%,
+      rgba(255, 255, 255, 0.14) 30%,
+      rgba(255, 255, 255, 0) 52%,
+      rgba(24, 34, 52, 0.17) 100%
+    ),
+    /*
+     * 卡片正后方的蓝雾（900×640，落在内容区中上部）。
+     * 白玻璃只透「明暗」的话，在浅色底上就是一页灰纸；
+     * 必须让它透出一点**颜色**，才一眼读得出「后面有东西」。
+     * 参考图面板里透上来的正是背景的蓝与暗，不是灰阶。
+     * ⚠️ 强度上限 0.18：再高卡片就发脏，白字压不住。
+     */
+    radial-gradient(760px 520px at 74% 18%, rgba(73, 174, 251, 0.13), transparent 62%),
+    /*
+     * 暗角（vignette）：四周压暗、中间留亮。
+     * 这是「悬浮」的最后一块拼图 —— 卡片浮在中间这片亮区上，
+     * 视觉上才有「中间抬起、四周退后」的纵深；没有它会显得整屏一张平纸。
+     * 写在最后 = 画在最下层，不会盖住网格和光晕。
+     */
+    radial-gradient(
+      130% 108% at 52% 44%,
+      transparent 40%,
+      rgba(24, 34, 52, 0.13) 100%
+    );
+  background-size:
+    22px 22px,
+    22px 22px,
+    110px 110px,
+    110px 110px,
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    100% 100%,
+    100% 100%;
+  background-position: 0 0;
+  background-repeat: repeat;
+}
+
+/*
+ * 45° 网点斜纹，铺满整层。
+ * 间隔 9px、线宽 1px、不透明度 5.5% —— 站远看是一层「纸的颗粒」，
+ * 站近看才是斜线。这就是资料里说的「散点 / 粗条纹」里偏「散点」的那一档：
+ * 用来让大面积留白不显单薄，而不是画一个显眼的条纹图案。
+ */
+:root[data-theme='arknights'] .ark-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--a-hatch) 0 1px,
+    transparent 1px 9px
+  );
+}
+
+/*
+ * 噪点：把上面那几层从「矢量图」拉回「印刷品」。
+ * SVG 内联成 data URI（不额外加文件、不带网络请求）。
+ * ⚠️ URL 里的 # 必须写成 %23，否则会被当成 fragment 直接截断。
+ * 用 multiply 而不是默认叠加：噪点压暗才像纸，提亮会像屏幕脏了。
+ */
+:root[data-theme='arknights'] .ark-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.045;
+  mix-blend-mode: multiply;
+}
+
+/*
+ * 🔴 外壳必须透明，否则它那层 --bg-app 实色会把底纹层整个盖住，
+ *    半透明面板就只剩「变淡」，悬浮感全无。
+ *    （.app-shell 的 background 在 layout.css 里，用更高优先级覆盖）
+ */
+:root[data-theme='arknights'] .app-shell {
+  background: transparent;
+}
+
+/*
+ * 🔴🔴 body 也必须透明（v1.1.18 实测）。
+ *
+ * 本项目在玻璃主题那轮已经踩过一次同一个坑：Electron/Chromium 的
+ * backdrop-filter 只采样「元素背后紧邻的那个不透明层」，不是整个页面栈。
+ * body 那条 `background: var(--bg-app)` 不透明，于是卡片背后「紧邻的
+ * 不透明层」就是 body 的纯色 —— 底纹层（网格 / 光晕 / 明暗场）整个被挡在
+ * 采样范围之外。
+ *
+ * 实测证据：卡片内纯面板区 sd = 0.97、极差 3（等于纯色），
+ * 把 blur 从 22px 收到 18/15/14px、粗网格加粗到 3px 都没用 —— 它压根没采到。
+ * 修法：body 透明，把「底色」的职责交给 .ark-backdrop（它自己有
+ * background-color: var(--bg-app)），卡片背后紧邻的就变成那张有内容的底纹。
+ */
+:root[data-theme='arknights'] body {
+  background: transparent;
+}
+
+/*
+ * 底纹层从 z-index:-1 提到 0（v1.1.18）。
+ * 「负 z-index 的元素不被 backdrop-filter 采样」是这次实测出来的：
+ * 无论 blur 收到 14px、粗网格加粗到 3px，卡片内始终 sd≈1（纯色）。
+ * 提到 0 之后它变成正常绘制内容，卡片背后就真有一层东西可采。
+ * ⚠️ 代价：内容必须显式抬到它上面，否则会被底纹盖住 —— 见下一条。
+ */
+:root[data-theme='arknights'] .app-shell > .titlebar,
+:root[data-theme='arknights'] .app-shell > .app-body {
+  position: relative;
+  z-index: 1;
+}
+
+/* ==================================================================
+   B. 侧栏 —— 从「一整条平涂近黑」改成半透明暗玻璃
+   ==================================================================
+
+   第一版最刺眼的就是它：208px × 满高的 #16181c 实心块，没有一丝纹理，
+   左边像贴了一块黑纸。
+
+   现在由三部分组成（都只在这一个元素上，不额外加 DOM）：
+     · background-color 86% 的暗面 —— 留 14% 让背后的蓝光晕渗上来，
+       暗面因此不是死黑，是「带冷光的深灰蓝」；
+     · background-image 两层斜纹（和底纹同角度）+ 上/下两片蓝雾；
+     · box-shadow 向右晕开 46px —— 把侧栏和内容区之间那条硬边化掉，
+       这也是「大色块」被打散的关键：边界不再是刀切的一条线。
+   ================================================================== */
+:root[data-theme='arknights'] .sidebar {
+  /*
+   * 🔴 容器上重定义一整套变量，后代自动翻成浅色（见文件头）。
+   *    而且容器自身必须显式写 color —— 颜色是「继承已计算值」的属性，
+   *    只重定义变量管不到没有自己声明 color 的后代（品牌名就是这么翻车的）。
+   */
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(73, 174, 251, 0.16);
+  --border: rgba(255, 255, 255, 0.1);
+
+  --text-primary: var(--a-on-ink);
+  --text-secondary: #a8b0ba;
+  /* tertiary 兼职 ::placeholder，深底上要比浅色下再提亮一档，否则输入框像空的 */
+  --text-tertiary: #7e8794;
+
+  --accent: var(--a-blue);
+  --accent-hover: var(--a-blue-bright);
+  --accent-soft: rgba(73, 174, 251, 0.16);
+  --accent-border: rgba(73, 174, 251, 0.34);
+
+  /* 深底上的语义色要提亮（浅底用的绿/橙/红在近黑上都发闷） */
+  --success: #6ecb8a;
+  --warn: #f0a05c;
+  --danger: #ef7b6e;
+
+  color: var(--text-primary);
+
+  /* 右边缘那列刻度是绝对定位的（见下面 .sidebar::after） */
+  position: relative;
+
+  background-color: var(--a-veil);
+  background-image:
+    /*
+     * ① 水平扫描线（24px 一条 1px 白线，3%）。
+     *    这是本段最要紧的一层：截图纵向取色实测，侧栏中段 60% 的高度
+     *    是**完全均匀**的 (46,49,56)，一点起伏都没有 —— 这就是「大色块太死」
+     *    的症状本身。1px / 9px 的细斜纹在 1.25 的 DPR 下被抹平了，看不见，
+     *    所以换成粗一号、间距更密的横线，它在暗底上才能读出来。
+     */
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 24px),
+    /* ② 45° 网点斜纹：线宽 2px（不是 1px）、间隔 9px，同样为了在 DPR 1.25 下活下来 */
+    repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.038) 0 2px, transparent 2px 9px),
+    /* ③ 顶部蓝雾（品牌区一带），对应界面上方那道冷光 */
+    linear-gradient(180deg, rgba(73, 174, 251, 0.15), transparent 30%),
+    /* ④ 底部蓝雾（设备状态一带） */
+    linear-gradient(0deg, rgba(73, 174, 251, 0.1), transparent 22%);
+
+  /*
+   * 模糊 18px：侧栏背后是底纹层的网格 + 光晕，糊完只剩「一片冷色在缓缓流动」，
+   * 这是「暗玻璃」而不是「黑纸」的分界。
+   */
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(18px) saturate(1.15);
+
+  /* 向右晕开 —— 打散硬边的主力 */
+  box-shadow: 26px 0 46px -26px rgba(14, 17, 22, 0.55);
+
+  border-right: 1px solid rgba(73, 174, 251, 0.28);
+}
+
+/*
+ * 右边缘的「刻度尺」——贴在边框内侧的一列 1px 蓝短线，间隔 10px。
+ *
+ * 这是把侧栏从「一大块色」变成「一块仪器面板」最省力的一招：
+ * 有了刻度，右边那条边就从「色块的边界」变成「面板的框」。
+ *
+ * ⚠️ 用 mask 让两端清晰、中间淡出：满格的刻度会跟导航文字抢注意力，
+ *    而中段正是导航项最多的地方。
+ */
+:root[data-theme='arknights'] .sidebar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(73, 174, 251, 0.34) 0 1px,
+    transparent 1px 10px
+  );
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    #000 0,
+    rgba(0, 0, 0, 0.5) 16%,
+    rgba(0, 0, 0, 0.22) 50%,
+    rgba(0, 0, 0, 0.5) 84%,
+    #000 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    #000 0,
+    rgba(0, 0, 0, 0.5) 16%,
+    rgba(0, 0, 0, 0.22) 50%,
+    rgba(0, 0, 0, 0.5) 84%,
+    #000 100%
+  );
+}
+
+/*
+ * 品牌行下面压一条斜切装饰线（游戏里 logo 下方那种短横 + 斜角）。
+ * 用伪元素挂在 .sidebar-brand 上，不动 DOM：这一行本来就只放 logo 和名字。
+ */
+:root[data-theme='arknights'] .sidebar-brand {
+  position: relative;
+}
+
+/*
+ * 品牌区右上角一枚 45° 斜切蓝光（三角，从右上向左下淡出）。
+ *
+ * 作用是把「品牌行」这一块从侧栏的平涂里单独拎出来 —— 界面上凡是
+ * 45° 斜切的亮块都是同一套母题（卡片右上角标、顶栏方块、导航选中块），
+ * 这里补上第一块，一眼就能串起来。
+ * ⚠️ 收起态（56px）这个三角会压到 logo 上，直接不画。
+ */
+:root[data-theme='arknights'] .sidebar-brand::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 104px;
+  height: 56px;
+  pointer-events: none;
+  background: linear-gradient(225deg, rgba(73, 174, 251, 0.2), rgba(73, 174, 251, 0.015) 72%);
+  clip-path: polygon(100% 0, 100% 100%, 0 0);
+}
+
+:root[data-theme='arknights'] .sidebar.collapsed .sidebar-brand::before {
+  display: none;
+}
+
+:root[data-theme='arknights'] .sidebar-brand::after {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    var(--a-blue) 0,
+    var(--a-blue) 34px,
+    rgba(73, 174, 251, 0.17) 34px,
+    rgba(73, 174, 251, 0.17) 100%
+  );
+}
+
+/* 品牌名：标志蓝（侧栏里 --accent 已是 #49aefb，这里显式写死更稳） */
+:root[data-theme='arknights'] .brand-text strong {
+  color: var(--a-blue);
+  letter-spacing: 0.02em;
+}
+
+/* 版本号：等宽 + 望远镜灰，像 HUD 上的读数 */
+:root[data-theme='arknights'] .brand-text span {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+/* 品牌标记：直角（原图标是圆角方块，这里跟着主题收角） */
+:root[data-theme='arknights'] .brand-mark {
+  border-radius: 0;
+  box-shadow: 0 0 0 1px rgba(73, 174, 251, 0.32);
+}
+
+/* 收起 / 展开按钮：hover 时给一层极淡蓝，别用默认的实灰块 */
+:root[data-theme='arknights'] .sidebar-toggle:hover {
+  background: rgba(73, 174, 251, 0.12);
+  color: var(--a-blue);
+}
+
+/* ==================================================================
+   C. 导航项 —— 细分隔线 + 斜切选中块
+   ================================================================== */
+
+/*
+ * 项与项之间一条 1px 极细线（4.5% 白）。
+ * 用 ::before + absolute 而不是 border-top：nav-item 高度 36px 是写死的，
+ * 加 border 会变成 37px，收起 / 展开时整列会差几像素。
+ * 相邻选择器 + 只在「非首项」上出现，第一条不会多出一条顶着品牌区的线。
+ */
+:root[data-theme='arknights'] .nav-item {
+  position: relative;
+  /*
+   * 建一个独立的层叠上下文，让 .nav-ghost 的 z-index:-1 落在
+   * 「本格背景之上、图标文字之下」。
+   * 🔴 不加这句的话负 z-index 会跑到 .sidebar 背景后面去，整层看不见。
+   */
+  isolation: isolate;
+}
+
+/*
+ * ---- 每格的放大图标底图 ----
+ *
+ * 同一枚 svg 再渲染一次（见 layout.tsx），放大 4.6 倍、灰化、18.5% 不透明度，
+ * 从**左侧**出格（左半截被裁到格子外），只留下右半截的弧线 ——
+ * 于是每一格左边像压着一枚被切掉一半的刻印，前景小图标正好落在它的缺口里。
+ *
+ * 四个数字是量出来的，不是拍的（1.25 DPR 下）：
+ *   · 78px ≈ 前景图标(17px) 的 4.6 倍：再小看不出是放大版，再大就跨到文字列；
+ *   · 左移出格 left:-20px：可见部分是 x∈[0,58]。
+ *     🔴 不能和前景图标(17px，x∈[10,27])同心 —— 同心会 100% 重叠成「重影」，
+ *     整列读起来像渲染糊了。错开半个身位才有「前景符号 + 背景刻印」的主次。
+ *   · 线宽 0.5（≈1.6px 视觉）：比前景图标的 2.25px **更细**。
+ *     alpha 提到 18.5% 之后，若还用同粗的线，两者会互相咬住；
+ *     细一档的线在小尺寸上退成「纹理」，反而更清楚。
+ *   · alpha 18.5%：7.5% 实测在真机上几乎不可见，30% 又会抢前景。
+ *
+ * ⚠️ 前景图标一律 17px、居中在 x=18.5；底图改了尺寸要重算 left，否则会错位成「两个图标」。
+ */
+:root[data-theme='arknights'] .nav-ghost {
+  display: block;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: -1;
+  color: var(--a-ghost-tint);
+  opacity: var(--a-ghost-alpha);
+  /*
+   * 右侧渐隐：左边实、右边虚。
+   * 直接硬裁会在格子右边留下一条笔直的断口，读起来像「图片被裁坏了」；
+   * 渐隐之后才像一枚盖上去的刻印（v1.1.18 把方向从「下虚」改成「右虚」，
+   * 因为底图现在从左侧长出来，要从左往右收）。
+   */
+  -webkit-mask-image: linear-gradient(90deg, #000 0 52%, transparent 94%);
+  mask-image: linear-gradient(90deg, #000 0 52%, transparent 94%);
+}
+
+:root[data-theme='arknights'] .nav-ghost svg {
+  position: absolute;
+  left: -22px;
+  right: auto;
+  top: -6px;
+  width: 84px;
+  height: 84px;
+}
+
+/*
+ * 🔴 必须逐元素覆盖 stroke-width：SVG 里的 strokeWidth="1.8" 是**presentation
+ *    attribute**，优先级低于作者 CSS，但高于从父级 svg 继承下来的值 ——
+ *    只写 .nav-ghost svg { stroke-width } 会被每个图形自己的 1.8 盖掉。
+ * 1 个 viewBox 单位 ≈ 78/24 = 3.25px，取 0.5 → 视觉线宽 1.6px，
+ * 比前景的 2.25px 细一档：读起来是「同一枚线稿被放大后当底纹」，而不是一团粗线。
+ */
+:root[data-theme='arknights'] .nav-ghost svg * {
+  stroke-width: 0.5;
+}
+
+/* 收起态只有 56px 宽、且没有文字，底图会挤成一团灰块，直接关掉 */
+:root[data-theme='arknights'] .sidebar.collapsed .nav-ghost {
+  display: none;
+}
+
+:root[data-theme='arknights'] .nav-item + .nav-item::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.045);
+  pointer-events: none;
+}
+
+:root[data-theme='arknights'] .nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--a-on-ink);
+}
+
+/*
+ * 选中项：右上角切一刀的斜切块 + 左 2px 蓝条 + 从左到右渐隐的蓝底。
+ *
+ * 🔴 用 clip-path 真切，不用「画一个三角形盖住角」——
+ *    盖法在渐变底上会露出三角形的硬边，切法是留白，干净。
+ * ⚠️ clip-path 会把 box-shadow 的外阴影也裁掉；这里只有 inset 阴影（左蓝条），
+ *    在内侧，不受影响。
+ * ⚠️ 收起态（56px）下这块只有 36px 宽，9px 的切角显得过大，所以按 .collapsed 缩到 6px。
+ */
+:root[data-theme='arknights'] .nav-item.active {
+  color: var(--a-on-ink);
+  background-image: linear-gradient(
+    90deg,
+    rgba(73, 174, 251, 0.24) 0,
+    rgba(73, 174, 251, 0.05) 62%,
+    transparent 100%
+  );
+  background-color: transparent;
+  box-shadow: inset 2px 0 0 var(--a-blue);
+  clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+}
+
+:root[data-theme='arknights'] .sidebar.collapsed .nav-item.active {
+  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+}
+
+/* 侧栏图标：近黑底上一律亮蓝（图3 左侧图标就是蓝色系） */
+:root[data-theme='arknights'] .nav-icon {
+  color: var(--a-blue);
+  opacity: 0.82;
+}
+
+:root[data-theme='arknights'] .nav-item:hover .nav-icon,
+:root[data-theme='arknights'] .nav-item.active .nav-icon {
+  opacity: 1;
+}
+
+/* 设备数徽标：亮蓝底 + 近黑字（默认白字落在 #49aefb 上只有 2.3:1） */
+:root[data-theme='arknights'] .nav-count {
+  background: var(--a-blue);
+  color: var(--a-ink);
+  font-weight: 700;
+}
+
+/* ==================================================================
+   D. 卡片 —— 毛玻璃浮窗（v1.1.18 按参考图重定标）
+   ==================================================================
+
+   参考图（明日方舟设置弹窗）实测：
+     · 面板底灰度 168，背后的背景 36~88 → 反解白色叠加的 α ≈ 0.55~0.60；
+     · 面板内完全看不到小尺度细节，只剩跨度为面板宽 1/6 左右的大块明暗。
+   所以这里定标为 **α 0.58 + blur 22px**，和参考图同量级。
+
+   🔴 文件头那条「卡片 blur 不许 > 6px」的约束，在这一版换了**解法**而不是放弃：
+      当年之所以不能大 blur，是因为底纹只有 22px 网格这种**小尺度**图案 ——
+      22px 的网格用 22px 的模糊一抹，卡片底下就只剩一片均匀色，悬浮感反向消失。
+      现在把「大尺度」补进了底纹层本身（见 A 段的色彩场：480~1400px 的
+      蓝-暗双极光晕 + 暗角），这些尺度远大于 22px，blur 22px 之后**依然存在**。
+      于是卡片里既看不到网格（被糊掉 = 毛玻璃该有的样子），
+      又能看到光晕的明暗走向（玻璃后面的东西还在）—— 这才是玻璃，
+      而不是「一块灰板」。
+      ⚠️ 所以 A 段的大尺度光晕是这一节的**依赖**，不是装饰：
+         把它们削平，卡片立刻退化成纯色块。
+   ================================================================== */
+:root[data-theme='arknights'] .card {
+  /*
+   * 角标：右上角 45° 近黑三角（图2 面板右上那种切口）+ 顶部蓝线。
+   * 两段 background-image 拼出来，不用伪元素、不动盒模型。
+   * ⚠️ 三角那段的渐变色标必须**硬切**（0 与 8px 同一个色），
+   *    写成 0→8px 渐变会得到一条毛边，小尺寸上像截图糊了。
+   */
+  background-color: var(--a-panel);
+  background-image:
+    linear-gradient(225deg, var(--a-ink) 0, var(--a-ink) 8px, transparent 8px),
+    linear-gradient(90deg, var(--a-blue), var(--a-blue));
+  background-repeat: no-repeat;
+  background-size:
+    17px 17px,
+    100% 2px;
+  background-position:
+    right top,
+    left top;
+  background-origin: border-box;
+
+  /*
+   * 毛玻璃本体。
+   * saturate 1.35 是给「玻璃」补一口气的 —— 纯 alpha 会把透过来的颜色冲淡，
+   * 参考图的面板里蓝色依然饱和，说明它做了同方向的补偿。
+   */
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+
+  /*
+   * border 透明 + 用 box-shadow 的 0 0 0 1px 画描边：
+   * 这样描边是**压在面板边缘外侧**的一圈，不会被背景图（角标）盖住，
+   * 也不会像 border 那样在 border-box 内吃掉 1px 可用宽度。
+   *
+   * 内阴影那两条是「玻璃厚度」：参考图面板的上边缘有一条亮白边、
+   * 左边缘也有，所以这里 inset 三边各给一点，而不是只给顶部。
+   */
+  border: 1px solid transparent;
+  box-shadow:
+    /*
+     * 玻璃边缘的反光：一圈内亮线。
+     * 参考图那块面板能一眼认出是「玻璃」，靠的就是这条 1px 亮白边 ——
+     * 只有半透明 + 模糊而没有这圈高光，读起来是「半透明的塑料片」。
+     */
+    inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+    0 0 0 1px var(--a-panel-edge),
+    inset 0 1px 0 var(--a-panel-hi),
+    inset 1px 0 0 rgba(255, 255, 255, 0.5),
+    /*
+     * 玻璃上沿的一片柔性反光。不用额外的 background-image 层（那会改到
+     * 角标的层数，回归脚本按「层数 == 2」钉着），改用内阴影 ——
+     * 它只吃盒内像素，不参与背景图堆叠。
+     */
+    inset 0 14px 22px -14px rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(18, 21, 28, 0.06),
+    0 10px 22px -10px rgba(18, 21, 28, 0.26),
+    0 22px 40px -22px rgba(18, 21, 28, 0.22);
+}
+
+/*
+ * 卡片标题：左侧 3px 蓝竖条，**底部斜切**。
+ * 原神那边是旋转 45° 的金色菱形；这里换成不旋转的直角竖条 ——
+ * 圆/菱形是「优雅」，竖条是「工业标签」，正是两套世界观的分界。
+ * 斜切（polygon 最后一点抬起来）让它不是一根普通矩形，是切出来的标签。
+ */
+:root[data-theme='arknights'] .card-title {
+  position: relative;
+  padding-left: 11px;
+  letter-spacing: 0.01em;
+}
+
+:root[data-theme='arknights'] .card-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 12px;
+  margin-top: -6px;
+  background: var(--a-blue);
+  clip-path: polygon(0 0, 100% 0, 100% 68%, 0 100%);
+}
+
+/* ==================================================================
+   E. 顶栏与标题栏
+   ================================================================== */
+
+/*
+ * 顶栏：半透明 + 模糊，滚动时底纹从它下面滑过（游戏里的 HUD 顶栏就是这样）。
+ */
+:root[data-theme='arknights'] .header {
+  background-color: rgba(231, 234, 240, 0.62);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  backdrop-filter: blur(14px) saturate(1.1);
+  border-bottom: none;
+  position: relative;
+}
+
+/*
+ * 底边的「警戒斜纹带」——资料里说的「粗条纹，类似警戒线，表现工业感」。
+ *
+ * 3px 高、-45°、蓝 55% / 透明交替。
+ * ⚠️ 高度不能再低：2px 以下斜线看不出角度，只会变成一条糊的灰边。
+ */
+:root[data-theme='arknights'] .header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(73, 174, 251, 0.58) 0 2px,
+    transparent 2px 7px
+  );
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* 顶栏标题：白底上必须用深蓝（#49aefb 在白底只有 2.3:1，读不清） */
+:root[data-theme='arknights'] .header-title {
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+}
+
+/*
+ * 顶栏标题前的斜切方块：明日方舟界面里反复出现的 45° 切角母题。
+ * 用 clip-path 做一枚「左上到右下」的实心三角，9px 见方，不抢文字。
+ */
+:root[data-theme='arknights'] .header-title::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  margin-right: 8px;
+  background: var(--a-blue);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+  flex: none;
+}
+
+/*
+ * 标题栏：比侧栏再深一档，同样半透明 —— 顶部压暗、边界留给蓝线，
+ * 才是图2 那种「黑框包着内容」的关系。
+ */
+:root[data-theme='arknights'] .titlebar {
+  background-color: rgba(14, 16, 20, 0.92);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  backdrop-filter: blur(18px) saturate(1.1);
+  border-bottom: 1px solid var(--a-blue-dim);
+}
+
+/* ==================================================================
+   F. 控件
+   ================================================================== */
+
+/*
+ * ---- 工业风「条状纹理」（v1.1.17 第二轮）----
+ *
+ * 材质选的是**波纹钢板 / 金属压筋**（Factory Pomo 对照表里的
+ * corrugated steel = 明暗交替的细横带），不是警戒斜纹。
+ * 理由写在变量区：斜纹一旦铺到每个按钮上就不再是警告，只是花纹
+ * （Outland 那条「Hazard as Hierarchy」说的就是这个）。
+ *
+ * 三层结构，从下到上：
+ *   1. background-color  主题色 / 纸白（跟着主题走，不写死）
+ *   2. 纵向渐变          上亮下暗 = 金属的受光面与背光面
+ *   3. 横向细带 2px/6px  = 压出来的筋
+ *
+ * 🔴 周期 6px 是下限，不是喜好：1px 的带子在 DPR 1.25 下会被抗锯齿抹成
+ *    均匀的灰，白做（本轮侧栏斜纹就踩过这个坑）。
+ * 🔴 必须**先写带子、后写渐变** —— background-image 里前面的在上层，
+ *    写反了不透明的渐变会把带子整条盖掉。
+ * 🔴 hover 态要重写 background-image：ui.css 里 .btn-*:hover 用的是
+ *    `background:` 简写，简写会把 image 层全部清掉，剩下一个纯色。
+ */
+
+/* 白底按钮：纸白上压出凹槽 */
+:root[data-theme='arknights'] .btn-default {
+  background-color: rgba(255, 255, 255, 0.92);
+  background-image:
+    repeating-linear-gradient(135deg, var(--a-rib-dark) 0 2px, transparent 2px 7px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(233, 237, 243, 0.6));
+  border-color: var(--border-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(18, 21, 28, 0.07);
+}
+
+:root[data-theme='arknights'] .btn-default:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  background-image:
+    repeating-linear-gradient(135deg, var(--a-rib-dark) 0 2px, transparent 2px 7px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(214, 221, 230, 0.7));
+  border-color: var(--a-blue-deep);
+}
+
+/* 深色按钮：主题蓝上凸出筋条 */
+:root[data-theme='arknights'] .btn-primary {
+  color: var(--text-inverse);
+  background-color: var(--accent);
+  background-image:
+    repeating-linear-gradient(135deg, var(--a-rib-light) 0 2px, transparent 2px 7px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.13));
+  box-shadow: none;
+  letter-spacing: 0.02em;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%);
+}
+
+:root[data-theme='arknights'] .btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  background-image:
+    repeating-linear-gradient(135deg, var(--a-rib-light) 0 2px, transparent 2px 7px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.08));
+}
+
+/*
+ * 分段控件：选中项实心深蓝 + 白字。
+ * ⚠️ 和原神同一个坑：**不能**用 --accent-soft 当选中底色 ——
+ * 分段控件自己的容器底是 --bg-inset(#f1f3f5)，两者明度接近，等于没选中。
+ */
+:root[data-theme='arknights'] .segmented {
+  border-color: var(--border);
+}
+
+:root[data-theme='arknights'] .segmented-item.active {
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: none;
+}

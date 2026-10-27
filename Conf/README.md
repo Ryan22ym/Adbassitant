@@ -157,6 +157,7 @@
 | `crashPrompt` | 崩溃分析的提示词（支持占位符，见下） |
 | `crashDir` | 崩溃日志与报告的落盘根目录，默认 `D:\adbcrash` |
 | `crashLogMinutes` | 交给 AI 分析的日志取最近多少分钟，默认 `10` |
+| `exportDir` | AI 回复「导出成文件」的默认目录，默认 `D:\adbdocs`（机器上没有 D 盘时自动退到「文档\ADB助手\AI导出」）。导出对话框里可临时改目录或「另存为」，同名文件不会被覆盖 |
 
 ### providers[] 里每一项
 

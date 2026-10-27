@@ -820,6 +820,68 @@
 
 /* ---------------- 实时 Logcat ---------------- */
 
+/*
+ * 高度分配（底栏被日志挤走那个 bug 的修法）：
+ *
+ * 以前 .logcat-view 用的是 max-height: calc(100vh - 360px) —— 一个拍脑袋的
+ * 视口公式。它只算了卡片头 + 工具栏 + 底栏，**没算过滤面板**：一展开过滤
+ * （或多行工具栏换行），卡片总高就超过可视区，整页开始滚动，而底栏是页面
+ * 最后一个元素 → 「开始抓取 / 暂停刷新 / 清空 / 保存为文件」被推到屏幕外，
+ * 日志越多、越要往下滚才看得见按钮。
+ *
+ * 现在是真·两段式布局：页面不吃滚动，高度自上而下**分配**，而不是叠加：
+ *   .page-inner  100% 高 → 卡片 flex:1 吃满 → 卡片内容区纵向 flex
+ *     ├ 卡片头 / 工具栏 / 过滤面板 / 底栏  flex:none（固定，不参与伸缩）
+ *     └ .logcat-view                       flex:1 + 自己的 overflow 滚动
+ * 日志行只增加 .log-spacer 的高度（滚动条变长），不会推挤任何兄弟节点。
+ *
+ * 兜底：窗口极小且过滤面板展开时，卡片有 min-content 下限（日志区 min-height），
+ * 超出可视区时由 .page 照旧滚动 —— 正常尺寸下永远不会出现滚动条。
+ */
+.page-inner:has(.logcat-card) {
+  height: 100%;
+  min-height: 0;
+}
+
+.logcat-card {
+  /* basis 0：卡片高度只来自「页面剩余空间」，不来自内容（内容永远不该撑高它） */
+  flex: 1 1 0px;
+  display: flex;
+  flex-direction: column;
+  /* 卡片头 / 内容区两段；内容区自己再纵向排 */
+  min-width: 0;
+}
+
+/* 收起态不该被拉满：留一条卡片头就够了，别在下面留一大片空白卡片 */
+.logcat-card.is-collapsed {
+  flex: 0 0 auto;
+}
+
+.logcat-card > .card-head {
+  flex: none;
+}
+
+.logcat-card > .card-slot {
+  flex: 1 1 0px;
+  /*
+   * min-height:0：内容区绝不允许比卡片高 —— 卡片是 overflow:hidden 的，
+   * 一旦内容区超出去，被裁掉的正是最下面的底栏（小窗口实测裁了 44px）。
+   * 挤不下的情况由「过滤面板自己缩 + 滚动」和「日志区 min-height」消化，见下。
+   */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * 工具栏 / 底栏：尺寸由内容决定，绝不压缩（底栏是死区，任何情况都不许被挤走）
+ * 过滤面板不在此列 —— 它是唯一允许被压缩的固定块，见下面的 min-height:0。
+ */
+.logcat-card .log-toolbar,
+.logcat-card .logcat-foot {
+  flex: none;
+}
+
 .logcat-filter {
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
@@ -827,21 +889,44 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /*
+   * 空间不够时**先压过滤面板**（它内部出现自己的滚动条），日志区尽量保住。
+   * 之所以压得动它：flex-basis 0 的日志区没有可压缩量，收缩量只能落到它身上。
+   */
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .logcat-view {
-  min-height: 380px;
-  max-height: calc(100vh - 360px);
+  /*
+   * 唯一可伸缩的那一块：吃掉卡片剩余的全部高度，自己滚。
+   *
+   * 🔴 flex-basis 必须是 0（flex: 1 1 0），不能是 auto：
+   *    basis:auto → 基准尺寸取内容高度 → 3000 行 = 66000px 会**顺着固有尺寸链
+   *    一路顶到卡片、页面**（实测就是底栏被顶到 66000px 处，正是用户报的那个 bug）。
+   *    基准写 0 之后，高度只剩「父容器剩下的空间」这一个来源。
+   * 🔴 contain: size 兜住最后一道：让本元素的固有尺寸与内容无关，
+   *    否则列向 flex 容器算 min-content 时仍会把日志内容算进卡片下限。
+   *    它=size+layout+paint+style，原先的 content（layout+paint+style）已包含在内。
+   *
+   * min-height 只是「小窗口 + 过滤面板展开」时的下限，到这儿就不再压了。
+   * 取值压到 60：最小窗口（960×640 内容区）+ 过滤面板展开时，
+   * 工具栏 + 过滤面板 + 60 + 底栏 仍能塞进可用高度，底栏不会被挤出卡片。
+   */
+  flex: 1 1 0px;
+  min-height: 60px;
+  max-height: none;
   border: none;
   border-radius: 0;
   /*
-   * 虚拟滚动（v1.1.15）的两个前提：
+   * 虚拟滚动的两个前提：
    *   · position:relative —— 内层 .log-window 用 transform 定位，需要它做参照；
-   *   · contain:content —— 把内部布局/绘制的重排范围限制在这一块里，
+   *   · contain —— 把内部布局/绘制的重排范围限制在这一块里，
    *     否则每 120ms 一批新日志都会触发整页（侧栏、卡片、底栏）的 reflow。
    */
   position: relative;
-  contain: content;
+  contain: strict;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -3298,4 +3383,259 @@
   overflow-x: auto;
   max-height: 360px;
   white-space: pre;
+}
+
+/* ---------------- 气泡操作条（v1.1.17：复制 / 导出） ---------------- */
+
+/*
+ * 按钮默认半透明地待在时间戳右边：不点它的时候几乎看不见，
+ * 免得每条回复底下都挂两枚按钮、把聊天记录搅得很吵。
+ * 鼠标移到这条气泡上才亮起来 —— 复制/导出都是「想到了才用」的动作。
+ */
+.ai-bubble-acts {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.ai-bubble:hover .ai-bubble-acts,
+.ai-bubble-acts:focus-within {
+  opacity: 1;
+}
+
+.ai-bubble-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.ai-bubble-act:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ai-bubble-act.ok {
+  color: var(--success);
+}
+
+.ai-bubble-act.fail {
+  color: var(--danger);
+}
+
+.ai-bubble-act svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ---------------- 输入区拖放（v1.1.17） ---------------- */
+
+/*
+ * 拖拽经过时只改描边、不改变布局尺寸（outline 不占空间）——
+ * 用 border 的话整块会抖一下。
+ */
+.ai-composer.drag-on {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  background: var(--accent-soft);
+  position: relative;
+}
+
+.ai-drop-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--accent-border);
+  background: var(--bg-surface);
+  color: var(--accent);
+  font-size: 12.5px;
+  pointer-events: none; /* 不然它会吃掉 drop 事件、导致松手没反应 */
+}
+
+.ai-drop-hint i {
+  display: inline-flex;
+}
+
+.ai-drop-hint svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ---------------- 导出对话框（v1.1.17） ---------------- */
+
+.ai-export-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 20, 28, 0.45);
+  animation: fadeIn 0.14s ease both;
+}
+
+.ai-export-card {
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.ai-export-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+}
+
+.ai-export-x {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.ai-export-x:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ai-export-x svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ai-export-empty {
+  margin: 0;
+  padding: 10px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.ai-export-name {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-export-name code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.ai-export-tip {
+  color: var(--text-tertiary);
+}
+
+.ai-export-saved {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.ai-export-path {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.ai-export-saved-acts {
+  display: flex;
+  gap: 10px;
+}
+
+.ai-export-saved-acts button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.ai-export-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+/* AI 回复里的表格（v1.1.17）—— 判定逻辑与导出共用 readMdTable */
+.ai-md-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.ai-md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+
+.ai-md-table th,
+.ai-md-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.ai-md-table th:last-child,
+.ai-md-table td:last-child {
+  border-right: 0;
+}
+
+.ai-md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.ai-md-table th {
+  background: var(--bg-surface);
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ai-md-table code {
+  white-space: nowrap;
 }

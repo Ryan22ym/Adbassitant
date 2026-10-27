@@ -66,6 +66,33 @@ function paintGlassTint(tint: GlassTintId): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* 主题：可落到 data-theme 上的合法值（v1.1.17）                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * <html data-theme> 的全部合法取值（不含 'system' —— 它在读设置时就被解析掉了）。
+ *
+ * 🔴 为什么用白名单 + includes 而不是一串三元：
+ *    以前是 `theme === 'dark' ? 'dark' : theme === 'genshin' ? …` 的嵌套三元，
+ *    每加一个主题（原神 → 玻璃 → 明日方舟）就得往里塞一层，漏一层不会报错，
+ *    表现是「切过去了、界面也对，但重启回到浅色」—— 极难复现的那种 bug。
+ *    现在只要往数组里加一个 id，读设置那条路径自动支持。
+ *
+ * ⚠️ 加新主题要同步的地方（漏一处就是半残）：
+ *    ① shared/types.ts 的 ThemeId
+ *    ② 这里
+ *    ③ src/styles/theme-<id>.css + main.tsx 的 import（必须排在 global.css 之后）
+ *    ④ SettingsPage 的 THEME_MODES
+ *    ⑤ layout.tsx 的 brandMark（配套 logo）
+ */
+const UI_THEMES = ['light', 'dark', 'genshin', 'glass', 'arknights'] as const;
+export type UiTheme = (typeof UI_THEMES)[number];
+
+function isUiTheme(v: unknown): v is UiTheme {
+  return typeof v === 'string' && (UI_THEMES as readonly string[]).includes(v);
+}
+
+/* ------------------------------------------------------------------ */
 /* 全局应用状态                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -211,15 +238,15 @@ interface AppState {
   setUiConf: (c: UiConf) => void;
 
   /*
-   * 主题（v1.1.11 起是三选一，同一级，见 shared/types.ts 的 ThemeId）。
+   * 主题（v1.1.11 起是**同级多选一**，见 shared/types.ts 的 ThemeId）。
    *
-   * 'genshin' 不是「第 3 个主题色」，而是和浅色/深色平级的**另一套主题**：
-   * 它自带配色 + 描边 + 角饰 + 圆角尺度，并且**没有深色变体** ——
-   * 选中它就锁定这一套外观，不参与浅/深切换。
+   * 'genshin' / 'arknights' 不是「第 N 个主题色」，而是和浅色/深色平级的
+   * **另一套主题**：它们自带配色 + 描边 + 角饰 + 圆角尺度，并且**没有深色变体** ——
+   * 选中就锁定这一套外观，不参与浅/深切换。
    * 'system' 是早期遗留值，在 setSettings 里就已经解析成 light/dark，这里不出现。
    */
-  theme: 'light' | 'dark' | 'genshin' | 'glass';
-  applyTheme: (t: 'light' | 'dark' | 'genshin' | 'glass') => void;
+  theme: 'light' | 'dark' | 'genshin' | 'glass' | 'arknights';
+  applyTheme: (t: 'light' | 'dark' | 'genshin' | 'glass' | 'arknights') => void;
 
   /*
    * 透明玻璃主题的两个可调参数（v1.1.13）。
@@ -439,14 +466,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({ settings });
     // 同步主题到 DOM（不写回 settings，避免循环）
     // 'system'（只有老配置文件里才可能有）与任何未知值都按浅色处理
-    const t: 'light' | 'dark' | 'genshin' | 'glass' =
-      settings.theme === 'dark'
-        ? 'dark'
-        : settings.theme === 'genshin'
-          ? 'genshin'
-          : settings.theme === 'glass'
-            ? 'glass'
-            : 'light';
+    const t: UiTheme = isUiTheme(settings.theme) ? settings.theme : 'light';
     if (get().theme !== t) {
       document.documentElement.setAttribute('data-theme', t);
       set({ theme: t });

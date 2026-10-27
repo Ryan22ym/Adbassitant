@@ -199,6 +199,13 @@ const IPC = {
   AI_REPORT_DELETE: 'ai:reportDelete',
   AI_REPORT_REVEAL: 'ai:reportReveal',
   AI_CRASH_STATUS: 'ai:crashStatus',
+  /* AI 回复转存成文件 / 粘贴图片（v1.1.17） */
+  AI_EXPORT_SAVE: 'ai:exportSave',
+  AI_EXPORT_PICK: 'ai:exportPick',
+  AI_EXPORT_DIR: 'ai:exportDir',
+  AI_PASTE_IMAGE: 'ai:pasteImage',
+  /* 系统剪贴板（v1.1.17） */
+  CLIPBOARD_WRITE: 'clipboard:write',
 
   /* 增量更新（v1.0.7） */
   UPDATE_CONTEXT: 'update:context',
@@ -588,6 +595,21 @@ const api = {
   /** reveal=true 选中文件本身；false 只打开所在文件夹 */
   revealCrashReport: (path: string, reveal = true) => invoke(IPC.AI_REPORT_REVEAL, path, reveal),
   crashWatchStatus: () => invoke(IPC.AI_CRASH_STATUS),
+
+  /*
+   * AI 回复转存成文件 + 粘贴图片（v1.1.17）。
+   * 正文的格式转换在渲染层做（shared/ai-export.ts），这里只负责落盘与弹框 ——
+   * docx / pdf 的生成也在主进程（写 ZIP、起隐藏窗口打印）。
+   */
+  aiExportSave: (req: any) => invoke(IPC.AI_EXPORT_SAVE, req),
+  /** 弹「另存为」，取消返回 null */
+  aiExportPick: (req: any) => invoke(IPC.AI_EXPORT_PICK, req),
+  /** 默认导出目录（已处理「没有 D 盘」的回落） */
+  aiExportDir: () => invoke(IPC.AI_EXPORT_DIR),
+  /** 剪贴板图片字节 → 临时文件路径（附件只认路径） */
+  aiPasteImage: (bytes: Uint8Array, mime?: string) => invoke(IPC.AI_PASTE_IMAGE, bytes, mime),
+  /** 写系统剪贴板：走主进程，不要求窗口处于焦点（渲染层 navigator.clipboard 有那个前提） */
+  clipboardWrite: (text: string) => invoke(IPC.CLIPBOARD_WRITE, text),
 
   /* 增量更新（v1.0.7） */
   updateContext: () => invoke(IPC.UPDATE_CONTEXT),

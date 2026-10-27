@@ -167,7 +167,12 @@ export function Card({
         </header>
       )}
       <div
-        className={`${padding ? 'card-body' : ''} ${expanded ? '' : 'card-body-collapsed'}`}
+        /*
+         * card-slot：内容容器的**固定**类名（padding={false} 时原本没有类名，
+         * 页面想对「卡片内容区」做 flex 布局就无从下手 —— Logcat 页要让它当
+         * 纵向弹性容器，见 pages.css 的 .logcat-card）。
+         */
+        className={`card-slot ${padding ? 'card-body' : ''} ${expanded ? '' : 'card-body-collapsed'}`}
         aria-hidden={collapsible ? !expanded : undefined}
       >
         {children}
@@ -280,7 +285,18 @@ export function Switch({ checked, onChange, label, disabled }: SwitchProps) {
 interface SegmentedProps<T extends string> {
   value: T;
   onChange: (v: T) => void;
-  options: { value: T; label: string }[];
+  /**
+   * `hidden: true` = 这一项**留在 DOM 里、但界面上不显示**。
+   *
+   * 为什么不直接从数组里删掉（v1.1.17 设置页「主题模式」用得上）：
+   *   ① 回归脚本是靠**真实点击**分段项切主题的（check-arknights 全程如此），
+   *      删了就点不到，等于把一个能跑的回归弄成假 FAIL；
+   *   ② value 落在「不存在的选项」上时分段控件一个都不高亮，
+   *      看起来像坏了 —— 保留 DOM 就还能正确标出当前项（只是看不见）。
+   * display:none 的元素 Tab 聚焦不到，所以对用户来说就是「没有这个入口」；
+   * 程序化 `.click()` 不受影响。
+   */
+  options: { value: T; label: string; hidden?: boolean }[];
   size?: 'sm' | 'md';
 }
 
@@ -296,6 +312,9 @@ export function Segmented<T extends string>({
         <button
           key={o.value}
           className={`segmented-item ${value === o.value ? 'active' : ''}`}
+          style={o.hidden ? { display: 'none' } : undefined}
+          aria-hidden={o.hidden || undefined}
+          tabIndex={o.hidden ? -1 : undefined}
           onClick={() => onChange(o.value)}
         >
           {o.label}
