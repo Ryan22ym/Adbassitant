@@ -6,6 +6,7 @@ import { captureScreen } from './device-ops';
 import { resolveDir } from './settings';
 import {
   QUICK_ACTION_MAX,
+  QUICK_ACTION_INLINE_MAX,
   QUICK_TARGET_FOREGROUND,
   QUICK_ACTION_NEEDS_TARGET,
   type QuickAction,
@@ -23,17 +24,37 @@ import {
  *   - 作用对象默认取「当前前台应用」，也可以钉死某个包名
  *
  * 存储位置：<userData>/quick-actions.json
+ *
+ * 🔴 存储格式在 v1.1.19 从「裸数组」升级为 `{ version, actions }`。
+ *    升级的原因不是洁癖：新增的「初始化启动」必须能**补进已有配置**一次，
+ *    而裸数组没有地方放「已经补过了」这个标记 —— 不记标记就会变成
+ *    「用户删掉它，下次启动又自己长回来」。旧数组格式仍然可以读（按 v1 处理）。
  */
 
 const FILE_NAME = 'quick-actions.json';
+
+/** 存储格式版本：1 = 裸数组；2 = { version, actions } */
+const STORE_VERSION = 2;
 
 /* ------------------------------------------------------------------ */
 /* 默认配置                                                            */
 /* ------------------------------------------------------------------ */
 
+/** 「初始化启动」的出厂定义（默认配置和旧配置迁移共用同一份） */
+const INIT_LAUNCH_ACTION: QuickAction = {
+  id: 'qa-init-launch',
+  label: '初始化启动',
+  kind: 'initLaunch',
+  target: QUICK_TARGET_FOREGROUND,
+  inline: true,
+  confirm: true,
+  tone: 'danger',
+  enabled: true,
+};
+
 /**
- * 出厂默认：正好覆盖最常做的三件事。
- * 前两个放行内（短文案），第三个名字长，收进 ⚡ 菜单。
+ * 出厂默认：正好铺满设备行上的四个直显位置（v1.1.19 起上限是 4）。
+ * 顺序就是常用的先后：清数据 → 初始化启动 → 桌面重进 → 杀进程重进。
  */
 export const DEFAULT_QUICK_ACTIONS: QuickAction[] = [
   {
@@ -46,6 +67,7 @@ export const DEFAULT_QUICK_ACTIONS: QuickAction[] = [
     tone: 'danger',
     enabled: true,
   },
+  { ...INIT_LAUNCH_ACTION },
   {
     id: 'qa-home-return',
     label: '桌面重进',
@@ -60,6 +82,7 @@ export const DEFAULT_QUICK_ACTIONS: QuickAction[] = [
     label: '杀进程重进',
     kind: 'restart',
     target: QUICK_TARGET_FOREGROUND,
+    inline: true,
     tone: 'default',
     enabled: true,
   },
@@ -138,32 +161,87 @@ export function sanitize(list: unknown): QuickAction[] {
   for (const a of out) {
     if (!a.inline) continue;
     inlineCount += 1;
-    if (inlineCount > 3) a.inline = false;
+    if (inlineCount > QUICK_ACTION_INLINE_MAX) a.inline = false;
   }
   return out;
 }
 
-export function listQuickActions(): QuickAction[] {
+/** 按当前格式把动作写盘 */
+function writeStore(list: QuickAction[]): void {
+  writeFileSync(
+    storeFile(),
+    JSON.stringify({ version: STORE_VERSION, actions: list }, null, 2),
+    'utf8',
+  );
+}
+
+/** 读盘：兼容 v1 的裸数组，缺失 / 损坏时 actions 为 null（调用方回落出厂默认） */
+function readStore(): { version: number; actions: unknown } {
   try {
     const f = storeFile();
-    if (!existsSync(f)) return [...DEFAULT_QUICK_ACTIONS];
+    if (!existsSync(f)) return { version: STORE_VERSION, actions: null };
     const parsed = JSON.parse(readFileSync(f, 'utf8'));
-    return sanitize(parsed);
+    // v1：整份就是动作数组
+    if (Array.isArray(parsed)) return { version: 1, actions: parsed };
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as any).actions)) {
+      const v = Number((parsed as any).version);
+      return { version: Number.isFinite(v) ? v : 1, actions: (parsed as any).actions };
+    }
   } catch {
-    return [...DEFAULT_QUICK_ACTIONS];
+    /* 坏 JSON 与「没有配置」同样处理 */
   }
+  return { version: STORE_VERSION, actions: null };
+}
+
+/**
+ * v1 → v2：把「初始化启动」补进已有配置，紧跟在「清数据」后面。
+ *
+ * 只在**读盘时发现文件是旧格式**才做，做完立刻按新格式写回 ——
+ * 之后用户删掉它就不会再长回来（这正是需要 STORE_VERSION 的原因）。
+ */
+function migrateToV2(list: QuickAction[]): QuickAction[] {
+  if (list.some((a) => a.kind === 'initLaunch')) return list;
+
+  const out = [...list];
+  const at = out.findIndex((a) => a.kind === 'clearData');
+  const inlineCount = out.filter((a) => a.inline).length;
+  const added: QuickAction = {
+    ...INIT_LAUNCH_ACTION,
+    // 行内位置已经满了就让它进 ⚡ 菜单，别把别人的直显挤掉
+    inline: inlineCount < QUICK_ACTION_INLINE_MAX,
+  };
+  out.splice(at >= 0 ? at + 1 : 0, 0, added);
+  return out.slice(0, QUICK_ACTION_MAX);
+}
+
+export function listQuickActions(): QuickAction[] {
+  const stored = readStore();
+  if (stored.actions === null) return [...DEFAULT_QUICK_ACTIONS];
+
+  let list = sanitize(stored.actions);
+  if (stored.version < STORE_VERSION) {
+    list = migrateToV2(list);
+    try {
+      writeStore(list);
+      log('info', '快捷动作', '已把「初始化启动」补进快捷动作配置（配置文件升到 v2）');
+    } catch (e) {
+      // 写不进去不影响本次使用，下次启动还会再补一次
+      log('warn', '快捷动作', `快捷动作配置升级失败：${(e as Error).message}`);
+    }
+  }
+  return list;
 }
 
 export function saveQuickActions(list: unknown): QuickAction[] {
   const clean = sanitize(list);
-  writeFileSync(storeFile(), JSON.stringify(clean, null, 2), 'utf8');
+  writeStore(clean);
   log('success', '快捷动作', `配置已保存（${clean.filter((a) => a.enabled).length} 个启用）`);
   return clean;
 }
 
 export function resetQuickActions(): QuickAction[] {
   const def = [...DEFAULT_QUICK_ACTIONS];
-  writeFileSync(storeFile(), JSON.stringify(def, null, 2), 'utf8');
+  writeStore(def);
   log('info', '快捷动作', '已恢复默认配置');
   return def;
 }
@@ -424,6 +502,24 @@ export async function runQuickAction(
       await wait(400);
       await launch(s, pkg!);
       steps.push('重新启动');
+      break;
+
+    /*
+     * 初始化启动（v1.1.19）：清数据 → 显式杀进程 → 冷启动。
+     * 比 restartFresh 多一步「确认进程真的没了 + 等一下让系统回收」——
+     * 国产 ROM 上 pm clear 之后前台服务 / 通知栏经常还挂着，
+     * 直接拉起会拿到一个半死不活的旧进程，看起来就像「数据没清干净」。
+     */
+    case 'initLaunch':
+      await clearData(s, pkg!);
+      steps.push('数据已清除');
+      await forceStop(s, pkg!).catch(() => {
+        /* 进程本来就不在了，不算失败 */
+      });
+      steps.push('进程已结束');
+      await wait(900);
+      await launch(s, pkg!);
+      steps.push('重新进入应用');
       break;
 
     case 'forceStop':

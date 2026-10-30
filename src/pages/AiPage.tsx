@@ -9,6 +9,7 @@ import {
   Notice,
   Segmented,
   Select,
+  Switch,
   Textarea,
 } from '@/components/ui';
 import { Icon } from '@/components/icons';
@@ -31,6 +32,7 @@ import { IPC } from '@shared/types';
 import type {
   AiAdbStep,
   AiAgentStepEvent,
+  AiArtifact,
   AiAttachment,
   AiChatMessage,
   AiChatResult,
@@ -56,6 +58,16 @@ import type {
  *      ① 开关（允不允许它碰设备）；
  *      ② 实时进度（push:aiAgentStep 推一条画一条，不然用户只能干等）；
  *      ③ 停止（多轮跑起来可能几十秒，必须能叫停）。
+ *
+ * 🔴 v1.1.20 两处针对性改造：
+ *    ① **切回页面停在最新回答**。以前 .ai-msgs 上有 scroll-behavior:smooth，
+ *       而恢复历史会话时内容还在长高 —— 平滑滚动的目标值第一帧就算死了，
+ *       结果停在顶部，用户得自己一路划下去。现在改成瞬时贴底 + 多段校正
+ *       （见 pinBottom / pinBottomSettled），并且用户上翻时不再强行拽回底部。
+ *    ② **产出直接变成文件**。回复里的整篇文档 / 代码块 / 表格由主进程写盘
+ *       （electron/services/ai-artifact.ts），清单随消息持久化，这里画成卡片：
+ *       点一下打开文件，边上按钮定位到资源管理器；页面头部还有一个「产出内容」
+ *       总览，能看到这段对话一共产出了什么。
  *
  * 三条约定：
  *
@@ -165,6 +177,16 @@ export default function AiPage() {
   const usable = !!cfg && isAiUsable(cfg);
   const active = cfg ? activeProviderOf(cfg) : null;
 
+  /*
+   * 当前会话的产出清单（v1.1.20）。
+   *
+   * 数据在 ChatPane 手里（它才有 messages），但入口按钮在页面头部 ——
+   * 于是由 ChatPane 每次消息变化时上抛一份扁平清单，这里只负责拿着展示。
+   * 不做全局 store：它完全是「这段对话的派生值」，退出页面就该消失。
+   */
+  const [outputs, setOutputs] = useState<AiArtifact[]>([]);
+  const [outOpen, setOutOpen] = useState(false);
+
   return (
     <div className="ai-page">
       <ConfigCard cfg={cfg} reload={reloadCfg} />
@@ -179,6 +201,24 @@ export default function AiPage() {
           ]}
         />
         <div className="ai-head-side">
+          {/*
+            产出内容入口：AI 每次回复里能变成文件的东西都是自动落盘的（见
+            electron/services/ai-artifact.ts），这里给一个「这次对话一共产出了什么」的总览。
+            没产出时按钮不隐藏、只做淡化 —— 位置固定，用户第二次进来就知道在哪点。
+          */}
+          {effTab === 'chat' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Icon.folder}
+              className="ai-out-btn"
+              data-empty={outputs.length ? '0' : '1'}
+              title="查看这段对话产出的文档、代码与表格"
+              onClick={() => setOutOpen(true)}
+            >
+              产出内容{outputs.length ? ` · ${outputs.length}` : ''}
+            </Button>
+          )}
           {active ? (
             <Badge tone={usable ? 'success' : 'warn'} dot>
               {active.name} · {active.model || '未填模型'}
@@ -196,7 +236,13 @@ export default function AiPage() {
         </Notice>
       )}
 
-      {effTab === 'chat' ? <ChatPane cfg={cfg} usable={usable} /> : <ReportsPane />}
+      {effTab === 'chat' ? (
+        <ChatPane cfg={cfg} usable={usable} onArtifacts={setOutputs} />
+      ) : (
+        <ReportsPane />
+      )}
+
+      {outOpen && <OutputsDialog items={outputs} onClose={() => setOutOpen(false)} />}
     </div>
   );
 }
@@ -254,6 +300,7 @@ function ConfigCard({
             crashDir: draft.crashDir,
             crashLogMinutes: draft.crashLogMinutes,
             exportDir: draft.exportDir,
+            autoSaveArtifacts: draft.autoSaveArtifacts,
           }),
         { silent: true },
       );
@@ -470,6 +517,23 @@ function ConfigCard({
                   }
                 />
               </Field>
+
+              {/*
+                自动落盘开关（v1.1.20）。
+                🔴 默认开 —— 这个功能的意义就是「不用手动导出」，默认关等于没做。
+                   留开关是因为它确实会在磁盘上攒文件：天天聊的话，产出目录一个月能有几百份。
+                   关掉之后行为完全回到 v1.1.19（只有点「导出」才写盘）。
+              */}
+              <Field
+                label="回复自动存成文件"
+                hint={`文档 / 代码块 / 表格会自动写到「${draft.exportDir || '导出目录'}\\产出\\<会话标题>\\」`}
+              >
+                <Switch
+                  checked={draft.autoSaveArtifacts}
+                  onChange={(v) => setDraft({ ...draft, autoSaveArtifacts: v })}
+                  label={draft.autoSaveArtifacts ? '已开启（回复下方可直接打开产出文件）' : '已关闭（只能用「导出」手动保存）'}
+                />
+              </Field>
             </div>
           </details>
         </div>
@@ -574,7 +638,16 @@ function StepRow({ step: s, index }: { step: AiAdbStep; index: number }) {
   );
 }
 
-function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
+function ChatPane({
+  cfg,
+  usable,
+  onArtifacts,
+}: {
+  cfg: AiConfig | null;
+  usable: boolean;
+  /** 把「这段对话产出了哪些文件」上抛给页面头部（入口按钮与总览面板用） */
+  onArtifacts?: (list: AiArtifact[]) => void;
+}) {
   const [sessions, setSessions] = useState<AiSessionMeta[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
@@ -593,6 +666,57 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
   /** dragenter/dragleave 会在子元素间反复触发，用计数器判断是否真的离开 */
   const dragDepth = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
+  /**
+   * 视图是否「跟着底部看」。
+   *
+   * true  = 新消息来了就贴底（用户没干预过，或者主动滚回了底部）
+   * false = 用户自己往上翻了，别再把他拽下去
+   *
+   * 之所以用 ref 而不是 state：它只影响滚不滚，不参与渲染；
+   * 变成 state 会让每个气泡重渲染一次，长对话肉眼可见地卡一下。
+   */
+  const stickRef = useRef(true);
+  const pinRaf = useRef<number | null>(null);
+
+  /**
+   * 瞬时贴到底部（v1.1.20）。
+   *
+   * 🔴 关键在「瞬时」两个字。CSS 曾经给 .ai-msgs 加过 scroll-behavior:smooth，
+   *    结果恢复历史会话时滚动变成一段异步动画，而那时候 Markdown 还在长高 ——
+   *    动画目标值在第一帧就算死了，最后停在半路。切页面回来必现（组件整棵重建）。
+   *    这里先就地把 scroll-behavior 改成 auto（赋值期间同步生效），滚完再还回去，
+   *    用户自己滚轮的手感一点不变。
+   */
+  const pinBottom = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const prev = el.style.scrollBehavior;
+    el.style.scrollBehavior = 'auto';
+    el.scrollTop = el.scrollHeight;
+    el.style.scrollBehavior = prev;
+  }, []);
+
+  /**
+   * 贴底 + 下一帧再校一次。
+   *
+   * 一帧之后再滚一次是必要的：消息内容里有等宽字体、代码块、表格，
+   * 布局稳定下来往往比 commit 晚一帧，只滚一次会差几十像素（看起来像没到底）。
+   */
+  const pinBottomSettled = useCallback(() => {
+    pinBottom();
+    if (pinRaf.current) cancelAnimationFrame(pinRaf.current);
+    pinRaf.current = requestAnimationFrame(() => {
+      pinRaf.current = null;
+      if (stickRef.current) pinBottom();
+    });
+  }, [pinBottom]);
+
+  useEffect(
+    () => () => {
+      if (pinRaf.current) cancelAnimationFrame(pinRaf.current);
+    },
+    [],
+  );
 
   /* 本次请求的标识：既用来认领推送，也用来发「停止」。
    * 用 ref 而不是 state 是必须的 —— 推送回调在 effect 里只注册一次，
@@ -647,16 +771,52 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
         rememberSession(undefined);
         return;
       }
+      /* 切回这个页面就是要接着看最新的回答，所以无条件恢复「跟随底部」 */
+      stickRef.current = true;
       setSessionId(s.id);
       setMessages(s.messages || []);
+      pinBottomSettled();
     })();
-  }, []);
+  }, [pinBottomSettled]);
 
-  /* 新消息 / 发送中 都要把视图钉到底部（实时执行时更要跟住，命令是一条条冒出来的） */
+  /*
+   * 新消息 / 发送中 都要把视图钉到底部（实时执行时更要跟住，命令是一条条冒出来的）。
+   *
+   * ⚠️ 只有 stickRef 为真才滚：用户往上翻着看历史时，来一条新消息就把他拽回底部
+   *    是最烦人的那种「自作聪明」。他自己滚回底部（相差 < 56px）就自动恢复跟随。
+   */
   useEffect(() => {
+    if (!stickRef.current) return;
+    pinBottomSettled();
+    // 等宽字体回退、表格列宽、代码块折行都会在几百毫秒内再把高度顶高一点
+    const t1 = window.setTimeout(() => stickRef.current && pinBottom(), 120);
+    const t2 = window.setTimeout(() => stickRef.current && pinBottom(), 420);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [messages, sending, liveSteps, pinBottom, pinBottomSettled]);
+
+  /** 滚动位置 → 还要不要跟着底下走：离底 56px 以内算「在看最新」 */
+  const onListScroll = () => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, sending, liveSteps]);
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 56;
+  };
+
+  /* 窗口重新获得焦点时补一次（被投屏窗口盖住、最小化还原之类，未必触发重挂载） */
+  useEffect(() => {
+    const onFocus = () => {
+      if (stickRef.current) pinBottomSettled();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [pinBottomSettled]);
+
+  /* 产出清单上抛：页面头部的「产出内容 · N」与总览面板都靠它 */
+  useEffect(() => {
+    onArtifacts?.(messages.flatMap((m) => m.artifacts || []));
+  }, [messages, onArtifacts]);
 
   const reset = () => {
     setSessionId(undefined);
@@ -665,16 +825,20 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
     setMessages([]);
     setInput('');
     setAtts([]);
+    stickRef.current = true;
   };
 
   const openSession = async (id: string) => {
     const s = await tryCall<AiSession>(() => window.adbApi.aiSession(id));
     if (!s) return;
+    /* 换一段对话 = 从头看它最新的回答；上一段里手动上翻的状态不该带过来 */
+    stickRef.current = true;
     setSessionId(s.id);
     rememberSession(s.id);
     setMessages(s.messages || []);
     setInput('');
     setAtts([]);
+    pinBottomSettled();
   };
 
   const removeSession = async (id: string) => {
@@ -842,6 +1006,8 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
     const history = [...messages, userMsg];
     const runId = uid();
     runIdRef.current = runId;
+    /* 提问了就是要看回答，哪怕刚才在翻历史也拉回底部 */
+    stickRef.current = true;
     setMessages(history);
     setLiveSteps([]);
     setInput('');
@@ -864,6 +1030,8 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
           model: r.model,
           time: Date.now(),
           steps: r.steps && r.steps.length ? r.steps : undefined,
+          // 主进程已经把回复里的文档/代码块/表格写成文件了，这里只接管清单
+          artifacts: r.artifacts && r.artifacts.length ? r.artifacts : undefined,
         },
       ]);
       if (r.stopped) {
@@ -956,7 +1124,7 @@ function ChatPane({ cfg, usable }: { cfg: AiConfig | null; usable: boolean }) {
       </aside>
 
       <section className="ai-chat">
-        <div className="ai-msgs" ref={listRef}>
+        <div className="ai-msgs" ref={listRef} onScroll={onListScroll}>
           {messages.length === 0 && !sending ? (
             <Empty
               icon={Icon.ai}
@@ -1174,6 +1342,12 @@ function ChatBubble({
           {/* 命令记录在正文上方：它是「模型为了回答去查了什么」，读的时候先看过程再看结论 */}
           {msg.steps && msg.steps.length > 0 && <StepList steps={msg.steps} />}
           <MdView text={msg.content} />
+          {/*
+            产出文件（v1.1.20）：紧接着正文往下放。
+            回复里能变成文件的东西主进程已经写好了（文档 / 代码块 / 表格），
+            这里只把清单画出来 —— 点一下用默认程序打开，用不着一层层翻目录。
+          */}
+          {msg.artifacts && msg.artifacts.length > 0 && <ArtifactList items={msg.artifacts} />}
         </>
       )}
       <div className="ai-bubble-foot">
@@ -1206,6 +1380,188 @@ function ChatBubble({
               </button>
             )}
           </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* 产出文件（v1.1.20）                                                 */
+/* ================================================================== */
+
+/*
+ * 气泡底部那一排卡片，以及头部的「产出内容」总览。
+ *
+ * 文件是主进程写的（electron/services/ai-artifact.ts），这里只负责两件事：
+ *   ① 画出来 —— 类型图标 + 文件名 + 「文档 · 1.2 KB」；
+ *   ② 点开 —— 整行点击 = 用系统默认程序打开（用户 90% 的动作是「我要看这个文件」），
+ *      右侧小按钮才是「在资源管理器里定位」（剩下那 10%：想拖到别处、想改个名）。
+ *
+ * 🔴 不在这里做任何内容转换：清单里的路径是一次性落盘的结果，
+ *    回看历史时文件可能已经被用户改名/删除，那就如实报错（toast 里带完整路径），
+ *    绝不偷偷重新生成一份 —— 那样用户会以为自己的文件还在。
+ */
+
+const ART_LABEL: Record<AiArtifact['kind'], string> = {
+  doc: '文档',
+  code: '代码',
+  table: '表格',
+};
+
+const ART_ICON: Record<AiArtifact['kind'], React.ReactNode> = {
+  doc: Icon.report,
+  code: Icon.terminal,
+  table: Icon.log,
+};
+
+function fmtBytes(n: number): string {
+  if (!n || n < 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+/** 用系统默认程序打开产出文件 */
+async function openArtifact(a: AiArtifact): Promise<void> {
+  try {
+    await window.adbApi.openPath(a.path);
+  } catch (e) {
+    useApp
+      .getState()
+      .toast('error', '打不开这个文件', `${a.path}（${(e as Error).message}）`);
+  }
+}
+
+/** 在资源管理器里选中产出文件 */
+async function revealArtifact(a: AiArtifact): Promise<void> {
+  try {
+    await window.adbApi.reveal(a.path);
+  } catch (e) {
+    useApp
+      .getState()
+      .toast('error', '定位失败', `文件可能已被移动或删除：${a.path}`);
+  }
+}
+
+function ArtifactRow({ a, withTime }: { a: AiArtifact; withTime?: boolean }) {
+  const meta = [ART_LABEL[a.kind], fmtBytes(a.bytes), withTime ? formatTime(a.at) : '']
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <div
+      className="ai-art"
+      role="button"
+      tabIndex={0}
+      title={`${a.path}\n点击打开`}
+      onClick={() => void openArtifact(a)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') void openArtifact(a);
+      }}
+    >
+      <i className="ai-art-ico">{ART_ICON[a.kind]}</i>
+      <span className="ai-art-main">
+        <span className="ai-art-name">{fileName(a.path)}</span>
+        <span className="ai-art-sub">{meta}</span>
+      </span>
+      <button
+        type="button"
+        className="ai-art-act"
+        title="在资源管理器中定位"
+        onClick={(e) => {
+          e.stopPropagation();
+          void revealArtifact(a);
+        }}
+      >
+        定位
+      </button>
+    </div>
+  );
+}
+
+function ArtifactList({ items }: { items: AiArtifact[] }) {
+  return (
+    <div className="ai-arts" data-artifacts={items.length}>
+      {items.map((a) => (
+        <ArtifactRow key={a.id} a={a} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 「产出内容」总览。
+ *
+ * 按时间倒序（最新的在最上面）—— 用户点开这个面板时，几乎总是想找「刚才那份」。
+ * 空态不只是一个「暂无」，要把规则说清楚：为什么这里没东西、去哪儿关掉它。
+ */
+function OutputsDialog({ items, onClose }: { items: AiArtifact[]; onClose: () => void }) {
+  const toast = useApp((s) => s.toast);
+  const sorted = useMemo(() => [...items].sort((a, b) => b.at - a.at), [items]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const openDir = async () => {
+    const dir = sorted[0]?.dir;
+    if (!dir) return;
+    try {
+      await window.adbApi.openPath(dir);
+    } catch (e) {
+      toast('error', '打不开产出目录', (e as Error).message);
+    }
+  };
+
+  return (
+    <div
+      className="ai-export-mask"
+      role="dialog"
+      aria-modal="true"
+      aria-label="产出内容"
+      onClick={onClose}
+    >
+      <div
+        className="ai-export-card ai-out-card fade-in"
+        data-outputs-dialog="1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ai-export-head">
+          <strong>产出内容{items.length ? ` · ${items.length}` : ''}</strong>
+          <button type="button" className="ai-export-x" title="关闭" onClick={onClose}>
+            {Icon.close}
+          </button>
+        </div>
+
+        {sorted.length === 0 ? (
+          <>
+            <p className="ai-export-empty">这段对话还没有产出文件。</p>
+            <p className="ai-out-tip">
+              AI 回复里的整篇文档、代码块和表格会自动写成文件，出现在对话下方，点一下就能打开。
+              不想要可以在上面「模型接入 → 提示词、崩溃分析与导出目录」里关掉「回复自动存成文件」。
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="ai-out-body">
+              {sorted.map((a) => (
+                <ArtifactRow key={a.id} a={a} withTime />
+              ))}
+            </div>
+            <div className="ai-out-foot">
+              <Button size="sm" variant="ghost" icon={Icon.folder} onClick={() => void openDir()}>
+                打开产出目录
+              </Button>
+              <span className="ai-spacer" />
+              <Button size="sm" variant="ghost" onClick={onClose}>
+                关闭
+              </Button>
+            </div>
+          </>
         )}
       </div>
     </div>

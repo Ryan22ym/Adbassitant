@@ -27,8 +27,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs';
-import { basename, dirname, extname, join } from 'path';
+import { dirname, extname, join } from 'path';
 import { createZip } from './zip';
+import { uniquePath, resolveWritableDir } from './path-util';
 import { getAiConfig } from './ai';
 import { log } from './adb';
 import {
@@ -58,29 +59,14 @@ export function defaultAiExportDir(): string {
   } catch {
     /* 配置读不出来就用出厂值，不影响导出 */
   }
-  const m = /^([a-zA-Z]):/.exec(raw);
-  if (m && !existsSync(`${m[1]}:\\`)) {
-    return join(app.getPath('documents'), 'ADB助手', 'AI导出');
-  }
-  return raw;
+  return resolveWritableDir(raw, join(app.getPath('documents'), 'ADB助手', 'AI导出'));
 }
 
 /* ------------------------------------------------------------------ */
 /* 路径处理                                                            */
 /* ------------------------------------------------------------------ */
 
-/** 目标已存在时不覆盖，改成 `名字 (1).md` —— 导出是「顺手存一份」，不该吃掉旧文件 */
-function uniquePath(p: string): { path: string; renamed: boolean } {
-  if (!existsSync(p)) return { path: p, renamed: false };
-  const dir = dirname(p);
-  const ext = extname(p);
-  const base = basename(p, ext);
-  for (let i = 1; i < 1000; i++) {
-    const cand = join(dir, `${base} (${i})${ext}`);
-    if (!existsSync(cand)) return { path: cand, renamed: true };
-  }
-  throw new Error(`同名文件太多，请先清理一下：${dir}`);
-}
+/* 重名改名规则已抽到 path-util.ts（自动落盘那边也要用同一套，见那里的注释） */
 
 function extOfRequest(req: AiExportRequest): string {
   if (req.format === 'code') return `.${String(req.ext || 'txt').replace(/^\./, '')}`;

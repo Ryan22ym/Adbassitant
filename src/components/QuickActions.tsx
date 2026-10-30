@@ -21,8 +21,8 @@ import './quick-actions.css';
 /**
  * 设备行「快捷动作」
  * ============================================================
- * 行上的空间只够放两三个按钮，所以：
- *   - 标记了「行内直显」的动作直接渲染成小按钮（最多 3 个）
+ * 行上的空间只够放几个按钮，所以：
+ *   - 标记了「行内直显」的动作直接渲染成小按钮（最多 QUICK_ACTION_INLINE_MAX 个，v1.1.19 起为 4）
  *   - 其余收进「更多」菜单；菜单里还能看到当前前台应用、进配置
  * 配置（增删改 / 排序 / 自定义命令）在弹层里做，改完落盘到本机。
  */
@@ -362,6 +362,8 @@ export function QuickActionsDialog({
       homeReturn: '桌面重进',
       restart: '杀进程重进',
       restartFresh: '清数据重进',
+      /* 设备行上只放得下四个字，完整说明见 QUICK_ACTION_KIND_LABEL */
+      initLaunch: '初始化启动',
       forceStop: '强制停止',
       launch: '启动',
       screenshot: '截图',
@@ -371,6 +373,8 @@ export function QuickActionsDialog({
       sleep: '息屏',
       shell: '自定义命令',
     };
+    /* 不可逆的动作自动带上红色调与二次确认（新增危险动作时加进这个集合即可） */
+    const risky = kind === 'clearData' || kind === 'restartFresh' || kind === 'initLaunch';
     setDraft((d) => [
       ...d,
       {
@@ -379,8 +383,8 @@ export function QuickActionsDialog({
         kind,
         target: needs ? QUICK_TARGET_FOREGROUND : undefined,
         command: kind === 'shell' ? 'am force-stop {pkg}' : undefined,
-        tone: kind === 'clearData' || kind === 'restartFresh' ? 'danger' : 'default',
-        confirm: kind === 'clearData' || kind === 'restartFresh',
+        tone: risky ? 'danger' : 'default',
+        confirm: risky,
         enabled: true,
       },
     ]);

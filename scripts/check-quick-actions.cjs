@@ -205,7 +205,7 @@ async function saveActions(page, list) {
   );
 }
 
-const DEFAULT_KINDS = ['clearData', 'homeReturn', 'restart'];
+const DEFAULT_KINDS = ['clearData', 'initLaunch', 'homeReturn', 'restart'];
 
 async function runChecks(page) {
   /* ---------- 0. 等 React 挂载 ---------- */
@@ -233,40 +233,40 @@ async function runChecks(page) {
 
   const def = await callApi(page, `window.adbApi.resetQuickActions()`);
   record(
-    Array.isArray(def) && def.length === 3,
-    'A1 默认配置是 3 条动作',
+    Array.isArray(def) && def.length === 4,
+    'A1 默认配置是 4 条动作（含新增的「初始化启动」）',
     JSON.stringify(def && def.map ? def.map((a) => a.kind) : def),
   );
   record(
     Array.isArray(def) && def.map((a) => a.kind).join(',') === DEFAULT_KINDS.join(','),
-    'A2 默认动作 = 清数据 / 桌面重进 / 杀进程重进',
+    'A2 默认动作 = 清数据 / 初始化启动 / 桌面重进 / 杀进程重进',
     Array.isArray(def) ? def.map((a) => a.label).join(' | ') : '',
   );
   record(
-    Array.isArray(def) && def.filter((a) => a.inline).length === 2,
-    'A3 默认有 2 条行内直显（第三个收进菜单，避免撑爆设备行）',
+    Array.isArray(def) && def.filter((a) => a.inline).length === 4,
+    'A3 默认 4 条全部行内直显（v1.1.19 上限 3→4）',
     Array.isArray(def) ? String(def.filter((a) => a.inline).length) : '',
   );
 
   const listed = await callApi(page, `window.adbApi.quickActions()`);
   record(
-    Array.isArray(listed) && listed.length === 3,
+    Array.isArray(listed) && listed.length === 4,
     'A4 list 能读回默认配置',
     `${Array.isArray(listed) ? listed.length : listed}`,
   );
 
-  // 4 条都标 inline —— 应被清洗成最多 3 条
+  // 5 条都标 inline —— 应被清洗成最多 4 条
   const manyInline = [
     { id: 'x1', label: '一', kind: 'clearData', target: 'foreground', inline: true, enabled: true },
     { id: 'x2', label: '二', kind: 'homeReturn', target: 'foreground', inline: true, enabled: true },
     { id: 'x3', label: '三', kind: 'restart', target: 'foreground', inline: true, enabled: true },
     { id: 'x4', label: '四', kind: 'launch', target: 'foreground', inline: true, enabled: true },
-    { id: 'x5', label: '五', kind: 'home', inline: false, enabled: true },
+    { id: 'x5', label: '五', kind: 'home', inline: true, enabled: true },
   ];
   const saved = await saveActions(page, manyInline);
   record(
-    Array.isArray(saved) && saved.filter((a) => a.inline).length === 3,
-    'A5 行内直显超过 3 条会被自动降级',
+    Array.isArray(saved) && saved.filter((a) => a.inline).length === 4,
+    'A5 行内直显超过 4 条会被自动降级',
     JSON.stringify(Array.isArray(saved) ? saved.map((a) => `${a.label}:${!!a.inline}`) : saved),
   );
   record(
@@ -286,14 +286,14 @@ async function runChecks(page) {
     { id: 'bad', label: '坏数据', kind: 'not-a-kind', enabled: true },
   ]);
   record(
-    Array.isArray(dirty) && dirty.length === 3 && dirty[0].kind === 'clearData',
+    Array.isArray(dirty) && dirty.length === 4 && dirty[0].kind === 'clearData',
     'A8 非法 kind 被丢弃，全部非法时回退默认',
     JSON.stringify(Array.isArray(dirty) ? dirty.map((a) => a.kind) : dirty),
   );
 
   const back = await callApi(page, `window.adbApi.resetQuickActions()`);
   record(
-    Array.isArray(back) && back.length === 3,
+    Array.isArray(back) && back.length === 4,
     'A9 reset 回到默认',
     `${Array.isArray(back) ? back.length : '?'} 条`,
   );
@@ -339,8 +339,8 @@ async function runChecks(page) {
   } else {
     record(ui.bar.every(Boolean), 'B1 每个就绪行都有快捷动作区 .qa-bar', ui.bar.join(','));
     record(
-      ui.chips.every((n) => n === 2),
-      'B2 行内直显 2 个动作按钮（默认配置）',
+      ui.chips.every((n) => n === 4),
+      'B2 行内直显 4 个动作按钮（默认配置）',
       ui.chipText.map((t) => `[${t.join('|')}]`).join(' '),
     );
     record(ui.more.every(Boolean), 'B3 每行都有「更多」菜单按钮', ui.more.join(','));
@@ -388,8 +388,8 @@ async function runChecks(page) {
     log('菜单:', JSON.stringify(menu));
     record(menu.open === true, 'B5 点击「更多」弹出动作菜单', JSON.stringify(menu.open));
     record(
-      menu.open && menu.items && menu.items.length === 3,
-      'B6 菜单里列出全部 3 条启用动作',
+      menu.open && menu.items && menu.items.length === 4,
+      'B6 菜单里列出全部 4 条启用动作',
       JSON.stringify(menu.items),
     );
     record(menu.open && menu.hasFg, 'B7 菜单显示当前前台应用', menu.fgText || '');
@@ -430,7 +430,7 @@ async function runChecks(page) {
     `);
     log('弹层:', JSON.stringify(dlg));
     record(dlg.open === true, 'B9 点「配置」打开配置弹层', JSON.stringify(dlg.open));
-    record(dlg.open && dlg.rows === 3, 'B10 弹层里列出 3 条动作', String(dlg.rows));
+    record(dlg.open && dlg.rows === 4, 'B10 弹层里列出 4 条动作', String(dlg.rows));
     record(dlg.open && dlg.addBtns >= 10, 'B11 提供内置动作清单可添加', String(dlg.addBtns));
     record(
       dlg.open && dlg.cfgIconSvg.every((n) => n === 1) && dlg.addIconSvg.every((n) => n === 1),
@@ -485,8 +485,8 @@ async function runChecks(page) {
 
     const persisted = await callApi(page, `window.adbApi.quickActions()`);
     record(
-      Array.isArray(persisted) && persisted.length === 4,
-      'B14 保存真的落盘（4 条）',
+      Array.isArray(persisted) && persisted.length === 5,
+      'B14 保存真的落盘（默认 4 条 + 新增 1 条）',
       `${Array.isArray(persisted) ? persisted.length : '?'} 条`,
     );
     record(
@@ -523,7 +523,7 @@ async function runChecks(page) {
     const rowsAfterReset = await page.evalJS(
       `document.querySelectorAll('[data-qa-dialog] .qa-cfg-row').length`,
     );
-    record(rowsAfterReset === 3, 'B16 「恢复默认」把弹层重置成 3 条', String(rowsAfterReset));
+    record(rowsAfterReset === 4, 'B16 「恢复默认」把弹层重置成 4 条', String(rowsAfterReset));
     await page.evalJS(`
       (() => {
         const d = document.querySelector('[data-qa-dialog]');
@@ -645,7 +645,7 @@ async function runChecks(page) {
   // 收尾：把测试配置清掉，恢复默认
   const restoreD = await callApi(page, `window.adbApi.resetQuickActions()`);
   record(
-    Array.isArray(restoreD) && restoreD.length === 3 && restoreD[0].target === 'foreground',
+    Array.isArray(restoreD) && restoreD.length === 4 && restoreD[0].target === 'foreground',
     'D6 测试配置已清理，回到默认（前台应用）',
     JSON.stringify(Array.isArray(restoreD) ? restoreD.map((a) => a.target) : restoreD),
   );
@@ -757,7 +757,7 @@ async function runChecks(page) {
       );
     } else {
       const restored = await callApi(page, `window.adbApi.resetQuickActions()`);
-      record(Array.isArray(restored) && restored.length === 3, 'C5 测试配置已清理，恢复默认', '');
+      record(Array.isArray(restored) && restored.length === 4, 'C5 测试配置已清理，恢复默认', '');
     }
   }
 

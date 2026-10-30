@@ -391,6 +391,12 @@ export function registerIpc() {
       ensureDir(dir);
       const out = await captureScreen(serial, dir, `screenshot_${timestamp()}.png`);
       send('push:screenshot', out);
+      /*
+       * 截完直接把资源管理器带到这张图上（v1.1.19）。
+       * showItemInFolder 用系统外壳执行，不阻塞也不抛错 —— 截图成功与否不受它影响；
+       * 文件不存在（极端情况下被清理）时它只会静默打开父目录，这里先判一下更稳。
+       */
+      if (existsSync(out.localPath)) shell.showItemInFolder(out.localPath);
       return out;
     }),
   );
@@ -443,6 +449,11 @@ export function registerIpc() {
         duration: h.duration,
         status: 'done',
       });
+      /*
+       * 录完同样把资源管理器带到视频上（v1.1.19）。
+       * 放在 stop() **之后**：scrcpy 通道是边录边写，提前定位会看到还没写完的 0 字节文件。
+       */
+      if (existsSync(h.localPath)) shell.showItemInFolder(h.localPath);
       return { localPath: h.localPath };
     }),
   );

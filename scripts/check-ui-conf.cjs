@@ -183,7 +183,11 @@ const eq = (actual, name, expect) =>
     `\n      got    = ${JSON.stringify(actual)}\n      expect = ${JSON.stringify(expect)}`,
   );
 
-/** 出厂导航顺序（与 shared/ui-conf.ts 的 DEFAULT_LAYOUT.sidebar.order 对应） */
+/**
+ * 出厂导航顺序（与 shared/ui-conf.ts 的 DEFAULT_LAYOUT.sidebar.order 对应，
+ * 但**只列默认可见的项**：`sidebar.order` 是 10 项，而 features 的 `nav.clicker`
+ * 自 v1.1.19 起出厂为 false，所以界面上默认只有 9 项）。
+ */
 const FACTORY_NAV = [
   '设备',
   '投屏',
@@ -191,7 +195,10 @@ const FACTORY_NAV = [
   '应用管理',
   '实时 Logcat',
   '弱网模拟',
-  '自动连点器',
+  /*
+   * 「自动连点器」不在这里：v1.1.19 起它出厂 `nav.clicker: false`（默认隐藏），
+   * 需要时手改 Conf/features.json 打开。阶段1 的用例会显式写 true 来验证它仍可显示。
+   */
   '命令终端',
   /*
    * AI 助手（v1.1.14）：排在「设置」之前。
@@ -462,7 +469,7 @@ async function runInstalled() {
   let s = await launchInstalled();
   try {
     const nav = await waitForPage(s.page, READ_NAV);
-    eq(nav, '安装版 出厂导航顺序 = 10 项', FACTORY_NAV);
+    eq(nav, '安装版 出厂导航顺序 = 9 项（连点器默认关闭）', FACTORY_NAV);
 
     await gotoPage(s.page, '/tools');
     const tabs = await waitForPage(s.page, READ_TABS);
@@ -482,7 +489,8 @@ async function runInstalled() {
   writeInstalledConf('features.json', {
     _说明: '自检脚本临时写入',
     _enabled: true,
-    features: { nav: { weaknet: false } },
+    /* clicker 出厂是关的，这里显式打开 —— 下面那条断言要看到它排到第二位 */
+    features: { nav: { weaknet: false, clicker: true } },
   });
   writeInstalledConf('panels.json', {
     _说明: '自检脚本临时写入',
@@ -630,7 +638,7 @@ async function run() {
   await reload(win, '/tools');
 
   const nav0 = await waitFor(win, READ_NAV);
-  eq(nav0, '阶段0 出厂导航顺序 = 10 项且与旧版写死顺序一致', FACTORY_NAV);
+  eq(nav0, '阶段0 出厂导航顺序 = 9 项（连点器出厂关闭）', FACTORY_NAV);
 
   const tabs0 = await waitFor(win, READ_TABS);
   eq(tabs0, '阶段0 出厂「常用工具」标签顺序 = 7 项', FACTORY_TABS);
@@ -672,8 +680,12 @@ async function run() {
     _说明: '自检脚本临时写入',
     _enabled: true,
     features: {
-      /* 只关 weaknet / command —— clicker 留着，才能看出 order 把它排到了第二位 */
-      nav: { weaknet: false, command: false },
+      /*
+       * 只关 weaknet / command，并且**显式把 clicker 打开**：
+       * 它出厂是关的，这里写 true 既验证「order 能把它排到第二位」，
+       * 也顺带验证「features 里的 true 能盖过新的出厂默认」。
+       */
+      nav: { weaknet: false, command: false, clicker: true },
       tools: { record: false, screenshot: false },
     },
   });

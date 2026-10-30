@@ -281,7 +281,7 @@ export const Icon = {
 /* ------------------------------------------------------------------ */
 
 /**
- * 12 种内置动作的图形。设计意图（都刻意避开了会引发误读的图形）：
+ * 13 种内置动作的图形。设计意图（都刻意避开了会引发误读的图形）：
  *
  * | kind         | 图形         | 为什么是它                                   |
  * |--------------|--------------|----------------------------------------------|
@@ -289,6 +289,7 @@ export const Icon = {
  * | homeReturn   | 房子 + 上行箭头 | 回桌面后重新唤起（热启动，房子内部向上）      |
  * | restart      | 单向循环箭头 | 冷启动；与导航 refresh 同族但只有一个箭头      |
  * | restartFresh | 循环箭头 + 斜杠 | 在 restart 上加「清除」标记（清数据后冷启动） |
+ * | initLaunch   | 循环箭头 + 播放三角 | 同上再加「启动」标记 —— 一眼看出是「清完就进去」|
  * | forceStop    | 圆 + 竖线    | 标准 stop 符号，与「清数据」的红调提示配合    |
  * | launch       | 播放三角     | 启动应用                                     |
  * | screenshot   | 相机         | ——                                           |
@@ -325,6 +326,13 @@ export const ActionIcon: Record<QuickActionKind, ReactNode> = {
       <path d="M19.6 8.4A8 8 0 104 12.6" strokeLinecap="round" />
       <path d="M20 4v4.6h-4.6" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M9.7 14.3l4.6-4.6" strokeLinecap="round" />
+    </svg>
+  ),
+  initLaunch: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M19.6 8.4A8 8 0 104 12.6" strokeLinecap="round" />
+      <path d="M20 4v4.6h-4.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10.4 9.2l4.6 2.8-4.6 2.8z" fill="currentColor" stroke="none" />
     </svg>
   ),
   forceStop: (

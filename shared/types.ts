@@ -256,6 +256,15 @@ export type QuickActionKind =
   | 'restart'
   /** 清数据后重新启动 */
   | 'restartFresh'
+  /**
+   * 初始化启动（v1.1.19）：清空数据 → 结束进程 → 冷启动重新进入。
+   *
+   * 与 restartFresh 的差别在「把进程真正杀干净再进」：
+   * restartFresh 只靠 pm clear 顺带停进程，国产 ROM 上常留下前台服务 / 通知栏残留；
+   * 这个动作显式 am force-stop、等一下让系统回收，再走 monkey 拉起，
+   * 拿到的就是「像刚装完一样」的首次启动现场。
+   */
+  | 'initLaunch'
   /** 强制停止（不重启） */
   | 'forceStop'
   /** 启动 / 前台唤起 */
@@ -279,6 +288,7 @@ export const QUICK_ACTION_NEEDS_TARGET: Record<QuickActionKind, boolean> = {
   homeReturn: true,
   restart: true,
   restartFresh: true,
+  initLaunch: true,
   forceStop: true,
   launch: true,
   screenshot: false,
@@ -295,6 +305,7 @@ export const QUICK_ACTION_KIND_LABEL: Record<QuickActionKind, string> = {
   homeReturn: '回桌面再进（不杀进程）',
   restart: '退出后重进（杀进程）',
   restartFresh: '清数据后重进',
+  initLaunch: '初始化启动（清空数据后重新进入）',
   forceStop: '强制停止',
   launch: '启动应用',
   screenshot: '截图到电脑',
@@ -320,7 +331,7 @@ export interface QuickAction {
   target?: string;
   /** kind === 'shell' 时的命令模板 */
   command?: string;
-  /** 在设备行上直接显示成按钮（否则收进 ⚡ 菜单），最多 3 个 */
+  /** 在设备行上直接显示成按钮（否则收进 ⚡ 菜单），最多 QUICK_ACTION_INLINE_MAX 个 */
   inline?: boolean;
   /** 执行前二次确认（清数据这类不可逆动作） */
   confirm?: boolean;
@@ -349,8 +360,12 @@ export interface QuickRunResult {
   steps: string[];
 }
 
-/** 设备行上直接显示的按钮数量上限（空间有限） */
-export const QUICK_ACTION_INLINE_MAX = 3;
+/**
+ * 设备行上直接显示的按钮数量上限（空间有限）。
+ * v1.1.19：3 → 4 —— 设备行加宽后四个短标签（清数据 / 初始化启动 / 重进 / 强重启）放得下，
+ * 出厂默认正好把这四个都摆在行上，最常用的两步不必再点开 ⚡ 菜单。
+ */
+export const QUICK_ACTION_INLINE_MAX = 4;
 /** 配置里允许的动作总数上限 */
 export const QUICK_ACTION_MAX = 16;
 
@@ -1592,6 +1607,36 @@ export interface AiAdbStep {
   at: number;
 }
 
+/**
+ * 一条回复产出的**文件**（v1.1.20）。
+ *
+ * 以前「把回答存成文件」是用户手点「导出」再走一遍对话框；现在主进程在
+ * 回复落地时就把文档 / 代码块 / 表格各写成一份文件，把这份清单挂在消息上。
+ * 界面上表现为气泡底部的一排卡片，点一下直接打开，右键式按钮定位到资源管理器。
+ *
+ * 🔴 清单跟着消息一起存进 `ai-chats.json`：文件是一次性写出去的，路径不会再变，
+ *    所以回看历史对话时不需要重新探测内容，也不需要重新落盘 —— 卡片照样能点开。
+ *    代价是消息体积略大，但这个结构只有五个短字段，比每次重算便宜。
+ */
+export interface AiArtifact {
+  id: string;
+  /** 这份文件来自哪种内容块：整篇文档 / 代码块 / 表格 */
+  kind: 'doc' | 'code' | 'table';
+  /** 界面上显示的名字（如「Python 代码块」「表格（3 列 · 5 行数据）」） */
+  title: string;
+  /** 落盘后的完整路径 */
+  path: string;
+  /** 所在目录（「打开文件夹」用） */
+  dir: string;
+  /** 扩展名，含点（.md / .py / .csv …） */
+  ext: string;
+  /** 文件字节数（界面上显示成 KB） */
+  bytes: number;
+  /** 对应 detectDocParts() 的块 id（doc / code-1 / table-1），同一条回复内唯一 */
+  partId: string;
+  at: number;
+}
+
 /** 一条对话消息（界面与后端共用同一份形状） */
 export interface AiChatMessage {
   id: string;
@@ -1601,6 +1646,8 @@ export interface AiChatMessage {
   attachments?: AiAttachment[];
   /** 助手消息：这一轮自动执行的 adb 指令（按时间顺序） */
   steps?: AiAdbStep[];
+  /** 助手消息：这一轮自动落盘的产出文件（按内容块顺序；没有产出就是 undefined） */
+  artifacts?: AiArtifact[];
   /** 这一条实际用的模型（助手消息回填，便于回溯是哪家答的） */
   model?: string;
   time: number;
@@ -1658,6 +1705,8 @@ export interface AiChatResult {
   usage?: { prompt: number; completion: number; total: number };
   /** 这一轮自动执行过的 adb 指令（按顺序；没执行就是空数组） */
   steps: AiAdbStep[];
+  /** 这一轮自动落盘的产出文件（v1.1.20；没产出就是空数组） */
+  artifacts: AiArtifact[];
   /** 实际问了几轮模型（1 = 一次答完，没触发工具循环） */
   rounds: number;
   /** 用户中途点了「停止」 */

@@ -2755,7 +2755,19 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  scroll-behavior: smooth;
+  /*
+   * 🔴 这里**不能**写 scroll-behavior: smooth（v1.1.19 及以前是这么写的）。
+   *
+   * 平滑滚动是异步动画：JS 里赋 `scrollTop = scrollHeight` 只是「设定目标」，
+   * 真正滚过去要几百毫秒。而这个容器恰好有两个时刻高度一直在变 ——
+   * 恢复历史会话（Markdown 边渲染边长高）、AI 边执行边冒气泡。
+   * 动画目标值在第一帧就算死了，后面再长高它也不会跟；更糟的是切页面回来时
+   * 组件整棵卸载重建，「先滚到旧高度」和「新内容渲染」抢同一帧，
+   * 结果就是**停在顶部**——用户得自己一路划到最下面（这正是要修的那个 bug）。
+   *
+   * 现在的做法：跟随底部由 AiPage 的 pinBottom() 用瞬时滚动做（并临时关闭本属性），
+   * 用户自己滚轮/拖动时不受影响，该有的惯性一点没少。
+   */
 }
 
 .ai-msgs .empty {
@@ -3595,6 +3607,140 @@
   align-items: center;
   gap: 8px;
   margin-top: 2px;
+}
+
+/* ---------------- 产出文件卡片（v1.1.20） ---------------- */
+
+/*
+ * 回复里自动落盘的那几个文件。做成一整行可点：左边类型图标、中间文件名与
+ * 「文档 · 1.2 KB」、右边「定位」按钮。整行点击 = 用系统默认程序打开，
+ * 这是用户 90% 的动作；「在资源管理器里选中」是剩下那 10%，单独一个按钮。
+ */
+.ai-arts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.ai-art {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.ai-art:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-hover);
+}
+
+.ai-art-ico {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ai-art-ico svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ai-art-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ai-art-name {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-art-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ai-art-act {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.ai-art-act:hover {
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+}
+
+/* ---------------- 「产出内容」入口与面板（v1.1.20） ---------------- */
+
+/* 头部那个按钮：只在对话页出现，带数量 */
+.ai-out-btn[data-empty='1'] {
+  opacity: 0.55;
+}
+
+.ai-out-card {
+  width: 600px;
+}
+
+.ai-out-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(52vh, 460px);
+  overflow-y: auto;
+}
+
+.ai-out-group {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ai-out-group:first-child {
+  margin-top: 0;
+}
+
+.ai-out-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.ai-out-tip {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  line-height: 1.6;
 }
 
 /* AI 回复里的表格（v1.1.17）—— 判定逻辑与导出共用 readMdTable */

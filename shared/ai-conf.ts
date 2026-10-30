@@ -84,6 +84,14 @@ export interface AiConfig {
    * 用户可以在这里改，也可以在导出对话框里点「更改目录」临时换。
    */
   exportDir: string;
+  /**
+   * 回复里的文档 / 代码块 / 表格是否**自动**写成文件（v1.1.20，缺省 true）。
+   *
+   * 开着的时候，AI 每给出一次有实质内容的回答，产出就落在
+   * `<exportDir>\产出\<会话标题>\` 下，气泡底部能看到文件卡片、点开即用。
+   * 嫌文件太多可以关掉 —— 关掉之后行为回到 v1.1.19：只有手动点「导出」才落盘。
+   */
+  autoSaveArtifacts: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -217,6 +225,7 @@ export const DEFAULT_AI_CONFIG: AiConfig = {
   crashDir: DEFAULT_CRASH_DIR,
   crashLogMinutes: DEFAULT_CRASH_LOG_MINUTES,
   exportDir: DEFAULT_AI_EXPORT_DIR,
+  autoSaveArtifacts: true,
 };
 
 /* ------------------------------------------------------------------ */
@@ -302,6 +311,13 @@ export function normalizeAiConfig(raw: unknown): AiConfig {
     crashDir: str(raw.crashDir).trim() || DEFAULT_CRASH_DIR,
     crashLogMinutes: Math.min(180, Math.max(1, minutes || DEFAULT_CRASH_LOG_MINUTES)),
     exportDir: str(raw.exportDir).trim() || DEFAULT_AI_EXPORT_DIR,
+    // 只认明确的 false / "0" / "false"：手写配置里的笔误不该把自动落盘关掉
+    autoSaveArtifacts: !(
+      raw.autoSaveArtifacts === false ||
+      raw.autoSaveArtifacts === 0 ||
+      raw.autoSaveArtifacts === '0' ||
+      raw.autoSaveArtifacts === 'false'
+    ),
   };
 }
 

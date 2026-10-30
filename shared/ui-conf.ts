@@ -39,6 +39,27 @@ export const SIDEBAR_IDS = [
   'settings',
 ] as const;
 
+/**
+ * 导航 id → 中文名。
+ *
+ * 为什么放在 shared：Conf/README.md 的 id 对照表按这份中文名书写，
+ * 侧栏（src/components/layout.tsx 的 NAV_DEFS）也从这里取。
+ * 以前中文名只写在 layout.tsx 里，别处再抄一份必然漂移 ——
+ * 现在它是**唯一真相**。
+ */
+export const SIDEBAR_LABELS: Record<string, string> = {
+  device: '设备',
+  mirror: '投屏',
+  tools: '常用工具',
+  apps: '应用管理',
+  logcat: '实时 Logcat',
+  weaknet: '弱网模拟',
+  clicker: '自动连点器',
+  command: '命令终端',
+  ai: 'AI 助手',
+  settings: '设置',
+};
+
 /** 「常用工具」页的标签 id。改这里要同步 src/pages/ToolsPage.tsx 的 TAB_DEFS */
 export const TOOL_TAB_IDS = [
   'screenshot',
@@ -178,9 +199,13 @@ export const DEFAULT_PANELS: PanelsConf = {
 };
 
 /**
- * 出厂默认入口开关 —— 全开。
+ * 出厂默认入口开关 —— 除「自动连点器」外全开。
  *
- * 默认全开是有意的：关掉入口属于「用户自己的取舍」，不该由出厂设置替用户做决定。
+ * 「自动连点器」出厂关闭（v1.1.19）：它是给少数人用的高频工具，
+ * 常驻在左侧导航里对多数用户只是噪声。想用的人把 Conf/features.json 里的
+ * `nav.clicker` 改成 true 就回来（**界面上没有开关**，v1.1.19 起只认配置文件），
+ * 选择权交给用户而不是删掉功能。
+ * 其余项默认全开是有意的：关掉入口属于「用户自己的取舍」，不该由出厂设置替用户做决定。
  */
 export const DEFAULT_FEATURES: FeaturesConf = {
   enabled: true,
@@ -193,7 +218,7 @@ export const DEFAULT_FEATURES: FeaturesConf = {
       apps: true,
       logcat: true,
       weaknet: true,
-      clicker: true,
+      clicker: false,
       command: true,
       ai: true,
       settings: true,

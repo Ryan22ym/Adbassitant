@@ -21,6 +21,9 @@ const { app, BrowserWindow } = electronMain;
  * v1.1.0 起「运行日志」从侧边栏收起（用户要求「收起来，不显示」），
  * 页面本身还在，只是入口挪到了「设置 → 运行日志」卡片里。
  * 所以那一项只断言页头标题，不要求有导航高亮。
+ *
+ * v1.1.19 起「自动连点器」出厂 `nav.clicker: false`（只能在 Conf/features.json 里打开），
+ * 同样只断言页面本身打得开。
  */
 const CASES = [
   ['#/', '设备'],
@@ -29,7 +32,7 @@ const CASES = [
   ['#/apps', '应用管理'],
   ['#/logcat', '实时 Logcat'],
   ['#/weaknet', '弱网模拟'],
-  ['#/clicker', '自动连点器'],
+  ['#/clicker', '自动连点器', false],
   ['#/command', '命令终端'],
   ['#/logs', '运行日志', false],
   ['#/settings', '设置'],

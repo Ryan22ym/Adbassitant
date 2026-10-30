@@ -1,7 +1,7 @@
 {
   "_说明": "功能入口总开关：true=显示，false=该入口在界面上不出现（代码保留，随时可以改回来）。",
-  "_用法": "关掉只是「藏起来」，不是禁用功能；直接访问该页面地址仍然可用。",
-  "_注意": "关掉的管理类入口不影响程序运行；但把 settings 也关掉后，就只能靠改这个文件恢复了。",
+  "_用法": "改完保存，重启程序生效。左侧导航的那十项只认这个文件，界面上没有开关面板。",
+  "_注意": "别把 settings 改成 false —— 关掉之后设置页就没有入口了，只能手改这个文件恢复。",
   "_enabled": true,
   "features": {
     "nav": {
@@ -11,7 +11,7 @@
       "apps": true,
       "logcat": true,
       "weaknet": true,
-      "clicker": true,
+      "clicker": false,
       "command": true,
       "ai": true,
       "settings": true

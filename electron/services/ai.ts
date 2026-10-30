@@ -17,11 +17,15 @@ import {
   activeProviderOf,
   cloneDefaultAiConfig,
   normalizeAiConfig,
+  DEFAULT_AI_EXPORT_DIR,
   type AiConfig,
   type AiProvider,
 } from '../../shared/ai-conf';
+import { saveReplyArtifacts } from './ai-artifact';
+import { resolveWritableDir } from './path-util';
 import type {
   AiAdbStep,
+  AiArtifact,
   AiAttachment,
   AiChatMessage,
   AiChatRequest,
@@ -128,6 +132,7 @@ function serializeAiConfig(cfg: AiConfig): Record<string, unknown> {
     crashDir: cfg.crashDir,
     crashLogMinutes: cfg.crashLogMinutes,
     exportDir: cfg.exportDir,
+    autoSaveArtifacts: cfg.autoSaveArtifacts,
   };
 }
 
@@ -752,6 +757,35 @@ export async function aiChat(req: AiChatRequest, hooks?: AiChatHooks): Promise<A
 
   if (!content) content = stopped ? '（已停止：AI 还没给出结论）' : '（模型返回了空内容）';
 
+  /*
+   * 回复里的文档 / 代码块 / 表格 → 直接写成文件（v1.1.20）。
+   *
+   * 🔴 为什么在这里做而不是让界面导出：
+   *    用户要的是「它给的东西我马上能用」—— 打开文件夹就是一个可运行的 .py、
+   *    一份能发出去的 .md，而不是还得先点「导出 → 选格式 → 选目录 → 保存」。
+   *    落盘清单随助手消息一起进会话文件，所以回看历史时卡片照样点得开。
+   *
+   * 🔴 三种情况不落盘：
+   *    · 用户中途停止（内容是「已停止」占位，存下来纯属垃圾）；
+   *    · 报错（同上）；
+   *    · 用户在配置里关掉了 autoSaveArtifacts（行为回到 v1.1.19）。
+   *    单份文件写失败只丢那一个，不影响这轮对话 —— 见 ai-artifact.ts。
+   */
+  let artifacts: AiArtifact[] = [];
+  if (!stopped && cfg.autoSaveArtifacts !== false && content.trim()) {
+    try {
+      const rootDir = resolveWritableDir(
+        (cfg.exportDir || '').trim() || DEFAULT_AI_EXPORT_DIR,
+        join(app.getPath('documents'), 'ADB助手', 'AI导出'),
+      );
+      const sessionTitle = (req.sessionId ? getSession(req.sessionId)?.title : '') || titleOf(history);
+      artifacts = saveReplyArtifacts({ content, rootDir, sessionTitle });
+    } catch (e) {
+      // 产出落盘失败绝不能把已经成功的对话变成一次失败
+      log('warn', 'AI', `自动落盘跳过：${(e as Error).message}`);
+    }
+  }
+
   const assistant: AiChatMessage = {
     id: randomUUID(),
     role: 'assistant',
@@ -759,13 +793,16 @@ export async function aiChat(req: AiChatRequest, hooks?: AiChatHooks): Promise<A
     model,
     time: Date.now(),
     steps: steps.length ? slimSteps(steps) : undefined,
+    artifacts: artifacts.length ? artifacts : undefined,
   };
   const sessionId = appendToSession(req.sessionId, [...history, assistant]);
 
   log(
     'success',
     'AI',
-    `对话完成（${provider.name} · ${model}，${rounds} 轮 / ${steps.length} 条指令，${Date.now() - started}ms）`,
+    `对话完成（${provider.name} · ${model}，${rounds} 轮 / ${steps.length} 条指令${
+      artifacts.length ? ` / ${artifacts.length} 个产出` : ''
+    }，${Date.now() - started}ms）`,
   );
   return {
     sessionId,
@@ -774,6 +811,7 @@ export async function aiChat(req: AiChatRequest, hooks?: AiChatHooks): Promise<A
     durationMs: Date.now() - started,
     usage,
     steps,
+    artifacts,
     rounds,
     stopped: stopped || undefined,
   };

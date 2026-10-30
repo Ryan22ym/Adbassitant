@@ -2,7 +2,7 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useApp } from '@/store/app';
 import { useUiConf } from '@/lib/ui-conf';
-import { featureOnOf } from '@shared/ui-conf';
+import { featureOnOf, SIDEBAR_LABELS } from '@shared/ui-conf';
 import { Badge, Button } from './ui';
 import { Icon } from './icons';
 import brandIcon from '@/assets/app-icon.png';
@@ -37,21 +37,22 @@ const THEME_BRAND: Record<string, string> = {
  *
  * ⚠️ id 清单是白名单（shared/ui-conf.ts 的 SIDEBAR_IDS），三处必须同名：
  *    这里、SIDEBAR_IDS、以及 Conf/README.md 的对照表。
+ *    中文名统一取 SIDEBAR_LABELS（Conf/README.md 的对照表也按那一份写）。
  */
 type NavDef = { to: string; label: string; icon: React.ReactNode; exact?: boolean };
 
 const NAV_DEFS: Record<string, NavDef> = {
-  device: { to: '/', label: '设备', icon: Icon.device, exact: true },
-  mirror: { to: '/mirror', label: '投屏', icon: Icon.mirror },
-  tools: { to: '/tools', label: '常用工具', icon: Icon.tools },
-  apps: { to: '/apps', label: '应用管理', icon: Icon.apps },
-  logcat: { to: '/logcat', label: '实时 Logcat', icon: Icon.logcat },
-  weaknet: { to: '/weaknet', label: '弱网模拟', icon: Icon.weaknet },
-  clicker: { to: '/clicker', label: '自动连点器', icon: Icon.clicker },
-  command: { to: '/command', label: '命令终端', icon: Icon.terminal },
+  device: { to: '/', label: SIDEBAR_LABELS.device, icon: Icon.device, exact: true },
+  mirror: { to: '/mirror', label: SIDEBAR_LABELS.mirror, icon: Icon.mirror },
+  tools: { to: '/tools', label: SIDEBAR_LABELS.tools, icon: Icon.tools },
+  apps: { to: '/apps', label: SIDEBAR_LABELS.apps, icon: Icon.apps },
+  logcat: { to: '/logcat', label: SIDEBAR_LABELS.logcat, icon: Icon.logcat },
+  weaknet: { to: '/weaknet', label: SIDEBAR_LABELS.weaknet, icon: Icon.weaknet },
+  clicker: { to: '/clicker', label: SIDEBAR_LABELS.clicker, icon: Icon.clicker },
+  command: { to: '/command', label: SIDEBAR_LABELS.command, icon: Icon.terminal },
   /* AI 助手（v1.1.14）：对话 + 崩溃分析报告。排在「设置」之前 */
-  ai: { to: '/ai', label: 'AI 助手', icon: Icon.ai },
-  settings: { to: '/settings', label: '设置', icon: Icon.settings },
+  ai: { to: '/ai', label: SIDEBAR_LABELS.ai, icon: Icon.ai },
+  settings: { to: '/settings', label: SIDEBAR_LABELS.settings, icon: Icon.settings },
 };
 
 export function Sidebar() {

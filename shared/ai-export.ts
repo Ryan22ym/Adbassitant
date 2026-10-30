@@ -328,8 +328,14 @@ export function detectDocParts(content: string): AiDocPart[] {
     if (!body.trim()) return;
     codeNo += 1;
     const ext = extOfLang(fenceLang);
+    /*
+     * 🔴 这里必须先判空再净化。`safeFileName('')` 会回落到默认值「AI文档」，
+     *    所以写成 `safeFileName(hint) || safeFileName(兜底)` 时兜底**永远执行不到** ——
+     *    结果是一条回复里的每个代码块都叫「AI文档.py / AI文档 (1).py」，
+     *    在产出目录里根本分不清哪个是哪个（v1.1.20 自动落盘后这个问题才真正刺眼）。
+     */
     const base =
-      safeFileName(fenceNameHint) ||
+      (fenceNameHint ? safeFileName(fenceNameHint) : '') ||
       safeFileName(`${docTitle} · ${labelOfLang(fenceLang)}${codeNo > 1 ? ` ${codeNo}` : ''}`);
     parts.push({
       id: `code-${codeNo}`,
