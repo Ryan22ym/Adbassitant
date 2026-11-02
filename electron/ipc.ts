@@ -156,7 +156,7 @@ import {
 } from './services/ai-export';
 import type { AiAgentStepEvent, AiChatRequest, AiExportRequest } from '../shared/types';
 import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } from './services/logger';
-import { getWallpaperDataURL } from './services/wallpaper';
+import { getWallpaperDataURL, backdropPixelSize } from './services/wallpaper';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
 import { getUiConf, resolveUiConfDir } from './services/ui-conf';
 import { resetWindowSize, windowStateSnapshot } from './services/window-state';
@@ -1524,19 +1524,45 @@ export function registerIpc() {
    */
   ipcMain.handle(
     IPC.WINDOW_GRAB_DESKTOP,
-    wrap(async () => {
+    wrap(async (event: any) => {
+      /*
+       * B4：底图按**调用窗口的内容尺寸**解码，而不是屏幕物理尺寸。
+       * 玻璃主题的窗口通常只有 1200×860（还不一定最大化），按 3200×1800 解码
+       * 等于给每屏多算 20MB 位图，而这 20MB 在后面 27px 的模糊下完全看不出来。
+       * 详见 services/wallpaper.ts 的 BACKDROP_SCALE。
+       */
+      const sender = event?.sender ? BrowserWindow.fromWebContents(event.sender) : null;
+      const cs = sender && !sender.isDestroyed() ? sender.getContentSize() : null;
+      /*
+       * 🔴 必须换算成**物理像素**再交给 wallpaper.ts：
+       *    `getContentSize()` 给的是 CSS 像素（本机 scaleFactor=1.25，1180 逻辑像素
+       *    对应 1475 物理像素）。少了这一步，底图分辨率会比屏幕实际需要低一档，
+       *    用户把模糊滑杆拉到最小时会明显看出放大插值的糊。
+       *    wallpaper.ts 内部再乘 BACKDROP_SCALE 做降档，两件事分开管。
+       */
+      let target: { width: number; height: number } | undefined;
+      if (cs) {
+        let dpr = 1;
+        try {
+          const b = sender!.getBounds();
+          dpr = screen.getDisplayNearestPoint({ x: b.x, y: b.y }).scaleFactor || 1;
+        } catch {
+          dpr = 1;
+        }
+        target = { width: Math.round(cs[0] * dpr), height: Math.round(cs[1] * dpr) };
+      }
+
       /*
        * v1.1.14 起优先读**壁纸文件本身**（见 services/wallpaper.ts）：
        * 整屏截图会把图标 / 打开的窗口 / 任务栏一起透到玻璃底下，不是用户要的
        * 「当前壁纸」。三级兜底：壁纸文件 → 注册表壁纸 → 整屏截图（旧行为）。
        * 每次启动渲染层都会重新来拿一次，自然满足「每次重启时更新」。
        */
-      const wall = await getWallpaperDataURL();
+      const wall = await getWallpaperDataURL(target);
       if (wall) return wall;
 
-      const d = screen.getPrimaryDisplay();
-      const w = Math.round(d.size.width * d.scaleFactor);
-      const h = Math.round(d.size.height * d.scaleFactor);
+      // 兜底截图同样降档：缩略图直接生成为目标尺寸，别先抓全屏再缩
+      const { width: w, height: h } = backdropPixelSize(target);
       for (let i = 0; i < 3; i++) {
         try {
           const srcs = await desktopCapturer.getSources({

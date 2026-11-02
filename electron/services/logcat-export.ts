@@ -1,6 +1,8 @@
-import { writeFileSync, statSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, statSync, existsSync, mkdirSync, createWriteStream, createReadStream, unlinkSync } from 'fs';
+import { pipeline } from 'stream/promises';
 import { join, dirname } from 'path';
-import { runAdb, ensureDevice, log } from './adb';
+import { ensureDevice, log } from './adb';
+import { streamAdb } from './adb-stream';
 import type { LogcatLevel, LogcatExportOptions } from '../../shared/types';
 
 /**
@@ -100,6 +102,18 @@ export function resolveExportDir(
  * 把设备当前日志 dump 出来并按条件过滤，写入 filePath。
  *
  * 抛出的错误会经 wrap() 转成界面 toast。
+ *
+ * 🔴 B5：**流式落盘**，不把设备日志整段读进内存。
+ *    原实现 `runAdb()` 攒完 20 万行的 stdout → `.split()` 出 20 万行数组 →
+ *    `.filter()` 再留一份 `kept` → `.join()` 拼成整篇字符串才写盘，同一份内容
+ *    在内存里同时存在 4 份（拼接中间串 + 全量串 + 行数组 + kept），峰值上百 MB。
+ *    现在正文边读边写进 `<目标>.part`，结束时才拼表头 —— 峰值只跟单块大小有关。
+ *
+ *    两个配套处理：
+ *     · 写不动时 `ctl.pause()`：否则 WriteStream 的队列会把几十 MB 又攒回来，
+ *       等于白改（见 adb-stream.ts 的背压说明）。
+ *     · 表头里的「行数 / 过滤掉多少」依赖统计结果，所以正文必须先落临时文件，
+ *       最后拼成「表头 + 正文」。.part 在成功路径与失败路径都会被删掉。
  */
 export async function exportLogcatToFile(
   filePath: string,
@@ -128,85 +142,156 @@ export async function exportLogcatToFile(
 
   log('info', 'Logcat导出', `读取设备日志 [${buffers.join(',')}]，过滤条件：>=${minLevel}${tags ? ` TAG=${tags}` : ''}${keyword ? ` 关键=${keyword}` : ''}`);
 
-  const res = await runAdb(args, { silent: true, timeout: 60000 });
+  /* ---------- 本地过滤条件预编译 ---------- */
 
-  const stdout = res.stdout || '';
-  const stderr = (res.stderr || '').trim();
-
-  if (!res.ok && !stdout) {
-    throw new Error(stderr || `读取设备日志失败（adb exit ${res.code}）`);
-  }
-  // 少数 ROM 权限受限，缓冲区为空是正常情况，但 stderr 里有话就带上
-  if (stderr && /permission|denied|not found/i.test(stderr)) {
-    throw new Error(`设备日志不可读：${stderr}`);
-  }
-
-  const rawLines = stdout.split(/\r?\n/).filter((l) => l.length > 0);
-
-  /* ---------- 本地过滤 ---------- */
-
-  const tagPats = tags
-    ? tags.split(',').map((t) => t.trim()).filter(Boolean)
-    : [];
+  /*
+   * 🔴 原来每行都 `tagPats.some(p => wildcardMatch(p, tag))`，
+   *    而 wildcardMatch 内部每次 `new RegExp(...)` —— 几万行就是几万次正则编译。
+   *    这里在循环外编一次，逐行只剩一次 test。
+   */
+  const tagMatchers = (tags ? tags.split(',').map((t) => t.trim()).filter(Boolean) : [])
+    .map(compileTagMatcher);
   const kwList = keyword
     ? keyword.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean)
     : [];
   const minRank = LEVEL_ORDER[minLevel] ?? 0;
 
-  const kept: string[] = [];
-  for (const raw of rawLines) {
+  const keep = (raw: string): boolean => {
     const parsed = parseLine(raw);
 
     // 级别（dump 模式下设备端不筛，全靠这里）
-    if (parsed.level) {
-      const rank = LEVEL_ORDER[parsed.level] ?? 0;
-      if (rank < minRank) continue;
-    }
+    if (parsed.level && (LEVEL_ORDER[parsed.level] ?? 0) < minRank) return false;
 
     // TAG
-    if (tagPats.length) {
+    if (tagMatchers.length) {
       const tag = parsed.tag || '';
-      if (!tagPats.some((p) => wildcardMatch(p, tag))) continue;
+      let hit = false;
+      for (let i = 0; i < tagMatchers.length; i += 1) {
+        if (tagMatchers[i](tag)) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) return false;
     }
 
     // 关键字（正文/TAG/整行任一命中）
     if (kwList.length) {
       const lower = raw.toLowerCase();
-      if (!kwList.some((k) => lower.includes(k))) continue;
+      let hit = false;
+      for (let i = 0; i < kwList.length; i += 1) {
+        if (lower.includes(kwList[i])) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) return false;
     }
 
-    kept.push(raw);
-  }
-
-  /* ---------- 写文件 ---------- */
-
-  const header: string[] = [];
-  header.push('='.repeat(72));
-  header.push('  ADB 桌面助手 - Logcat 日志导出');
-  header.push('='.repeat(72));
-  header.push(`导出时间：${stamp(Date.now())}`);
-  if (options.deviceLabel) header.push(`设备：${options.deviceLabel}`);
-  header.push(`缓冲区：${buffers.join(', ')}`);
-  header.push(`级别：>=${minLevel}${tags ? `　TAG：${tags}` : ''}${keyword ? `　关键字：${keyword}` : ''}`);
-  header.push(`行数：${kept.length}（设备原始 ${rawLines.length} 行，过滤掉 ${rawLines.length - kept.length} 行）`);
-  header.push('-'.repeat(72));
-  header.push('');
-
-  const content = header.concat(kept).join('\r\n');
-  // 带 BOM，Windows 记事本打开不乱码
-  writeFileSync(filePath, '\ufeff' + content, 'utf8');
-
-  const bytes = Buffer.byteLength(content, 'utf8');
-  log('success', 'Logcat导出', `已导出 ${kept.length} 行到 ${filePath}`);
-
-  return {
-    path: filePath,
-    dir: dirname(filePath),
-    bytes,
-    lines: kept.length,
-    rawLines: rawLines.length,
-    filtered: rawLines.length - kept.length,
+    return true;
   };
+
+  /* ---------- 流式 dump + 过滤 + 落临时文件 ---------- */
+
+  const partPath = `${filePath}.part`;
+  const ws = createWriteStream(partPath, { encoding: 'utf8' });
+  let wsError: Error | null = null;
+  ws.on('error', (e) => {
+    wsError = e as Error;
+  });
+
+  let rawLines = 0;
+  let kept = 0;
+  /** 已经 pause 过、正在等 drain —— 防止重复注册 drain 监听 */
+  let waitingDrain = false;
+
+  try {
+    const res = await streamAdb(args, {
+      timeout: 60000,
+      silent: true,
+      source: 'Logcat导出',
+      onLine: (line, _i, ctl) => {
+        rawLines += 1;
+        if (!keep(line)) return true;
+        kept += 1;
+        /* 正文只写行本身 + CRLF，表头等统计出来再拼 */
+        if (!ws.write(`${line}\r\n`) && !waitingDrain) {
+          waitingDrain = true;
+          ctl.pause();
+          ws.once('drain', () => {
+            waitingDrain = false;
+            ctl.resume();
+          });
+        }
+        return true;
+      },
+    });
+
+    // 等文件真正落盘（finish / close 任一即可，error 会走到下面的 wsError）
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const fin = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      ws.once('finish', fin);
+      ws.once('close', fin);
+      ws.end();
+    });
+
+    if (wsError) throw wsError;
+
+    if (!res.ok && kept === 0) {
+      throw new Error(res.stderr || `读取设备日志失败（adb exit ${res.code}）`);
+    }
+    // 少数 ROM 权限受限，缓冲区为空是正常情况，但 stderr 里有话就带上
+    if (res.stderr && /permission|denied|not found/i.test(res.stderr)) {
+      throw new Error(`设备日志不可读：${res.stderr}`);
+    }
+
+    /* ---------- 拼表头 + 正文 ---------- */
+
+    const header: string[] = [];
+    header.push('='.repeat(72));
+    header.push('  ADB 桌面助手 - Logcat 日志导出');
+    header.push('='.repeat(72));
+    header.push(`导出时间：${stamp(Date.now())}`);
+    if (options.deviceLabel) header.push(`设备：${options.deviceLabel}`);
+    header.push(`缓冲区：${buffers.join(', ')}`);
+    header.push(`级别：>=${minLevel}${tags ? `　TAG：${tags}` : ''}${keyword ? `　关键字：${keyword}` : ''}`);
+    header.push(`行数：${kept}（设备原始 ${rawLines} 行，过滤掉 ${rawLines - kept} 行）`);
+    header.push('-'.repeat(72));
+    header.push('');
+
+    // 带 BOM，Windows 记事本打开不乱码。表头末尾已经有分隔用的 CRLF（最后一项是空串）
+    writeFileSync(filePath, `\ufeff${header.join('\r\n')}`, 'utf8');
+    // 正文从 .part 追加，全程流式，不经过内存里的整篇字符串
+    await pipeline(createReadStream(partPath), createWriteStream(filePath, { flags: 'a' }));
+
+    /* 原返回值的 bytes 口径是「不含 BOM 的 UTF-8 字节数」 */
+    const total = statSync(filePath).size;
+    const bytes = Math.max(0, total - 3);
+
+    log('success', 'Logcat导出', `已导出 ${kept} 行到 ${filePath}`);
+
+    return {
+      path: filePath,
+      dir: dirname(filePath),
+      bytes,
+      lines: kept,
+      rawLines,
+      filtered: rawLines - kept,
+    };
+  } finally {
+    /* 不管成败都要收掉临时文件：成功时它已被追加进正式文件，失败时它是半成品 */
+    if (!ws.closed) ws.destroy();
+    try {
+      if (existsSync(partPath)) unlinkSync(partPath);
+    } catch {
+      /* 极端情况（被杀毒占着）删不掉也不影响正式文件，下次导出会覆盖 */
+    }
+  }
 }
 
 /**
@@ -282,11 +367,22 @@ function parseLine(raw: string): Parsed {
   return {};
 }
 
-function wildcardMatch(pattern: string, value: string): boolean {
-  if (pattern === '*') return true;
-  if (!pattern.includes('*')) return value.toLowerCase() === pattern.toLowerCase();
-  const re = new RegExp('^' + pattern.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i');
-  return re.test(value);
+/**
+ * 把单个 TAG 通配模式编译成判定函数（一次编译、多行复用）。
+ * 语义与原来的 `wildcardMatch(pattern, value)` 逐条一致：
+ *   `*` → 全通过；无 `*` → **整串**不区分大小写相等；含 `*` → 编译成锚定正则。
+ */
+function compileTagMatcher(pattern: string): (value: string) => boolean {
+  if (pattern === '*') return () => true;
+  if (!pattern.includes('*')) {
+    const lower = pattern.toLowerCase();
+    return (value) => value.toLowerCase() === lower;
+  }
+  const re = new RegExp(
+    '^' + pattern.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$',
+    'i',
+  );
+  return (value) => re.test(value);
 }
 
 function stamp(ts: number): string {

@@ -4,6 +4,8 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { app } from 'electron';
 import { adbPath, ensureDir, log, runAdb } from './adb';
+import { streamAdb } from './adb-stream';
+import { createWindowSlicer } from './crash-window';
 import { getSettings } from './settings';
 import { getLogs } from './logger';
 import { getMirrorStatus } from './mirror';
@@ -47,7 +49,13 @@ const FOREGROUND_TTL_MS = 20000;
 /** 同一台设备同一应用的崩溃冷却时间（防同一次崩溃连出多份报告） */
 const CRASH_COOLDOWN_MS = 60000;
 
-/** 崩溃日志抽取上限（防止一次 dump 把内存吃爆） */
+/**
+ * 一次 dump 最多向设备要多少行（`-t` 兜底上限）。
+ *
+ * ⚠️ 这只是**不再需要**的保险，不是实际读入量：B5 之后日志是流式处理的，
+ * 而且越过时间窗右界就会提前终止子进程（见 services/crash-window.ts）。
+ * 正常场景下读到的行数远小于它。
+ */
 const MAX_DUMP_LINES = 200000;
 
 /** 操作记录最多带多少条给 AI */
@@ -448,34 +456,24 @@ function fire(serial: string, pkg: string, evidence: string): void {
 /* 分析流水线                                                          */
 /* ------------------------------------------------------------------ */
 
-/** `MM-DD HH:MM:SS.mmm` / `YYYY-MM-DD HH:MM:SS.mmm` → 毫秒（解析不出返回 null） */
-const TS_WITH_YEAR = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\.(\d{3,6})/;
-const TS_NO_YEAR = /^(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\.(\d{3,6})/;
-
-function parseLogTime(line: string, refMs: number): number | null {
-  let m = TS_WITH_YEAR.exec(line);
-  if (m) {
-    return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +m[7].slice(0, 3)).getTime();
-  }
-  m = TS_NO_YEAR.exec(line);
-  if (m) {
-    const ref = new Date(refMs);
-    let year = ref.getFullYear();
-    const month = +m[1];
-    // 跨年：设备时间是 12 月而参考时间是 1 月，说明这条日志属于上一年
-    if (month === 12 && ref.getMonth() === 0) year -= 1;
-    return new Date(year, month - 1, +m[2], +m[3], +m[4], +m[5], +m[6].slice(0, 3)).getTime();
-  }
-  return null;
-}
-
-/** dump 一次设备日志并按时间窗裁剪 */
+/**
+ * dump 一次设备日志并按时间窗裁剪（B5：流式，不把全量读进内存）
+ *
+ * 原来的实现是 `runAdb()` 攒出整段 stdout → `.split()` 成 20 万行 → 再筛一份
+ * `kept`，同一份内容在内存里存在三份，峰值 80~200MB。现在逐行流过：
+ * 只有落在时间窗内的行才被留下，其余在回调返回后即可回收。
+ *
+ * 裁剪规则本身在 `services/crash-window.ts`（纯逻辑，可单测对拍），
+ * 这里只负责「起命令 / 喂行 / 提前收工」。
+ */
 async function dumpWindow(
   serial: string,
   crashTime: number,
   minutes: number,
-): Promise<{ excerpt: string[]; rawLines: number; keptLines: number }> {
-  const res = await runAdb(
+): Promise<{ excerpt: string[]; rawLines: number; keptLines: number; aborted: boolean }> {
+  const slicer = createWindowSlicer({ crashTime, minutes });
+
+  const res = await streamAdb(
     [
       '-s',
       serial,
@@ -492,27 +490,33 @@ async function dumpWindow(
       '-t',
       String(MAX_DUMP_LINES),
     ],
-    { silent: true, timeout: 60000 },
+    {
+      timeout: 60000,
+      silent: true,
+      source: '崩溃分析',
+      /* accept() 返回 false ⇒ streamAdb 立刻 kill 子进程，这就是提前收工 */
+      onLine: (line) => slicer.accept(line),
+    },
   );
 
-  const raw = (res.stdout || '').split(/\r?\n/).filter((l) => l.length > 0);
-  const from = crashTime - minutes * 60000;
-  const to = crashTime + 5000; // 崩溃后几秒的收尾日志（进程死亡、Force finishing）也要
+  const out = slicer.result();
 
-  const kept: string[] = [];
-  for (const line of raw) {
-    const t = parseLogTime(line, crashTime);
-    // 解析不出时间的行（堆栈续行）就近跟随：只要当前窗口已经开始就保留
-    if (t === null) {
-      if (kept.length > 0) kept.push(line);
-      continue;
-    }
-    if (t >= from && t <= to) kept.push(line);
+  if (res.truncatedLines > 0) {
+    log('warn', '崩溃分析', `有 ${res.truncatedLines} 行超过单行上限被截断（疑似异常输出）`);
+  }
+  if (res.aborted) {
+    log('info', '崩溃分析', `日志已读够（${out.keptLines} 行），提前终止 dump`);
+  }
+  if (out.timedLines === 0 && out.rawLines > 0) {
+    log('warn', '崩溃分析', `这批日志没有可解析的时间戳（–v year 未生效？），已退化为取尾部 ${out.keptLines} 行`);
   }
 
-  // 时间解析全军覆没（个别 ROM 的 -v year 不生效）时退化成「取尾部 3000 行」
-  const excerpt = kept.length > 0 ? kept : raw.slice(-3000);
-  return { excerpt, rawLines: raw.length, keptLines: excerpt.length };
+  return {
+    excerpt: out.excerpt,
+    rawLines: out.rawLines,
+    keptLines: out.keptLines,
+    aborted: res.aborted,
+  };
 }
 
 /** 崩溃前的操作记录（工具侧运行日志） */
