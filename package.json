@@ -86,6 +86,7 @@
     "check:touch-capture": "node scripts/check-touch-capture.cjs",
     "check:touch-capture:device": "python scripts/run-electron.py scripts/check-touch-capture-device.cjs --watch ui-shots/_touchcap.log --until \"TOUCH CAP CHECK DONE\" --timeout 240",
     "check:logcat-export": "python scripts/run-electron.py scripts/check-logcat-export.cjs --watch ui-shots/_logcat-export.log --until \"LOGCAT EXPORT CHECK DONE\" --timeout 600",
+    "check:memory-soak": "python scripts/run-electron.py scripts/check-memory-soak.cjs --watch ui-shots/_memory-soak.log --until \"MEMORY SOAK CHECK DONE\" --timeout 300",
     "check:icon": "python scripts/run-electron.py scripts/check-app-icon.cjs --watch ui-shots/_icon.log --until \"ICON CHECK DONE\" --timeout 180"
   },
   "devDependencies": {

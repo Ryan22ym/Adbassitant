@@ -1,6 +1,9 @@
 import { writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 import { spawnBinary, adbPath, ensureDevice, log } from './adb';
+import { RingBuffer } from './ring-buffer';
+import { compileLogcatMatcher } from './logcat-filter';
+import type { LogcatMatcher } from './logcat-filter';
 import type { LogcatFilter, LogcatHistory, LogcatLevel, LogcatLine, LogcatStatus } from '../../shared/types';
 
 /**
@@ -13,8 +16,6 @@ import type { LogcatFilter, LogcatHistory, LogcatLevel, LogcatLine, LogcatStatus
  * - 行数据按批次推送给渲染进程（默认 120ms 一批），避免高频 IPC 打满主线程。
  * - 主进程侧保留环形缓冲，随时可导出为 txt，不依赖渲染进程是否在前台。
  */
-
-const LEVEL_ORDER: Record<string, number> = { V: 0, D: 1, I: 2, W: 3, E: 4, F: 5, S: 6 };
 
 /** threadtime 行格式：
  *  09-11 17:58:07.123  1234  1250 I ActivityManager: Start proc ... */
@@ -34,8 +35,18 @@ interface Session {
   child: ChildProcess;
   startedAt: number;
   filter: LogcatFilter;
-  /** 原始行环形缓冲（用于导出） */
-  buffer: string[];
+  /**
+   * 原始行缓冲（用于导出）。
+   *
+   * 环形缓冲（性能优化 B1）：原来是 `string[]` + 每行 `splice(0, len - MAX)`，
+   * 满 20000 行后每来一行就要搬移 2 万个元素；现在满了直接覆盖最旧一格。
+   */
+  buffer: RingBuffer<string>;
+  /**
+   * 过滤条件（性能优化 B2）：`startLogcat` 时编译一次，逐行只做比较。
+   * 原来每行都要 split/map/filter + new RegExp，刷屏时是 GC 抖动的第一来源。
+   */
+  matcher: LogcatMatcher;
   /**
    * 已解析行的环形缓冲（v1.1.15，用于「切页回来还能接上」）。
    *
@@ -144,7 +155,8 @@ export async function startLogcat(
     child,
     startedAt: Date.now(),
     filter: merged,
-    buffer: [],
+    buffer: new RingBuffer<string>(MAX_BUFFER),
+    matcher: compileLogcatMatcher(merged),
     recent: [],
     pending: [],
     flushTimer: null,
@@ -241,15 +253,12 @@ function onRawLine(sess: Session, raw: string) {
   // logcat 自身的一些提示行（如 "--------- beginning of main"）原样保留
   const parsed = parseLine(raw);
 
-  if (!passes(sess.filter, parsed, raw)) return;
+  if (!sess.matcher(parsed, raw)) return;
 
   sess.seq += 1;
   const line: LogcatLine = { seq: sess.seq, ...parsed, raw };
 
   sess.buffer.push(raw);
-  if (sess.buffer.length > MAX_BUFFER) {
-    sess.buffer.splice(0, sess.buffer.length - MAX_BUFFER);
-  }
 
   /*
    * 回放缓冲（v1.1.15）：只留最近 MAX_RECENT 行。
@@ -316,65 +325,6 @@ function safeInt(s: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-function passes(filter: LogcatFilter, parsed: Omit<LogcatLine, 'seq'>, raw: string): boolean {
-  // 级别
-  if (parsed.level) {
-    const min = LEVEL_ORDER[filter.minLevel] ?? 0;
-    const cur = LEVEL_ORDER[parsed.level] ?? 0;
-    if (cur < min) return false;
-  }
-
-  // PID
-  if (filter.pid && parsed.pid !== filter.pid) return false;
-
-  // TAG（支持 * 通配、逗号分隔）
-  const tagFilter = (filter.tags || '').trim();
-  if (tagFilter) {
-    const tag = parsed.tag || '';
-    const ok = tagFilter
-      .split(',')
-      .map((x) => x.trim())
-      .filter(Boolean)
-      .some((p) => wildcardMatch(p, tag));
-    if (!ok) return false;
-  }
-
-  // 关键字（任一命中即保留）
-  const kw = (filter.keyword || '').trim();
-  if (kw) {
-    const lower = raw.toLowerCase();
-    const ok = kw
-      .split(',')
-      .map((x) => x.trim().toLowerCase())
-      .filter(Boolean)
-      .some((k) => lower.includes(k));
-    if (!ok) {
-      // matchOnly / 设了关键字时默认就是「只看命中」
-      return false;
-    }
-  }
-
-  // 进程名（子串）
-  const proc = (filter.process || '').trim();
-  if (proc && !raw.toLowerCase().includes(proc.toLowerCase())) return false;
-
-  return true;
-}
-
-function wildcardMatch(pattern: string, value: string): boolean {
-  if (pattern === '*') return true;
-  if (!pattern.includes('*')) return value.toLowerCase() === pattern.toLowerCase();
-  const re = new RegExp(
-    '^' + pattern.split('*').map(escapeRe).join('.*') + '$',
-    'i',
-  );
-  return re.test(value);
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /* ------------------------------------------------------------------ */
 /* 导出 / 查询                                                         */
 /* ------------------------------------------------------------------ */
@@ -382,12 +332,34 @@ function escapeRe(s: string): string {
 export function clearLogcatBuffer(): boolean {
   orphanRecent = [];
   if (session) {
-    session.buffer.length = 0;
+    session.buffer.clear();
     session.recent.length = 0;
     session.seq = 0;
     session.pending = [];
   }
   return true;
+}
+
+/**
+ * 缓冲现状（供内存探针读，见 services/memory-probe.ts）。
+ *
+ * 只读、不做任何副作用：探针每 30s 采一次，把「内存变化 vs 日志量」对起来看，
+ * 否则光看 RSS 数字分不清是日志缓冲涨了还是别的地方涨了。
+ */
+export function getLogcatStats(): {
+  running: boolean;
+  seq: number;
+  buffered: number;
+  recent: number;
+  maxBuffer: number;
+} {
+  return {
+    running: !!session,
+    seq: session?.seq ?? 0,
+    buffered: session?.buffer.length ?? 0,
+    recent: (session ? session.recent : orphanRecent).length,
+    maxBuffer: MAX_BUFFER,
+  };
 }
 
 /**
@@ -424,7 +396,11 @@ export function saveLogcat(filePath: string, meta?: Record<string, string>): {
   lines.push('');
 
   if (session) {
-    lines.push(...session.buffer);
+    // 20 万级以下一次展开是安全的；超过 6.5 万会撞参数上限，按 5000 一批追加
+    const body = session.buffer.toArray();
+    for (let i = 0; i < body.length; i += 5000) {
+      lines.push(...body.slice(i, i + 5000));
+    }
   }
 
   const content = lines.join('\r\n');

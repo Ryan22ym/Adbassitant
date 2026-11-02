@@ -4,6 +4,14 @@ import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { registerIpc, setSettingsChangedHook, setGlassWindowHook } from './ipc';
 import { cleanupLogs } from './services/logger';
+import { getLogcatStats } from './services/logcat';
+import {
+  isMemoryProbeRequested,
+  memoryProbeFileFromArgv,
+  setMemoryProbeExtra,
+  startMemoryProbe,
+  stopMemoryProbe,
+} from './services/memory-probe';
 import { listDevices, log, binDir } from './services/adb';
 import { startMirror } from './services/mirror';
 import { stopWakeWatch } from './services/wake-window';
@@ -658,6 +666,21 @@ app.whenReady().then(() => {
 
   createWindow();
 
+  /*
+   * 内存探针（性能优化 B11）：只有带 `--memory-probe` 启动才生效，平时零开销。
+   *
+   * 放在建窗之后：第一个样本就能带上 renderer / GPU 进程的数字，
+   * 否则只能看到主进程，看不出「涨的到底是谁」。
+   */
+  if (isMemoryProbeRequested()) {
+    try {
+      setMemoryProbeExtra(() => ({ logcat: getLogcatStats() }));
+      startMemoryProbe({ file: memoryProbeFileFromArgv() });
+    } catch (e) {
+      log('warn', '内存', `探针启动失败：${(e as Error).message}`);
+    }
+  }
+
   // 开机时开关可能已经是开的（上次开过），托盘要在窗口出现之前就位
   syncTray();
   /* 崩溃监听器同样对齐一次（此时投屏没跑，等价于「不监听」，幂等） */
@@ -759,6 +782,8 @@ app.on('window-all-closed', () => {
  */
 app.on('before-quit', () => {
   appQuitting = true;
+  /* 内存探针的定时器已 unref，这里显式停一次是为了让「退出前的最后一个样本」不再落盘 */
+  stopMemoryProbe();
   /* 崩溃监听挂着一条 adb logcat 子进程，退出时收干净（否则它会变成孤儿进程） */
   shutdownCrashWatch();
   /* 投屏窗口的鼠标钩子同理：拆掉，别留一个进程在后台吃全局鼠标事件 */

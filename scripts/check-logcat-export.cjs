@@ -253,9 +253,11 @@ async function main() {
 
     const [devSeg, dateSeg] = rel;
     record(
-      !!devSeg && /Pixel 6 emulator-5556/.test(devSeg),
+      // 🔴 期望值必须跟着「实际接的设备」走：原来写死 `Pixel 6 emulator-5556`，
+      //    接真机时序列号不是 emulator-5556，这条会假红（与服务行为无关）。
+      !!devSeg && devSeg === `Pixel 6 ${serial}`,
       'G 设备层 = 机型 + 序列号（去掉括号）',
-      `设备层="${devSeg}"`,
+      `设备层="${devSeg}" 期望="Pixel 6 ${serial}"`,
     );
     const today = new Date();
     const expectDate = expectDateFor(today);
@@ -275,7 +277,12 @@ async function main() {
   /* ---------- G2 同一根目录、同一设备再导一次：复用目录 + 不覆盖上一份 ---------- */
   try {
     const dirRoot = path.join(tmp, 'adblogs');
-    const devDir = path.join(dirRoot, 'Pixel 6 emulator-5556', expectDateFor(new Date()));
+    // 同上：设备层名字跟着实际序列号算，别再写死模拟器
+    const devDir = path.join(
+      dirRoot,
+      svc.deviceSegment('Pixel 6 (emulator-5556)', serial),
+      expectDateFor(new Date()),
+    );
     const before = fs.readdirSync(devDir).filter((f) => /^logcat_.*\.txt$/.test(f)).length;
 
     const r = await svc.exportLogcatToDir(dirRoot, {
