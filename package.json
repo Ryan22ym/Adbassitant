@@ -74,6 +74,8 @@
     "check:v115": "python scripts/run-electron.py scripts/check-v115.cjs --watch ui-shots/_v115.log --until \"V115 CHECK DONE\" --timeout 300",
     "check:window-state": "python scripts/run-electron.py scripts/check-window-state.cjs --watch ui-shots/_winstate.log --until \"WINDOW STATE CHECK DONE\" --timeout 300",
     "check:logcat-live": "python scripts/run-electron.py scripts/check-logcat-live.cjs --watch ui-shots/_logcat-live.log --until \"LOGCAT LIVE CHECK DONE\" --timeout 300",
+    "check:logcat-store": "node scripts/check-logcat-store.cjs",
+    "check:logcat-datalayer": "python scripts/run-electron.py scripts/check-logcat-datalayer.cjs --watch ui-shots/_logcat-datalayer.log --until \"LOGCAT DATALAYER CHECK DONE\" --timeout 300",
     "check:logcat-layout": "python scripts/run-electron.py scripts/check-logcat-layout.cjs --watch ui-shots/_logcat-layout.log --until \"LOGCAT LAYOUT CHECK DONE\" --timeout 300",
     "check:mirror-reveal": "python scripts/run-electron.py scripts/check-mirror-reveal.cjs --watch ui-shots/_mirror-reveal.log --until \"MIRROR REVEAL CHECK DONE\" --timeout 300",
     "check:genshin": "python scripts/run-electron.py scripts/check-genshin.cjs --watch ui-shots/_genshin.log --until \"GENSHIN CHECK DONE\" --timeout 300",

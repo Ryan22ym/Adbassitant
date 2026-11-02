@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { Card, Button, Badge, Empty, Segmented, Input, Field, Select } from '@/components/ui';
 import { useApp, useCurrentDevice } from '@/store/app';
 import { usePanelOpen } from '@/lib/ui-conf';
 import { call } from '@/lib/ipc';
+import { LogcatStore, LOG_MAX_LINES } from '@/lib/logcat-store';
 import type {
   LogcatFilter,
   LogcatHistory,
@@ -29,10 +30,16 @@ import type {
  * ③ **后台保持抓取**开关（设置持久化，默认开）
  *    勾着：离开页面不停会话（配合 ② 就是「在别的页面操作设备 → 回来接着看」）；
  *    不勾：离开页面就停掉，省 CPU 与 USB 带宽。
+ *
+ * ④ **数据层增量更新**（性能优化 B3，见 lib/logcat-store.ts）
+ *    页面不再把日志存进 React state：原始行、过滤结果、级别计数都在
+ *    `LogcatStore` 里增量维护，state 只留一个自增版本号用来触发重绘。
+ *    以前每批推送都要复制 4000 元素数组、重扫两遍全量（visible + counts），
+ *    现在每次只处理这一批新行。
  */
 
 /** 界面保留的最大行数（主进程回放缓冲同量级，见 services/logcat.ts 的 MAX_RECENT） */
-const MAX_LINES = 4000;
+const MAX_LINES = LOG_MAX_LINES;
 /** 固定行高（px）。虚拟滚动靠它换算位置，改这里必须同步改 .logcat-line 的 height */
 const ROW_H = 22;
 /** 视口上下各多渲染几行，滚动时不会露白 */
@@ -98,7 +105,16 @@ export default function LogcatPage() {
   const [loadingProcs, setLoadingProcs] = useState(false);
 
   /* 视图 */
-  const [lines, setLines] = useState<LogcatLine[]>([]);
+  /*
+   * 日志数据在 ref 里（LogcatStore），**不进 state** —— 见文件头 ④。
+   * `rev` 只是一个自增版本号：数据变了就 +1，让 React 重绘一帧。
+   * 这样每批推送不再产生一张 4000 元素的新数组，也不再触发两轮全量遍历。
+   */
+  const storeRef = useRef<LogcatStore | null>(null);
+  if (!storeRef.current) storeRef.current = new LogcatStore();
+  const store = storeRef.current;
+  const [rev, setRev] = useState(0);
+  const bump = useCallback(() => setRev((v) => v + 1), []);
   const [autoScroll, setAutoScroll] = useState(true);
   /*
    * 界面配置（Conf/panels.json 的 logcat.*）：
@@ -149,7 +165,8 @@ export default function LogcatPage() {
         heldRef.current = trimLines(heldRef.current.concat(batch));
         return;
       }
-      setLines((prev) => trimLines(prev.concat(batch)));
+      storeRef.current?.push(batch);
+      setRev((v) => v + 1);
     });
 
     const offStatus = window.adbApi.on('push:logcatStatus', (s: LogcatStatus) => {
@@ -180,7 +197,8 @@ export default function LogcatPage() {
       historyReadyRef.current = true;
 
       if (base.length || extra.length) {
-        setLines(trimLines(base.concat(extra)));
+        storeRef.current?.reset(base.concat(extra));
+        setRev((v) => v + 1);
       }
       if (h?.status) {
         setStatus(h.status);
@@ -224,7 +242,8 @@ export default function LogcatPage() {
     if (!paused && heldRef.current.length > 0) {
       const held = heldRef.current;
       heldRef.current = [];
-      setLines((prev) => trimLines(prev.concat(held)));
+      storeRef.current?.push(held);
+      setRev((v) => v + 1);
     }
   }, [paused]);
 
@@ -249,7 +268,12 @@ export default function LogcatPage() {
       el.scrollTop = el.scrollHeight;
       setScrollTop(el.scrollTop);
     }
-  }, [lines.length, autoScroll]);
+    /*
+     * 依赖用 rev 而不是「行数」：缓冲满了以后行数恒定在 4000，
+     * 按行数做依赖会在最需要跟随的时候（刷屏、缓冲已满）恰好不触发。
+     * rev 只在数据真的变了才变，过滤条件变化不会让它动。
+     */
+  }, [rev, autoScroll]);
 
   const buildFilter = useCallback((): Partial<LogcatFilter> => ({
     minLevel,
@@ -262,7 +286,8 @@ export default function LogcatPage() {
   const start = async () => {
     if (!current) return toast('warn', '请先连接设备');
     setBusy(true);
-    setLines([]);
+    store.reset([]);
+    bump();
     heldRef.current = [];
     earlyRef.current = [];
     historyReadyRef.current = true;
@@ -295,13 +320,14 @@ export default function LogcatPage() {
   };
 
   const clear = async () => {
-    setLines([]);
+    store.reset([]);
+    bump();
     heldRef.current = [];
     await call(() => window.adbApi.clearLogcat(), { silent: true });
   };
 
   const save = async () => {
-    if (lines.length === 0) return toast('warn', '当前没有内容可保存');
+    if (store.total === 0) return toast('warn', '当前没有内容可保存');
     setSaving(true);
     try {
       const meta: Record<string, string> = {
@@ -370,7 +396,8 @@ export default function LogcatPage() {
     (async () => {
       await call(() => window.adbApi.stopLogcat(), { silent: true });
       if (cancelled) return;
-      setLines([]);
+      store.reset([]);
+      bump();
       heldRef.current = [];
       setRunning(false);
       setStatus(null);
@@ -380,47 +407,31 @@ export default function LogcatPage() {
     };
   }, [current?.serial]);
 
-  /* 前端二次过滤（关键字/TAG 变动时立即生效，不必重启抓取） */
-  const visible = useMemo(() => {
-    let list = lines;
-    const kw = keyword.trim().toLowerCase();
-    if (kw) {
-      list = list.filter((l) => l.raw.toLowerCase().includes(kw));
-    }
-    const tags = tagFilter.trim();
-    if (tags) {
-      const pats = tags.split(',').map((x) => x.trim()).filter(Boolean);
-      list = list.filter((l) => pats.some((p) => wildOk(p, l.tag || '')));
-    }
-    if (procFilter) {
-      list = list.filter((l) => l.raw.toLowerCase().includes(procFilter.toLowerCase()));
-    }
-    return list;
-  }, [lines, keyword, tagFilter, procFilter]);
+  /*
+   * 前端二次过滤（关键字/TAG/进程变动时立即生效，不必重启抓取）。
+   *
+   * 🔴 这里是**在 render 期间**调 store.setFilter()，看着像副作用，但它只把
+   *    「由当前 state 推导出来的过滤结果」写进 ref，且签名没变就立刻返回 ——
+   *    对同一份输入重复调用（StrictMode 双渲染、并发渲染被丢弃）结果完全一样。
+   *    放到 effect 里会晚一帧：spacer 高度和滚动条会先按旧结果闪一下。
+   */
+  store.setFilter({ keyword, tags: tagFilter, process: procFilter });
+  const visibleCount = store.visibleCount;
+  const totalCount = store.total;
 
   /*
    * 只算「该画哪一段」（v1.1.15）。DOM 节点数由此固定在
    * (视口高度 / 行高) + 2×OVERSCAN，跟日志总量没有关系 ——
    * 这就是以前「日志一多就卡死」的根治点。
+   *
+   * 只取视口那几十条，所以这里不需要 useMemo：slice 出来的数组本来就只有几十项。
    */
   const winStart = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
-  const winEnd = Math.min(
-    visible.length,
-    Math.ceil((scrollTop + viewH) / ROW_H) + OVERSCAN,
-  );
-  const winRows = useMemo(
-    () => visible.slice(winStart, Math.max(winStart, winEnd)),
-    [visible, winStart, winEnd],
-  );
+  const winEnd = Math.min(visibleCount, Math.ceil((scrollTop + viewH) / ROW_H) + OVERSCAN);
+  const winRows = store.slice(winStart, Math.max(winStart, winEnd));
 
-  const counts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const l of lines) {
-      const k = l.level || '?';
-      c[k] = (c[k] || 0) + 1;
-    }
-    return c;
-  }, [lines]);
+  /* 级别计数由 store 增量维护，这里拿到的是同一个对象（每批只做加减，不重扫全量） */
+  const counts = store.counts;
 
   const toggleBuffer = (b: string) => {
     setBuffers((prev) => {
@@ -600,7 +611,7 @@ export default function LogcatPage() {
           ref={viewRef}
           onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
         >
-          {visible.length === 0 ? (
+          {visibleCount === 0 ? (
             <Empty
               title={running ? '等待日志输出…' : '还没有日志'}
               desc={
@@ -617,7 +628,7 @@ export default function LogcatPage() {
              * 🔴 必须是 transform 而不是 padding-top：padding 会在每帧触发重排，
              *    滚动时肉眼可见地发涩。
              */
-            <div className="log-spacer" style={{ height: visible.length * ROW_H }}>
+            <div className="log-spacer" style={{ height: visibleCount * ROW_H }}>
               <div className="log-window" style={{ transform: `translateY(${winStart * ROW_H}px)` }}>
                 {winRows.map((l) => (
                   <LogcatRow key={l.seq} line={l} />
@@ -641,19 +652,19 @@ export default function LogcatPage() {
             {paused ? '恢复刷新' : '暂停刷新'}
           </Button>
 
-          <Button variant="ghost" onClick={clear} disabled={lines.length === 0}>
+          <Button variant="ghost" onClick={clear} disabled={totalCount === 0}>
             清空
           </Button>
 
-          <Button variant="primary" onClick={save} loading={saving} disabled={lines.length === 0}>
+          <Button variant="primary" onClick={save} loading={saving} disabled={totalCount === 0}>
             保存为文件
           </Button>
 
           <div className="spacer" />
           <span className="text-dim">
-            {visible.length === lines.length
-              ? `${lines.length} 行`
-              : `${visible.length} / ${lines.length} 行`}
+            {visibleCount === totalCount
+              ? `${totalCount} 行`
+              : `${visibleCount} / ${totalCount} 行`}
             {paused && ' · 已暂停'}
           </span>
         </div>
@@ -662,7 +673,12 @@ export default function LogcatPage() {
   );
 }
 
-function LogcatRow({ line }: { line: LogcatLine }) {
+/*
+ * memo 的理由：每批推送都会重算 winRows（新数组），但绝大多数行对象是**同一批引用**。
+ * 没有 memo 时，50 行 × 6 个 span 每次都要整体 reconcile 一遍；
+ * 有 memo 后只有真正新增/移出视口的行才会重渲染。
+ */
+const LogcatRow = memo(function LogcatRow({ line }: { line: LogcatLine }) {
   /*
    * 行高固定（ROW_H），超长内容靠 ellipsis 截断 + title 悬浮看全文。
    * 虚拟滚动要求每行等高，所以这里不能像以前那样自动换行 —— 换行了位置就算不准。
@@ -686,7 +702,7 @@ function LogcatRow({ line }: { line: LogcatLine }) {
       <span className="log-msg">{line.message}</span>
     </div>
   );
-}
+});
 
 function levelTone(l: LogcatLevel): string {
   switch (l) {
@@ -702,11 +718,4 @@ function levelTone(l: LogcatLevel): string {
     default:
       return 'info';
   }
-}
-
-function wildOk(pattern: string, value: string): boolean {
-  if (pattern === '*') return true;
-  if (!pattern.includes('*')) return value.toLowerCase().includes(pattern.toLowerCase());
-  const re = new RegExp('^' + pattern.split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i');
-  return re.test(value);
 }
