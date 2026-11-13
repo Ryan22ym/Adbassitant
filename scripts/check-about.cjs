@@ -18,14 +18,31 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.j
 /**
  * 从 SettingsPage.tsx 的 VERSION_NOTES 里取出当前版本的亮点文案，
  * 这样发版后不必再改本脚本（断言始终跟着源码走）。
+ *
+ * ⚠️ 必须把 `'a\n' + 'b'` 这种多行拼接全接上：只抓第一个字面量的话，
+ * 分块/编号版本说明会被截成只剩第一行（和 make-manifest.py 里同一个坑），
+ * 断言拿半截去 includes 会假失败。同时把源码里的 \n 转义还原成真换行。
  */
 function expectedNoteFor(version) {
   try {
     const src = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'pages', 'SettingsPage.tsx'), 'utf8');
     const block = src.slice(src.indexOf('VERSION_NOTES'), src.indexOf('export default function SettingsPage'));
-    const m = block.match(new RegExp(`'${version.replace(/\./g, '\\.')}':\\s*'([^']+)'`));
-    return m ? m[1] : '';
+    const key = `'${version}':`;
+    const at = block.indexOf(key);
+    if (at < 0) return '';
+    let j = at + key.length;
+    const parts = [];
+    for (;;) {
+      const m = block.slice(j).match(/^\s*'((?:\\.|[^'\\])*)'/);
+      if (!m) break;
+      parts.push(m[1].replace(/\\n/g, '\n').replace(/\\'/g, "'"));
+      j += m[0].length;
+      const plus = block.slice(j).match(/^\s*\+\s*/);
+      if (!plus) break;
+      j += plus[0].length;
+    }
+    return parts.join('');
   } catch {
     return '';
   }

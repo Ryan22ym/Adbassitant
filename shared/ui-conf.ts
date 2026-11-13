@@ -29,6 +29,9 @@ export const SIDEBAR_IDS = [
   'device',
   'mirror',
   'tools',
+  /* v1.1.25：工具箱（时间戳 / MD5 …离线小工具），紧跟「常用工具」——
+     两者都是工具，但一个是操作设备、一个是纯本地计算，所以分成两个入口 */
+  'toolbox',
   'apps',
   'logcat',
   'weaknet',
@@ -51,6 +54,7 @@ export const SIDEBAR_LABELS: Record<string, string> = {
   device: '设备',
   mirror: '投屏',
   tools: '常用工具',
+  toolbox: '工具箱',
   apps: '应用管理',
   logcat: '实时 Logcat',
   weaknet: '弱网模拟',
@@ -215,6 +219,7 @@ export const DEFAULT_FEATURES: FeaturesConf = {
       device: true,
       mirror: true,
       tools: true,
+      toolbox: true,
       apps: true,
       logcat: true,
       weaknet: true,
@@ -232,6 +237,15 @@ export const DEFAULT_FEATURES: FeaturesConf = {
       apk: true,
       file: true,
       logcat: true,
+    },
+    /*
+     * 工具箱里的各个工具（v1.1.25）。
+     * ⚠️ 新增工具**不必**在这里补一行 —— featureOnOf 对未配置的项回落 true，
+     *    所以 TOOL_DEFS 里加了就默认显示；只有想给某些工具出厂关掉时才写。
+     */
+    toolbox: {
+      timestamp: true,
+      md5: true,
     },
     /* 设备页里的整块入口 */
     device: { wireless: true, quickActions: true },

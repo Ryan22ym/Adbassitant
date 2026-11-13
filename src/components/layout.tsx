@@ -45,6 +45,7 @@ const NAV_DEFS: Record<string, NavDef> = {
   device: { to: '/', label: SIDEBAR_LABELS.device, icon: Icon.device, exact: true },
   mirror: { to: '/mirror', label: SIDEBAR_LABELS.mirror, icon: Icon.mirror },
   tools: { to: '/tools', label: SIDEBAR_LABELS.tools, icon: Icon.tools },
+  toolbox: { to: '/toolbox', label: SIDEBAR_LABELS.toolbox, icon: Icon.toolbox },
   apps: { to: '/apps', label: SIDEBAR_LABELS.apps, icon: Icon.apps },
   logcat: { to: '/logcat', label: SIDEBAR_LABELS.logcat, icon: Icon.logcat },
   weaknet: { to: '/weaknet', label: SIDEBAR_LABELS.weaknet, icon: Icon.weaknet },
@@ -229,6 +230,10 @@ function splitNotes(raw: string): string[] {
 
 /** 条目自带项目符号的就不要再补一个，否则会变成「· · xxx」 */
 const BULLET_RE = /^[·•\-*—]\s*/;
+/** 编号条目（`1.` / `2、`）同样不再补点 —— VERSION_NOTES 现在按 1./2./3. 逐条写 */
+const NUMBERED_RE = /^\d+\s*[.、)）]/;
+/** 分块标题行：`【实时 Logcat】` —— 现行文案已不分块，这里只作旧说明的兼容 */
+const SECTION_RE = /^【.+】$/;
 
 /**
  * 「检测到新版本」小弹窗（v1.1.15）。
@@ -281,11 +286,22 @@ function UpdateTip() {
             data-update-tip-notes={items.length}
             title={notes}
           >
-            {items.map((text, i) => (
-              <div className="update-tip-item" key={i}>
-                {BULLET_RE.test(text) ? text : `· ${text}`}
-              </div>
-            ))}
+            {items.map((text, i) => {
+              // 分块标题独占一行、加粗；普通条目没自带符号才补「· 」
+              if (SECTION_RE.test(text)) {
+                return (
+                  <div className="update-tip-item update-tip-section" key={i}>
+                    {text}
+                  </div>
+                );
+              }
+              const hasMark = BULLET_RE.test(text) || NUMBERED_RE.test(text);
+              return (
+                <div className="update-tip-item" key={i}>
+                  {hasMark ? text : `· ${text}`}
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : (

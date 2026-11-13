@@ -55,3 +55,7 @@ Thumbs.db
 # Python 辅助脚本产物
 __pycache__/
 *.pyc
+
+# 安装脚本留下的 Conf 备份 / 临时命令输出
+_conf-backup-*/
+_*.out

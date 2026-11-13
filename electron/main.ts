@@ -13,7 +13,9 @@ import {
   stopMemoryProbe,
 } from './services/memory-probe';
 import { listDevices, log, binDir } from './services/adb';
-import { startMirror } from './services/mirror';
+import { getMirrorStatus, startMirror } from './services/mirror';
+import { attachMirrorBar, detachMirrorBar, syncMirrorBarSetting } from './services/mirror-bar';
+import { hideMirrorSplash } from './services/mirror-splash';
 import { stopWakeWatch } from './services/wake-window';
 import { getSettings } from './services/settings';
 import { getUiConf, resolveUiConfDir } from './services/ui-conf';
@@ -647,7 +649,7 @@ app.whenReady().then(() => {
   }
 
   // 设置一变就同步托盘：开关就是「程序要不要常驻」的开关，必须立刻生效
-  setSettingsChangedHook(() => {
+  setSettingsChangedHook((next) => {
     syncTray();
     /*
      * 崩溃自动分析（v1.1.14）跟着同一个钩子走。
@@ -656,6 +658,18 @@ app.whenReady().then(() => {
      * 监听器内部自己判断「开关开没开 + 投屏在不在跑」，这里无脑调即可（幂等）。
      */
     syncCrashWatch();
+
+    /*
+     * 投屏窗口功能栏（v1.1.22）。
+     * 关掉时：立刻解除 pin + 清空全部记录 + 拆掉那条悬浮条（内部实现）。
+     * 重新打开时：如果此刻正在投屏，要当场补挂 —— 否则要等下一次投屏才出现，
+     * 用户会以为开关没生效。
+     */
+    syncMirrorBarSetting(!!next.mirrorBarEnabled);
+    if (next.mirrorBarEnabled) {
+      const st = getMirrorStatus();
+      if (st.running && st.pid) attachMirrorBar({ pid: st.pid, serial: st.serial || '' });
+    }
   });
 
   /*
@@ -788,6 +802,13 @@ app.on('before-quit', () => {
   shutdownCrashWatch();
   /* 投屏窗口的鼠标钩子同理：拆掉，别留一个进程在后台吃全局鼠标事件 */
   stopWakeWatch();
+  /*
+   * 功能栏（v1.1.22）：先落盘 pin 记录，再拆掉那个悬浮小窗与 Win32 代理。
+   * 退出时窗口马上就没了，但记录要留着 —— 下次投屏靠它把位置尺寸摆回去。
+   */
+  detachMirrorBar(true);
+  /* 「正在投屏」提示牌（v1.1.23）：退出时若还在等首帧，顺手收掉 */
+  hideMirrorSplash();
 });
 
 let quitting = false;

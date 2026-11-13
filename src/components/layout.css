@@ -551,6 +551,19 @@
   overflow-wrap: anywhere;
 }
 
+/* 分块标题（【实时 Logcat】）：不缩进、加粗、和上一块拉开距离 */
+.update-tip-section {
+  padding-left: 0;
+  text-indent: 0;
+  margin-top: 6px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.update-tip-notes > .update-tip-section:first-child {
+  margin-top: 0;
+}
+
 /* 卡片内的滚动条要比全局细：10px 在 ~200px 宽的卡片里太占地方 */
 .update-tip-notes::-webkit-scrollbar {
   width: 6px;
@@ -836,6 +849,15 @@
 }
 
 /* ---------------- 键值信息列表 ---------------- */
+
+/*
+ * 关于页的版本说明：VERSION_NOTES 用 '\n' 拼的多行（【模块】+ 1./2./3. 编号），
+ * 默认 HTML 会把换行折成空格、整段挤成一坨 —— pre-line 保换行、合并多余空格。
+ * ⚠️ 只作用于这个 div，别给 .notice-body 加（其它 Notice 是单行文案）。
+ */
+.version-notes {
+  white-space: pre-line;
+}
 
 .kv-list {
   display: grid;

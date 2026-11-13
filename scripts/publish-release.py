@@ -95,13 +95,21 @@ def load_make_manifest():
 
 
 def notes_to_markdown(notes):
-    """`新增：\\n· a\\n· b\\n修复：\\n· c` → `## 新增\\n- a\\n- b\\n\\n## 修复\\n- c`"""
+    """`【Realtime】\\n1. a\\n2. b` → `## Realtime\\n1. a\\n2. b`
+
+    也兼容老写法 `新增：\\n· a\\n· b` → `## 新增\\n- a\\n- b`。
+    """
     out = []
     for raw in notes.splitlines():
         line = raw.strip()
         if not line:
             continue
-        if line.startswith('·') or line.startswith('•'):
+        if re.match(r'^【.+】$', line):
+            # 分块标题（大更新按模块分组，2026-11-04 起的写法）
+            if out:
+                out.append('')
+            out.append('## ' + line.strip('【】').strip())
+        elif line.startswith('·') or line.startswith('•'):
             out.append('- ' + line.lstrip('·•').strip())
         elif line.startswith('- '):
             out.append(line)

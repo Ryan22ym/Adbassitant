@@ -96,6 +96,10 @@ const DEFAULTS: AppSettings = {
   // windowBounds 初始为 null（从没记录过），由 services/window-state.ts 写入
   rememberWindowBounds: true,
   windowBounds: null,
+  // 投屏窗口功能栏（v1.1.22）：默认开 —— 它只是投屏窗口的配件，不改投屏行为。
+  // 关掉会同时解除 pin 并清空所有记录，所以记录默认给空表（每次一份新对象）
+  mirrorBarEnabled: true,
+  mirrorPinRecords: {},
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -187,6 +191,9 @@ function defaultDirs(): AppSettings {
     // 记住窗口大小（v1.1.16）：与 DEFAULTS 一致；null 不是共享引用，安全
     rememberWindowBounds: true,
     windowBounds: null,
+    // 投屏窗口功能栏（v1.1.22）：与 DEFAULTS 保持一致；空表每次给新实例
+    mirrorBarEnabled: true,
+    mirrorPinRecords: {},
   };
 }
 

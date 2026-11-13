@@ -13,6 +13,7 @@ import type { UiConf } from '@shared/ui-conf';
 import DevicePage from './pages/DevicePage';
 import MirrorPage from './pages/MirrorPage';
 import ToolsPage from './pages/ToolsPage';
+import ToolboxPage from './pages/ToolboxPage';
 import AppsPage from './pages/AppsPage';
 import LogcatPage from './pages/LogcatPage';
 import WeakNetworkPage from './pages/WeakNetworkPage';
@@ -26,6 +27,8 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/': { title: '设备', desc: '查看设备状态与详细信息' },
   '/mirror': { title: '投屏', desc: '通过 scrcpy 实时投屏并控制设备' },
   '/tools': { title: '常用工具', desc: '截图、录屏、分辨率、应用安装与文件传输' },
+  /* 工具箱顶栏不写描述：左侧清单里每个工具都带一行说明，再写一句就是重复 */
+  '/toolbox': { title: '工具箱', desc: '' },
   // 以下这些页面顶栏描述也是废话，一并去掉（标题本身已说明用途）
   '/apps': { title: '应用管理', desc: '' },
   '/logcat': { title: '实时 Logcat', desc: '' },
@@ -546,6 +549,7 @@ export default function App() {
                 <Route path="/" element={<DevicePage />} />
                 <Route path="/mirror" element={<MirrorPage />} />
                 <Route path="/tools" element={<ToolsPage />} />
+                <Route path="/toolbox" element={<ToolboxPage />} />
                 <Route path="/apps" element={<AppsPage />} />
                 <Route path="/logcat" element={<LogcatPage />} />
                 <Route path="/weaknet" element={<WeakNetworkPage />} />

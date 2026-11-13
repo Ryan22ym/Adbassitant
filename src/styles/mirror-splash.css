@@ -1,0 +1,82 @@
+/*
+ * 「正在投屏」提示牌（v1.1.23）。
+ *
+ * 🔴 透明无边框小窗：全局 body 底色必须在这里抹掉，否则整块窗口是一张不透明的卡。
+ *    用 `data-win="mirror-splash"` 限定，主窗口与功能栏都不受影响。
+ *
+ * 🔴 配色不跟随主题（浅色 / 深色 / 玻璃 / 方舟都得住）：这窗只在投屏启动的 2~4 秒
+ *    存在，跟着主题走反而会撞色。固定用「深色半透明 + 浅字」，任何壁纸上都读得清，
+ *    也和功能栏那枚按钮观感一致。
+ * 🔴 不要 backdrop-filter：窗后是空桌面，采样不到东西（见 mirror-bar.css 头注释）。
+ */
+
+:root[data-win='mirror-splash'],
+:root[data-win='mirror-splash'] body,
+:root[data-win='mirror-splash'] #root {
+  background: transparent !important;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+:root[data-win='mirror-splash'] body {
+  color: #f4f6fb;
+  transition: none;
+  /* 提示牌不接收任何交互，光标保持箭头 */
+  cursor: default;
+  user-select: none;
+}
+
+.msp {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.msp-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(18, 20, 26, 0.88);
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+/* 转圈：一圈浅描边 + 一段亮弧，1s 匀速转 */
+.msp-spin {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid rgba(244, 246, 251, 0.22);
+  border-top-color: rgba(120, 170, 255, 0.95);
+  animation: msp-rotate 900ms linear infinite;
+}
+
+.msp-text {
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.4px;
+  color: rgba(244, 246, 251, 0.94);
+  white-space: nowrap;
+}
+
+@keyframes msp-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msp-spin {
+    animation-duration: 2.4s;
+  }
+}

@@ -46,6 +46,8 @@ const CH_CHAT = 'ai:chat';
 const CH_CANCEL = 'ai:cancel';
 const CH_CFG_GET = 'ai:configGet';
 const CH_AGENT_STEP = 'push:aiAgentStep';
+/** 一键复制走主进程剪贴板（通道名照抄 shared/types.ts 的 CLIPBOARD_WRITE） */
+const CH_CLIP = 'clipboard:write';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -101,6 +103,8 @@ const FINAL_TEXT = '当前前台是 **com.example.app** 的 `MainActivity`。';
 
 const chatCalls = [];
 const cancelCalls = [];
+/** 渲染层往剪贴板写了什么（v1.1.24 的一键复制断言用） */
+const clipWrites = [];
 /** 发送后多久返回结果：留出时间给「实时进度 / 停止按钮」两条断言 */
 const CHAT_DELAY = 1400;
 
@@ -143,6 +147,17 @@ app.whenReady().then(async () => {
   ipcMain.removeHandler(CH_CANCEL);
   ipcMain.handle(CH_CANCEL, (_e, runId) => {
     cancelCalls.push(runId);
+    return { ok: true, data: true };
+  });
+
+  /*
+   * 剪贴板也打桩：真实的 registerIpc 会写系统剪贴板，
+   * 但这里要验的是「点了复制按钮之后，写进去的是不是那条命令/那段输出」，
+   * 所以把内容截下来即可，不动系统剪贴板。
+   */
+  ipcMain.removeHandler(CH_CLIP);
+  ipcMain.handle(CH_CLIP, (_e, text) => {
+    clipWrites.push(String(text));
     return { ok: true, data: true };
   });
 
@@ -314,6 +329,68 @@ app.whenReady().then(async () => {
         'com.example.app',
       ),
       'D7 点开后能看到输出正文',
+    );
+
+    /* ---- D8~D11 一键复制命令 / 复制输出（v1.1.24） ----
+     * 先把第一条重新折叠：复制输出**不依赖展开**，折叠状态才是真场景。 */
+    await read(`
+      (() => {
+        const b = document.querySelector('.ai-bubble.assistant .ai-step-toggle');
+        if (b) b.click();
+        return true;
+      })()
+    `);
+    await sleep(200);
+
+    ok(
+      (await read(`
+        (() => {
+          const steps = [...document.querySelectorAll('.ai-bubble.assistant .ai-step')];
+          return steps.length === 2 && steps.every((s) => !!s.querySelector('.ai-step-head .ai-step-copy'));
+        })()
+      `)) === true,
+      'D8 每条命令都有「复制」按钮',
+    );
+
+    clipWrites.length = 0;
+    await read(`
+      (() => {
+        const b = document.querySelector('.ai-bubble.assistant .ai-step-head .ai-step-copy');
+        if (b) b.click();
+        return true;
+      })()
+    `);
+    await sleep(250);
+    ok(
+      clipWrites.length === 1 && clipWrites[0] === STEP_OK.command,
+      'D9 点「复制」拿到的是命令原文',
+      clipWrites[0],
+    );
+
+    clipWrites.length = 0;
+    await read(`
+      (() => {
+        const step = document.querySelector('.ai-bubble.assistant .ai-step');
+        const b = step?.querySelector('.ai-step-outbar .ai-step-copy');
+        if (b) b.click();
+        return true;
+      })()
+    `);
+    await sleep(250);
+    ok(
+      clipWrites.length === 1 && clipWrites[0] === STEP_OK.output,
+      'D10 输出折叠时也能一键复制整段输出',
+      clipWrites[0],
+    );
+
+    ok(
+      (await read(`
+        (() => {
+          const first = document.querySelectorAll('.ai-bubble.assistant .ai-step')[0];
+          return !!first && first.querySelector('pre') === null;
+        })()
+      `)) === true,
+      'D11 复制不会顺带把输出展开',
     );
 
     /* ---------------- E. 结论 ---------------- */

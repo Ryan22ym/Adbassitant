@@ -46,6 +46,14 @@ import {
   getMirrorStatus,
 } from './services/mirror';
 import {
+  clearMirrorPins,
+  getMirrorBarState,
+  isMirrorBarWindow,
+  onMirrorBarChange,
+  setMirrorPin,
+} from './services/mirror-bar';
+import { isMirrorSplashWindow } from './services/mirror-splash';
+import {
   pushFiles,
   pullFiles,
   installApk,
@@ -84,6 +92,7 @@ import {
   getLogcatHistory,
   clearLogcatBuffer,
   saveLogcat,
+  hasLogcatBuffer,
   listProcesses,
   setLogcatLinesSink,
   setLogcatStatusSink,
@@ -233,9 +242,17 @@ function send(channel: string, payload: any) {
 /**
  * 主窗口（可能已销毁 / 还没建）。
  * 自绘窗口按钮用它执行最小化 / 最大化 / 关闭 —— 那些动作属于 BrowserWindow。
+ *
+ * 🔴 必须排除「投屏窗口功能栏」那个小窗（v1.1.22）：它同样是 BrowserWindow，
+ *    `getAllWindows()` 里排在前面时，最小化/最大化/标题栏配色/窗口尺寸查询
+ *    会全部打到那条 56px 宽的条子上 —— 表现是「点最小化，主窗口没反应，
+ *    右边的小条子消失了」。
+ * 🔴 同理排除「正在投屏」提示牌（v1.1.23），它是 236×76 的浮窗，问题一模一样。
  */
 function win(): BrowserWindow | null {
-  const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed());
+  const w = BrowserWindow.getAllWindows().find(
+    (x) => !x.isDestroyed() && !isMirrorBarWindow(x) && !isMirrorSplashWindow(x),
+  );
   return w ?? null;
 }
 
@@ -287,8 +304,13 @@ export function registerIpc() {
   });
 
   setLogcatLinesSink((lines) => send(IPC.PUSH_LOGCAT_LINES, lines));
-
   setLogcatStatusSink((s) => send(IPC.PUSH_LOGCAT_STATUS, s));
+
+  /*
+   * 功能栏状态（v1.1.22）：钉住 / 解除 / 方向切换。
+   * 两个渲染进程都收 —— 功能栏自己要看，设置页要看「当前是不是钉着」。
+   */
+  onMirrorBarChange((s) => send(IPC.PUSH_MIRROR_BAR, s));
 
   setWeakNetStatusSink((s) => send(IPC.PUSH_WEAKNET_STATUS, s));
 
@@ -463,6 +485,17 @@ export function registerIpc() {
   ipcMain.handle(IPC.MIRROR_START, wrap((_e, options: MirrorOptions) => startMirror(options)));
   ipcMain.handle(IPC.MIRROR_STOP, wrap(() => stopMirror()));
   ipcMain.handle(IPC.MIRROR_STATUS, wrap(() => getMirrorStatus()));
+
+  /*
+   * 投屏窗口功能栏（v1.1.22）。
+   *
+   * 这三个动作改的都是**别人的窗口**（scrcpy 那个独立进程的窗口），
+   * 实现在 services/mirror-win.ts（Win32 代理）与 services/mirror-bar.ts（状态机）。
+   * 状态变化由 setMirrorBarSink 推给两个渲染进程（主窗 + 功能栏自己）。
+   */
+  ipcMain.handle(IPC.MIRROR_BAR_STATE, wrap(() => getMirrorBarState()));
+  ipcMain.handle(IPC.MIRROR_BAR_SET_PIN, wrap((_e, pin: boolean) => setMirrorPin(!!pin)));
+  ipcMain.handle(IPC.MIRROR_BAR_CLEAR_PINS, wrap(() => clearMirrorPins()));
 
   /* ---------------- 文件 ---------------- */
 
@@ -987,6 +1020,12 @@ export function registerIpc() {
   ipcMain.handle(
     IPC.LOGCAT_SAVE,
     wrap(async (_e, meta?: Record<string, string>) => {
+      /*
+       * 先确认真有内容再弹框：不然用户挑完路径才收到「没有内容」，
+       * 而这条路径以前更糟 —— 静默写出一个只有表头的 0 行文件。
+       */
+      if (!hasLogcatBuffer()) throw new Error('没有可保存的日志内容');
+
       const d = new Date();
       const p = (n: number) => String(n).padStart(2, '0');
       const defaultName = `logcat_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.txt`;

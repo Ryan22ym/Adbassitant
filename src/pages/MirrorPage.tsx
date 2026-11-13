@@ -61,7 +61,7 @@ export default function MirrorPage() {
     initial.wakeOnDoubleClick ?? MIRROR_DEFAULTS.wakeOnDoubleClick!,
   );
   const [keyboard, setKeyboard] = useState<'sdk' | 'uhid' | 'disabled'>(
-    (initial.keyboard as 'sdk' | 'uhid' | 'disabled') ?? 'uhid',
+    (initial.keyboard as 'sdk' | 'uhid' | 'disabled') ?? 'sdk',
   );
 
   const applyPreset = (idx: string) => {
@@ -236,13 +236,13 @@ export default function MirrorPage() {
           <div className="divider" />
 
           <div className="grid-2">
-            <Field label="键盘模式" hint="UHID 支持数字、英文与中文输入法直接输入">
+            <Field label="键盘模式" hint="SDK 不注册虚拟键盘、不打断前台应用；UHID 中文输入更完整">
               <Segmented
                 value={keyboard}
                 onChange={setKeyboard}
                 options={[
-                  { value: 'uhid', label: 'UHID 虚拟' },
                   { value: 'sdk', label: '标准 SDK' },
+                  { value: 'uhid', label: 'UHID 虚拟' },
                   { value: 'disabled', label: '禁用' },
                 ]}
               />

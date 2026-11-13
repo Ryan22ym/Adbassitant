@@ -29,6 +29,7 @@ const CASES = [
   ['#/', '设备'],
   ['#/mirror', '投屏'],
   ['#/tools', '常用工具'],
+  ['#/toolbox', '工具箱'],
   ['#/apps', '应用管理'],
   ['#/logcat', '实时 Logcat'],
   ['#/weaknet', '弱网模拟'],

@@ -79,6 +79,21 @@ let session: Session | null = null;
  */
 let orphanRecent: LogcatLine[] = [];
 
+/**
+ * 停掉抓取后留下的**原文**缓冲（v1.1.22）。
+ *
+ * 🔴 这里曾经是个洞：原来只移交了 `recent`（4000 行结构化回放缓冲），
+ *    原文 `buffer` 跟着 session 一起被丢掉 —— 于是
+ *    「停止抓取 → 保存为文件」会写出一个 **0 行的空文件**：
+ *    界面底部明明还写着 4000 行，打开文件只有表头和 `行数：0`。
+ *    （用户看到的现象是「日志超过 4000 行导出就空了」，实际是「停下来再导出就空了」。）
+ *    把 buffer 一起留下，停止后导出与抓取中导出口径完全一致。
+ *
+ * 代价是停止后仍持有最多 MAX_BUFFER 行原文（2 万行 ≈ 3~6MB），
+ * 直到下一次 startLogcat / clearLogcatBuffer 才释放 —— 与 recent 的语义一致。
+ */
+let orphanBuffer: RingBuffer<string> | null = null;
+
 type LinesSink = (lines: LogcatLine[]) => void;
 type StatusSink = (status: LogcatStatus) => void;
 
@@ -166,6 +181,7 @@ export async function startLogcat(
   session = sess;
   // 新会话从空白开始：上一次停止后留下的那份不算这次的内容
   orphanRecent = [];
+  orphanBuffer = null;
 
   const handleChunk = (data: Buffer) => {
     const text = data.toString('utf8');
@@ -196,6 +212,7 @@ export async function startLogcat(
       flush(sess);
       // 设备掉线 / 主动 kill 都会走到这里：同上，把最近行留给界面回放
       orphanRecent = sess.recent;
+      orphanBuffer = sess.buffer;
       log('info', 'Logcat', `已停止（exit ${code}）`);
       emitStatus();
     }
@@ -219,6 +236,8 @@ export async function stopLogcat(): Promise<boolean> {
 
   // 把最近行留给界面：停止 ≠ 清空，用户切页回来还要看得见刚才那些
   orphanRecent = sess.recent;
+  // 同上，原文缓冲也要留 —— 否则停止后「保存为文件」写出来是空文件
+  orphanBuffer = sess.buffer;
 
   try {
     sess.child.kill();
@@ -331,6 +350,8 @@ function safeInt(s: string): number | undefined {
 
 export function clearLogcatBuffer(): boolean {
   orphanRecent = [];
+  // 停止状态下「清空」清的是遗留缓冲，否则下次保存又会把旧内容翻出来
+  orphanBuffer = null;
   if (session) {
     session.buffer.clear();
     session.recent.length = 0;
@@ -353,10 +374,12 @@ export function getLogcatStats(): {
   recent: number;
   maxBuffer: number;
 } {
+  // 停止后 buffer 移交到 orphanBuffer，探针读的必须是「实际还占着内存的那份」
+  const buf = session ? session.buffer : orphanBuffer;
   return {
     running: !!session,
     seq: session?.seq ?? 0,
-    buffered: session?.buffer.length ?? 0,
+    buffered: buf?.length ?? 0,
     recent: (session ? session.recent : orphanRecent).length,
     maxBuffer: MAX_BUFFER,
   };
@@ -378,11 +401,32 @@ export function getLogcatHistory(limit = 800): LogcatHistory {
   return { status: getLogcatStatus(), lines, buffered: src.length };
 }
 
+/**
+ * 当前是否有可导出的原文行。
+ *
+ * 给 IPC 层做「弹保存框之前」的前置判断用：先弹框再报「没有内容」，
+ * 用户会很困惑（路径都选完了却没文件）。
+ */
+export function hasLogcatBuffer(): boolean {
+  return ((session ? session.buffer : orphanBuffer)?.length ?? 0) > 0;
+}
+
 export function saveLogcat(filePath: string, meta?: Record<string, string>): {
   path: string;
   bytes: number;
   lines: number;
 } {
+  /*
+   * 🔴 数据源必须是「运行中的会话 **或** 停止后遗留的缓冲」。
+   *    只看 session 的话，用户「停止抓取 → 保存为文件」会导出 0 行空文件 ——
+   *    界面底部还写着 4000 行，文件里只有表头和 `行数：0`。
+   */
+  const buf = session ? session.buffer : orphanBuffer;
+  const body = buf ? buf.toArray() : [];
+  if (body.length === 0) {
+    throw new Error('没有可保存的日志内容（缓冲为空，或已被清空）');
+  }
+
   const lines: string[] = [];
   lines.push('='.repeat(72));
   lines.push('  ADB 桌面助手 - 实时 Logcat 导出');
@@ -391,21 +435,19 @@ export function saveLogcat(filePath: string, meta?: Record<string, string>): {
   if (meta) {
     for (const [k, v] of Object.entries(meta)) lines.push(`${k}：${v}`);
   }
-  lines.push(`行数：${session?.buffer.length ?? 0}`);
+  lines.push(`行数：${body.length}`);
   lines.push('-'.repeat(72));
   lines.push('');
 
-  if (session) {
-    // 20 万级以下一次展开是安全的；超过 6.5 万会撞参数上限，按 5000 一批追加
-    const body = session.buffer.toArray();
-    for (let i = 0; i < body.length; i += 5000) {
-      lines.push(...body.slice(i, i + 5000));
-    }
+  // 20 万级以下一次展开是安全的；超过 6.5 万会撞参数上限，按 5000 一批追加
+  for (let i = 0; i < body.length; i += 5000) {
+    lines.push(...body.slice(i, i + 5000));
   }
 
   const content = lines.join('\r\n');
   writeFileSync(filePath, '\ufeff' + content, 'utf8');
-  return { path: filePath, bytes: Buffer.byteLength(content, 'utf8'), lines: lines.length };
+  // 返回值口径与 logcat-export 一致：只算正文行，别把表头算进「已保存 N 行」
+  return { path: filePath, bytes: Buffer.byteLength(content, 'utf8'), lines: body.length };
 }
 
 function stamp(ts: number): string {

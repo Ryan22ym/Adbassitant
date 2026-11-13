@@ -205,6 +205,28 @@ app.whenReady().then(async () => {
   const n4 = await lineCount();
   ok(n3 > 0 && n4 > 0, 'P6 停止抓取后切页回来，已抓到的内容仍保留', `before=${n3} after=${n4}`);
 
+  /*
+   * ★ P7 停止后「保存为文件」必须真有正文（v1.1.22 修的洞）
+   *
+   * 停止时原文 buffer 跟着 session 一起被丢掉了，saveLogcat 只认 session，
+   * 于是写出一个只有表头 + `行数：0` 的空文件 —— 界面底部却还写着 4000 行。
+   * 这里绕开系统保存框（自动化点不了），直接调服务层落盘再读回来。
+   */
+  const logcatSvc = require('../dist-electron/electron/services/logcat.js');
+  const savePath = path.join(DATA, 'stop-export.txt');
+  let p7ok = false;
+  let p7detail = '';
+  try {
+    const r = logcatSvc.saveLogcat(savePath, { 场景: 'stop-then-save' });
+    const txt = fs.readFileSync(savePath, 'utf8');
+    const bodyLines = txt.split(/\r?\n/).filter((s) => /^\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/.test(s)).length;
+    p7ok = r.lines > 0 && /行数：[1-9]\d*/.test(txt) && bodyLines > 0;
+    p7detail = `lines=${r.lines} body=${bodyLines} bytes=${r.bytes}`;
+  } catch (e) {
+    p7detail = 'throw: ' + e.message;
+  }
+  ok(p7ok, '🔴 P7 停止抓取后导出文件非空（不再只有表头）', p7detail);
+
   win.hide();
   log('=== LOGCAT LIVE CHECK ===');
   for (const r of rows) log(r);

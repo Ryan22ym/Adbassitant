@@ -42,6 +42,33 @@ export const Icon = {
       />
     </svg>
   ),
+  /**
+   * 工具箱（v1.1.25）：箱体 + 提手 + 中间那道锁扣。
+   *
+   * 刻意与「常用工具」的扳手区分开：那枚是**对设备做的事**，这枚是**离线小工具**。
+   * 加一条中缝是因为只画方箱 + 提手在 17px 下会读成「包」或「公文包」。
+   */
+  toolbox: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="2.6" y="8.4" width="18.8" height="11.8" rx="2.4" />
+      <path d="M8.6 8.4V6.6a2 2 0 012-2h2.8a2 2 0 012 2v1.8" strokeLinejoin="round" />
+      <path d="M9.2 13.6h5.6" strokeLinecap="round" />
+    </svg>
+  ),
+  /** 时钟（工具箱 → 时间戳转换） */
+  clock: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="12" cy="12" r="8.6" />
+      <path d="M12 6.9V12l3.5 2.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  /** 井号（工具箱 → MD5）：两条竖线穿过两条横线，是「摘要/编码」类功能最通用的记号 */
+  hash: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M9.7 3.6L7.7 20.4M16.3 3.6l-2 16.8" strokeLinecap="round" />
+      <path d="M3.9 8.7h16.2M3.3 15.3h16.2" strokeLinecap="round" />
+    </svg>
+  ),
   terminal: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <rect x="2.5" y="4" width="19" height="16" rx="2.5" />

@@ -480,22 +480,48 @@ export default function LogcatPage() {
             size="sm"
             value={minLevel}
             onChange={setMinLevel}
+            /*
+             * 🔴 计数放进**定宽槽**（.seg-count），不要拼成字符串。
+             *    拼字符串时每项的宽度由数字位数决定（"V 9" ≈ 42px、"D 2734" ≈ 63px），
+             *    抓取过程中计数一路涨，整条工具栏连同右边的输入框、两个勾选项
+             *    就跟着左右漂移 —— 小杨 2026-11-06 报的「这一栏一直在动」。
+             *    定宽之后分段控件宽度恒定，工具栏布局不随抓取变化。
+             */
             options={LEVELS.map((l) => ({
               value: l.value,
-              label: `${l.label}${counts[l.value] ? ` ${counts[l.value]}` : ''}`,
+              label: (
+                <>
+                  {l.label}
+                  <span className="seg-count">{counts[l.value] || ''}</span>
+                </>
+              ),
             }))}
           />
+          {/*
+            两个输入框吃「剩余空间」（flex:1 1 0 + minWidth:0）：
+            宽度由工具栏剩余量决定，不再由占位文字/浏览器固有宽度决定。
+            以前是 maxWidth + 默认 flex-basis:auto，收缩时被 input 的 min-content
+            （占位文字宽度）卡住 —— 分段控件一变宽，两个框缩不下去，右侧那两个
+            勾选项就被挤到第二行（工具栏高度 52 → 86，看着像整条在跳）。
+          */}
+          {/*
+            占位文字要短：这一行现在给输入框的只有 140 上下（级别分段占了定宽的那份），
+            原来「关键字（逗号分隔）」在 1080 窗口就被截成「关键字（逗号分」。
+            完整说明挪到 title 上，鼠标停一下就看得见。
+          */}
           <Input
-            placeholder="关键字（逗号分隔）"
+            placeholder="关键字"
+            title="多个关键字用逗号分隔，任一命中即显示"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            style={{ maxWidth: 200, height: 28 }}
+            style={{ flex: '1 1 0', minWidth: 0, maxWidth: 200, height: 28 }}
           />
           <Input
-            placeholder="TAG 过滤，支持 *"
+            placeholder="TAG 过滤"
+            title="TAG 过滤，支持 * 通配"
             value={tagFilter}
             onChange={(e) => setTagFilter(e.target.value)}
-            style={{ maxWidth: 180, height: 28 }}
+            style={{ flex: '1 1 0', minWidth: 0, maxWidth: 180, height: 28 }}
           />
           {/*
             两个勾选项挤在右侧：自动滚动（看日志时最常用）在前，

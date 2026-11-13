@@ -24,9 +24,24 @@ export const MIRROR_DEFAULTS: Omit<MirrorOptions, 'serial'> = {
   wakeOnDoubleClick: true,
   alwaysOnTop: false,
   /*
-   * 默认用 uhid：scrcpy 的 sdk 模式只能注入 ASCII、走不了设备的中文输入法
-   * （IME 组合字符），uhid 模拟真实 HID 键盘，数字 / 英文 / 中文 IME 都能输。
-   * 少数老设备若 uhid 权限受限，可在投屏页改回「标准 SDK」。
+   * 默认 sdk（此前的默认是 uhid）。
+   *
+   * 🔴 换掉 uhid 的原因**不是**输入法，是黑屏：
+   *    uhid 会往设备上注册一个虚拟**硬件键盘**（dumpsys input 里能看到
+   *    `Device NN: scrcpy  KeyboardType: 2`）。设备侧随即发生
+   *    `Config changes=30`（0x10 CONFIG_KEYBOARD + 0x20 CONFIG_KEYBOARD_HIDDEN），
+   *    窗口配置从 `-keyb/h/h` 变成 `qwerty/v/v`。前台应用只要没声明
+   *    `android:configChanges="keyboard"`（游戏大厅、OPPO launcher 都没声明），
+   *    就会被系统判定「必须重启」→ destroySurface → 重建 ~0.5s → **黑屏**。
+   *    实测 2026-11-10 11:52 拔插一次：11:52:54 拉起 scrcpy，11:52:56.098 配置变更，
+   *    11:52:56.233 `Checking to restart ActivityRecord{...domino}: changed=0x=30`，
+   *    11:52:58 才恢复画面。拔掉 USB 时 UHID 键盘被移除，同样的配置变更再来一次，
+   *    所以「插上也黑、拔下也黑」。
+   *    sdk 模式只走 InputManager 注入，不注册输入设备 → 没有配置变更 → 不黑。
+   *
+   * 代价（照实记着）：sdk 只能注入 ASCII，走不了设备中文输入法的 IME 组合，
+   * 需要往手机里打中文的用户可在投屏页选回「UHID 虚拟」——本地会存进投屏偏好，
+   * 之后手动投屏沿用；自动投屏永远用这份默认值，不受影响。
    */
-  keyboard: 'uhid',
+  keyboard: 'sdk',
 };

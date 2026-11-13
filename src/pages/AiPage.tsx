@@ -16,6 +16,7 @@ import { Icon } from '@/components/icons';
 import { useApp } from '@/store/app';
 import { usePanelOpen } from '@/lib/ui-conf';
 import { call, tryCall } from '@/lib/ipc';
+import { copyToClipboard } from '@/lib/clipboard';
 import { fileName, formatTime } from '@/lib/format';
 import { activeProviderOf, isAiUsable } from '@shared/ai-conf';
 import type { AiConfig, AiProvider } from '@shared/ai-conf';
@@ -88,47 +89,9 @@ function uid(): string {
   return `m${Date.now().toString(36)}-${msgSeq.toString(36)}`;
 }
 
-/**
- * 把一段文本放进剪贴板（v1.1.17）。
- *
- * 三级链，从最可靠的往下退：
- *   ① **主进程 clipboard** —— 不要求窗口焦点，自绘窗口里唯一稳的一条路；
- *   ② `navigator.clipboard.writeText()` —— 需要安全上下文 + 文档有焦点；
- *   ③ `execCommand('copy')` —— 最后的兜底。
- *
- * 🔴 把 ① 放最前面是有实测依据的：窗口被投屏窗口（scrcpy 原生窗口）抢走焦点时，
- *    ② 不会报错，而是**静默失败**（Promise resolve、剪贴板仍是空的）——
- *    界面显示「已复制」，粘出来什么都没有。只有 ① 没有这个前提。
+/*
+ * 复制到剪贴板的三级链已抽到 lib/clipboard.ts（v1.1.25，工具箱也要用同一份实现）。
  */
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    const done = await window.adbApi.clipboardWrite(text);
-    if (done) return true;
-  } catch {
-    /* IPC 不可用（理论上不会）→ 往下退 */
-  }
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    /* 落到下面的兜底 */
-  }
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly', 'readonly');
-    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return ok;
-  } catch {
-    return false;
-  }
-}
 
 /** 图片扩展名（拖放 / 粘贴时用来判断该不该按「图片附件」处理） */
 const IMG_EXT_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
@@ -611,8 +574,35 @@ function StepList({ steps }: { steps: AiAdbStep[] }) {
 
 function StepRow({ step: s, index }: { step: AiAdbStep; index: number }) {
   const [open, setOpen] = useState(() => !s.ok && !s.blocked);
+  /**
+   * 一键复制（v1.1.24）：命令和输出各一个入口。
+   *
+   * 输出**不需要先展开**也能复制 —— 这是重点：一次 dumpsys 几千行，
+   * 想拿到还是得整段拿走，逼用户先点开再框选纯属折腾。
+   * 反馈只用本地状态、1.4 秒自还原，和气泡上的「复制」保持同一套手感。
+   */
+  const [copied, setCopied] = useState<'cmd' | 'out' | 'fail' | null>(null);
+  const copyTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+
+  const doCopy = async (kind: 'cmd' | 'out', text: string) => {
+    if (!text) return;
+    const ok = await copyToClipboard(text);
+    setCopied(ok ? kind : 'fail');
+    if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopied(null), 1400);
+  };
+
   const tone = s.blocked ? 'blocked' : s.ok ? 'ok' : 'bad';
   const label = s.blocked ? '已拦截' : s.ok ? '成功' : `退出码 ${s.code}`;
+  const copyTone = (kind: 'cmd' | 'out') => (copied === 'fail' ? 'fail' : copied === kind ? 'ok' : '');
+
   return (
     <div className={`ai-step ${tone}`}>
       <div className="ai-step-head">
@@ -622,15 +612,35 @@ function StepRow({ step: s, index }: { step: AiAdbStep; index: number }) {
         </code>
         <span className="ai-step-badge">{label}</span>
         {!s.blocked && <span className="ai-step-ms">{s.durationMs}ms</span>}
+        <button
+          type="button"
+          className={`ai-step-copy ${copyTone('cmd')}`}
+          title="复制这条 adb 命令"
+          onClick={() => void doCopy('cmd', s.command)}
+        >
+          {Icon.copy}
+          <span>{copied === 'fail' ? '失败' : copied === 'cmd' ? '已复制' : '复制'}</span>
+        </button>
       </div>
       {s.reason && <div className="ai-step-reason">{s.reason}</div>}
       {s.blocked ? (
         <div className="ai-step-why">{s.blocked}</div>
       ) : (
         <div className="ai-step-out">
-          <button type="button" className="ai-step-toggle" onClick={() => setOpen((v) => !v)}>
-            {open ? '▾' : '▸'} 输出{s.truncated ? '（已截断）' : ''}
-          </button>
+          <div className="ai-step-outbar">
+            <button type="button" className="ai-step-toggle" onClick={() => setOpen((v) => !v)}>
+              {open ? '▾' : '▸'} 输出{s.truncated ? '（已截断）' : ''}
+            </button>
+            <button
+              type="button"
+              className={`ai-step-copy ${copyTone('out')}`}
+              title="复制这段输出（不用先展开）"
+              onClick={() => void doCopy('out', s.output)}
+            >
+              {Icon.copy}
+              <span>{copied === 'fail' ? '失败' : copied === 'out' ? '已复制' : '复制输出'}</span>
+            </button>
+          </div>
           {open && <pre>{s.output}</pre>}
         </div>
       )}

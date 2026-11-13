@@ -25,10 +25,20 @@ NSIS 静默安装有几个必须同时满足的硬性条件，少一个就会「
      而且「旧文件没被删掉」正是旧版本残留的常见来源 →
      先整份复制到同级 .tmp，再把旧目录挪走、.tmp 改名顶上。
 
+Conf/ 的保护（2026-11-05 加，2026-11-13 修正路径）
+---------------------------------------------------------------
+🔴🔴 NSIS 覆盖安装会**把 exe 同级的 `Conf` 整个删掉**（连 ai.json 里的 apiKey）——
+这是 electron-builder 的 NSIS 模板行为，不是我们的 bug，但代价是用户重装后
+API Key、侧栏开关、面板布局全部丢失，之前每次都要人肉从 `_conf-backup-*` 捞回来。
+现在脚本自己兜：**装前备份到项目根 `_conf-backup-<时间戳>/`，装完立刻盖回去，再核对
+ai.json 里至少有一家 provider 的 apiKey 非空**。备份只保留最近 10 份。
+另有一层兜底：旧路径 `%APPDATA%\\adb-assistant\\Conf` 若还留着 apiKey，自动补进现用那份。
+
 核对项（只看「装完了」是不够的）：
   - exe 的 FileVersion 变为目标版本；
   - `resources/bin/*` 与打包产物逐文件 md5 一致（排除「装上去的是旧文件」）；
-  - `resources/app.asar` 里不再残留上一个版本的版本号字符串。
+  - `resources/app.asar` 里不再残留上一个版本的版本号字符串；
+  - Conf 里的配置（尤其 apiKey）装完还在。
 """
 import argparse
 import hashlib
@@ -45,6 +55,18 @@ TEMP = os.environ['TEMP']
 TARGET = os.path.join(os.environ['LOCALAPPDATA'], 'Programs', 'ADBAssistant')
 INSTALLED_EXE = os.path.join(TARGET, 'ADB桌面助手.exe')
 PROC_NAME = 'ADB桌面助手.exe'
+USERDATA = os.path.join(os.environ['APPDATA'], 'adb-assistant')
+# 🔴 生效的是 **exe 同级** Conf/（electron/services/ui-conf.ts::userConfDir →
+#    dirname(app.getPath('exe'))/Conf，便携版再看 PORTABLE_EXECUTABLE_DIR）。
+#    这里曾经写成 USERDATA/Conf（也就是 %APPDATA%\adb-assistant\Conf），于是
+#    「装前备份 → 装后盖回」全程都在操作一个**程序根本不读**的目录：
+#    真配置被 NSIS 连带删掉后由出厂模板重新铺一份，apiKey 静默丢失，
+#    而脚本还打印「apiKey 在」—— 因为校验的也是那份没人读的文件。
+#    2026-11-13 的 v1.1.25 安装就是这么丢的 key（已从旧目录合并救回）。
+CONF_DIR = os.path.join(TARGET, 'Conf')
+# 旧路径，只读：用于把历史遗留的 apiKey 迁回来（不删，留给用户自己清理）
+LEGACY_CONF_DIR = os.path.join(USERDATA, 'Conf')
+CONF_BACKUP_KEEP = 10
 
 
 def read_pkg_version():
@@ -183,6 +205,137 @@ def deploy_green(src_dir, dst_dir):
                 time.sleep(1.0)
 
 
+def prune_conf_backups(keep=CONF_BACKUP_KEEP):
+    """只留最近 keep 份 `_conf-backup-*`（按目录名里的时间戳排，同名分钟级冲突看 mtime）
+
+    不清理的话每次安装都多一份，几十份之后光目录列表就不好看了。
+    """
+    try:
+        names = [d for d in os.listdir(ROOT) if d.startswith('_conf-backup-')]
+    except OSError:
+        return
+    dirs = [os.path.join(ROOT, d) for d in names
+            if os.path.isdir(os.path.join(ROOT, d))]
+    dirs.sort(key=lambda p: (os.path.basename(p), os.path.getmtime(p)), reverse=True)
+    for d in dirs[keep:]:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def backup_conf():
+    """装前把 userData/Conf 整份复制到 `<项目根>/_conf-backup-<时间戳>/`
+
+    返回备份目录；安装前本来就没有 Conf（全新装）则返回 None。
+    """
+    if not os.path.isdir(CONF_DIR):
+        return None
+    stamp = time.strftime('%Y%m%d-%H%M')
+    dst = os.path.join(ROOT, '_conf-backup-' + stamp)
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        dst = os.path.join(ROOT, '_conf-backup-%s-%d' % (stamp, n))
+    os.makedirs(dst, exist_ok=True)
+    for f in os.listdir(CONF_DIR):
+        src = os.path.join(CONF_DIR, f)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(dst, f))
+    prune_conf_backups()
+    return dst
+
+
+def restore_conf(backup):
+    """把备份盖回 userData/Conf，返回实际恢复的文件数
+
+    只复制备份里有的文件，**不删** userData 里多出来的（那些是本次装完新增的默认文件，
+    删掉反而会让界面读不到）。目录不在就新建 —— NSIS 装完 Conf 是整目录消失的。
+    """
+    if not backup or not os.path.isdir(backup):
+        return 0
+    os.makedirs(CONF_DIR, exist_ok=True)
+    n = 0
+    for f in os.listdir(backup):
+        src = os.path.join(backup, f)
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, os.path.join(CONF_DIR, f))
+                n += 1
+            except OSError as e:
+                print('           恢复 %s 失败：%r' % (f, e))
+    return n
+
+
+def migrate_legacy_conf():
+    """把旧路径（%APPDATA%\\adb-assistant\\Conf）里的 apiKey 补进现用 Conf。
+
+    为什么要这一步：路径改成 exe 同级之前，所有用户的 ai.json 都躺在旧目录里；
+    改成 exe 同级之后，NSIS 覆盖安装会把现用 Conf 删掉、由出厂模板重铺一份，
+    apiKey 就变成空的（AI 页报未配置）。这里只补**空字段**，不动用户新写的值。
+
+    返回 [(provider, key 长度)]，没补到就是空列表。
+    """
+    new_ai = os.path.join(CONF_DIR, 'ai.json')
+    old_ai = os.path.join(LEGACY_CONF_DIR, 'ai.json')
+    if not (os.path.exists(new_ai) and os.path.exists(old_ai)):
+        return []
+    try:
+        with open(new_ai, encoding='utf-8') as f:
+            cur = json.load(f)
+        with open(old_ai, encoding='utf-8') as f:
+            old = json.load(f)
+    except (OSError, ValueError):
+        return []
+
+    old_provs = old.get('providers') or []
+    filled = []
+    for p in cur.get('providers') or []:
+        if (p.get('apiKey') or '').strip():
+            continue
+        src = next((o for o in old_provs if o.get('id') == p.get('id')), None)
+        if not src:
+            continue
+        k = (src.get('apiKey') or '').strip()
+        if not k:
+            continue
+        p['apiKey'] = k
+        filled.append((p.get('id') or '?', len(k)))
+    if not filled:
+        return []
+    try:
+        with open(new_ai, 'w', encoding='utf-8') as f:
+            json.dump(cur, f, ensure_ascii=False, indent=2)
+            f.write('\n')
+    except OSError:
+        return []
+    return filled
+
+
+def conf_state():
+    """一句话描述 Conf 里最要紧的东西还在不在（apiKey / 侧栏开关）
+
+    只做报告，不改判 ok：全新安装本来就没有 apiKey，不能因此判失败。
+    """
+    if not os.path.isdir(CONF_DIR):
+        return 'Conf 目录不存在'
+    ai = os.path.join(CONF_DIR, 'ai.json')
+    if not os.path.exists(ai):
+        return 'ai.json 缺失'
+    try:
+        with open(ai, encoding='utf-8') as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        return 'ai.json 读不了：%r' % (e,)
+    provs = cfg.get('providers') or []
+    active = cfg.get('activeProvider')
+    keyed = [(p.get('id') or p.get('name') or '?', len(p.get('apiKey') or ''))
+             for p in provs if (p.get('apiKey') or '').strip()]
+    files = len([f for f in os.listdir(CONF_DIR) if os.path.isfile(os.path.join(CONF_DIR, f))])
+    if not keyed:
+        return '%d 个文件，但**没有任何 provider 填了 apiKey**（AI 页会报未配置）' % files
+    desc = '、'.join('%s(%d 位)' % kv for kv in keyed)
+    return '%d 个文件，apiKey 在：%s；activeProvider=%s' % (files, desc, active)
+
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--version', default=None, help='默认取 package.json 的 version')
@@ -219,6 +372,11 @@ def main():
         if rest:
             print('进程没关干净，覆盖部署一定失败，请先手动关掉：', app_pids())
             return 3
+
+    # 进程退干净之后再备份：应用退出时可能还在写 Conf，早备份会漏掉最后一次改动
+    conf_backup = backup_conf()
+    print('Conf 备份:', os.path.basename(conf_backup) if conf_backup
+          else '（安装前没有 Conf，跳过）')
 
     if has_nsis:
         setup = os.path.join(TEMP, 'adba-setup-v%s.exe' % version.replace('.', ''))
@@ -259,6 +417,18 @@ def main():
     after = file_version(INSTALLED_EXE)
     print('安装后   :', after)
     ok = after.startswith(version)
+
+    # Conf 盖回去 —— NSIS 覆盖安装会把整个 Conf 目录删掉，apiKey 就在里面
+    if conf_backup:
+        restored = restore_conf(conf_backup)
+        print('Conf 恢复: %d 个文件 ← %s' % (restored, os.path.basename(conf_backup)))
+        if restored == 0:
+            ok = False
+    migrated = migrate_legacy_conf()
+    if migrated:
+        print('Conf 迁移: 从旧路径补回 apiKey %s'
+              % '、'.join('%s(%d 位)' % kv for kv in migrated))
+    print('Conf 校验:', conf_state())
 
     # resources/bin 逐文件 md5
     #

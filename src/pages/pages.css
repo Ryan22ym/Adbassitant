@@ -977,11 +977,48 @@
   align-items: center;
   gap: 14px;
   margin-left: auto;
+  /* 不许被压缩：挤的时候宁可让输入框变窄，也别把勾选项挤变形 */
+  flex: none;
 }
 
 /* 组内不再各自往右推，靠外层 margin-left:auto 统一靠右 */
 .log-toolbar-toggles .auto-scroll {
   margin-left: 0;
+}
+
+/*
+ * 级别计数的定宽槽（v1.1.23）。
+ *
+ * 原来计数是拼进 label 字符串的（"V 9" / "D 2734"），每项宽度随数字位数变
+ * —— 抓取过程中计数一路涨，6 个分段项的宽度各自跳，整条工具栏（连同右侧输入框
+ * 和两个勾选项）就跟着左右漂移，看着像在抖。
+ *
+ * 现在数字固定占 28px（4 位数也塞得下，tabular-nums 保证等宽），
+ * 项宽恒定 → 工具栏布局不随抓取变化。
+ * 同时把这一栏的项内边距收窄到 8px，抵掉定宽槽多出来的宽度，
+ * 内容最多的 1080 宽窗口也能稳住一行。
+ */
+.log-toolbar .segmented-item {
+  padding: 0 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.log-toolbar .seg-count {
+  display: inline-block;
+  min-width: 28px;
+  margin-left: 3px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * 窄窗口（960 最小宽）下输入框会被压到 60 左右，占位文字硬截一半很难看
+ * （"TAG 过滤" → "TAG 过"）。给占位文字加省略号，至少是个完整的视觉断点。
+ * 输入框宽度是弹性的：工具栏里的分段控件宽度恒定，这里只会随窗口整体变窄。
+ */
+.log-toolbar .input::placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .logcat-pid {
@@ -2961,6 +2998,14 @@
   padding: 0 8px 6px;
 }
 
+/* 输出标题行：左边折叠开关，右边复制（不展开也能复制整段输出） */
+.ai-step-outbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .ai-step-toggle {
   padding: 2px 0;
   border: 0;
@@ -2972,6 +3017,47 @@
 
 .ai-step-toggle:hover {
   color: var(--text-primary);
+}
+
+/* 一键复制：常态很淡，鼠标扫过才亮起来；成功/失败就地换色，不弹 toast */
+.ai-step-copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: none;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-tertiary);
+  opacity: 0.72;
+  cursor: pointer;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s, background-color 0.12s;
+}
+
+.ai-step-copy svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+
+.ai-step-copy:hover {
+  opacity: 1;
+  color: var(--text-primary);
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.ai-step-copy.ok {
+  opacity: 1;
+  color: var(--success);
+}
+
+.ai-step-copy.fail {
+  opacity: 1;
+  color: var(--danger);
 }
 
 .ai-step-out pre {

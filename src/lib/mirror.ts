@@ -10,6 +10,14 @@ export { MIRROR_DEFAULTS };
 
 const LS_KEY = 'adb-assistant:last-mirror-options';
 
+/**
+ * 一次性迁移标记：默认键盘模式从 uhid 换成 sdk（uhid 会让前台应用
+ * 因 CONFIG_KEYBOARD 重启 → 拔插必黑屏，见 shared/mirror-defaults.ts）。
+ * 老版本存下来的 `uhid` 基本只是把旧默认值记下来了，不是用户主动选的，
+ * 所以在升级后第一次读偏好时跟着改一次；之后用户自己选回 uhid 就不再动它。
+ */
+const KEYBOARD_MIGRATE_KEY = 'adb-assistant:mirror-keyboard-sdk-v1';
+
 export type MirrorPrefs = Omit<MirrorOptions, 'serial'>;
 
 /**
@@ -21,6 +29,13 @@ export function loadMirrorPrefs(): MirrorPrefs {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return { ...MIRROR_DEFAULTS };
     const parsed = JSON.parse(raw) as Partial<MirrorPrefs>;
+    if (!localStorage.getItem(KEYBOARD_MIGRATE_KEY)) {
+      localStorage.setItem(KEYBOARD_MIGRATE_KEY, '1');
+      if (parsed.keyboard === 'uhid') {
+        parsed.keyboard = MIRROR_DEFAULTS.keyboard;
+        localStorage.setItem(LS_KEY, JSON.stringify(parsed));
+      }
+    }
     // 与默认值合并：老版本存下的字段不全时也能用
     return { ...MIRROR_DEFAULTS, ...parsed };
   } catch {

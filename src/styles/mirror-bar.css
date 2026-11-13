@@ -1,0 +1,98 @@
+/*
+ * 投屏窗口功能栏（v1.1.22）。
+ *
+ * 🔴 这个窗口是**透明无边框**的小窗，贴在 scrcpy 窗口右侧：
+ *    全局的 body 底色（--bg-app）必须在这里被抹掉，否则整个窗口是一块
+ *    不透明的卡片 —— 小窗是透明的，但那块底色会跟着画出来。
+ *    用 `data-win="mirror-bar"` 限定，主窗口完全不受影响。
+ *
+ * 🔴 不要用 backdrop-filter：透明窗口背后是空桌面，采样不到东西，
+ *    写了也只是一层假模糊（这个坑在玻璃主题里踩过，见 MEMORY）。
+ *    所以这里只有半透明纯色 + 一道浅描边，靠它自己保证在任意壁纸/投屏画面
+ *    上都看得清。
+ */
+
+:root[data-win='mirror-bar'],
+:root[data-win='mirror-bar'] body,
+:root[data-win='mirror-bar'] #root {
+  background: transparent !important;
+  height: 100%;
+  overflow: hidden;
+}
+
+:root[data-win='mirror-bar'] body {
+  color: #f4f6fb;
+  transition: none;
+}
+
+.mbar {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  /* 整条只有按钮区域接收鼠标；其余透明处由主进程的 ignoreMouseEvents 管 */
+  -webkit-app-region: no-drag;
+}
+
+.mbar-btn {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(18, 20, 26, 0.74);
+  color: rgba(244, 246, 251, 0.92);
+  cursor: pointer;
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 120ms ease;
+}
+
+.mbar-btn:hover:not(:disabled) {
+  background: rgba(32, 36, 46, 0.86);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.mbar-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.mbar-btn:focus-visible {
+  outline: 2px solid rgba(120, 170, 255, 0.9);
+  outline-offset: 2px;
+}
+
+.mbar-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 已钉住：整颗按钮点亮成蓝色，图标填实并转 45° */
+.mbar[data-pinned='1'] .mbar-btn {
+  background: rgba(58, 118, 240, 0.94);
+  border-color: rgba(150, 190, 255, 0.55);
+  color: #fff;
+}
+
+.mbar[data-pinned='1'] .mbar-btn:hover:not(:disabled) {
+  background: rgba(74, 132, 250, 0.98);
+}
+
+.mbar-icon {
+  transition: transform 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mbar-btn,
+  .mbar-icon {
+    transition: none;
+  }
+}

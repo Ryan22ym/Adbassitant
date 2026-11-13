@@ -23,6 +23,7 @@ import type {
   EnvCheckResult,
   GlassBackdropMode,
   GlassTintId,
+  MirrorBarState,
   UpdateCheckResult,
   UpdateContext,
   UpdateDownloadProgress,
@@ -167,17 +168,44 @@ const FIXED_ACCENT_NOTE: Partial<Record<'genshin' | 'arknights', string>> = {
 };
 
 /**
- * 每个版本的一句话更新说明，key 为 package.json 的完整版本号。
+ * 每个版本的更新说明，key 为 package.json 的完整版本号。
  *
- * 写法约定（2026-09-30 定）：**一句话说清改了什么**就行 ——
- * 「修复 xx」「新增 xx 模块 / 功能」。不写背景、不解释为什么、不对比旧方案，
- * 那些留在 commit message 里。界面上的更新说明只是给用户扫一眼的。
+ * 写法约定（2026-11-04 定版，小杨：简短、清晰，就用 1./2./3. 列）：
+ *
+ * · 一条一句话，动宾结构：「新增 xxx」「修复 xxx」「优化 xxx」。
+ * · **不分块、不加小标题**，从上到下 `1. … 2. … 3. …` 平铺编号，多的放后面。
+ * · 不写技术根因、实现方式、性能数字、内部类名 —— 那些留在 commit / MODULES.md。
+ *   界面上的更新说明只给用户扫一眼，判断「这版值不值得升」。
+ * · 行与行之间用 '\n' 连接（`+` 拼串），**别写成一整段**：更新提示卡片按行渲染，
+ *   关于页靠 `.version-notes` 的 `white-space: pre-line` 保换行。
  *
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.25':
+    '1. 左侧新增「工具箱」，内置时间戳转换：时间戳与日期互转，附 UTC、ISO 8601 与距今时长\n' +
+    '2. 工具箱内新增 MD5 计算，一次给出 32 位小写、32 位大写与 16 位结果\n' +
+    '3. 换算与计算结果都能一键复制，后续还会往工具箱里加新工具',
+  '1.1.24':
+    '1. 投屏默认改为「标准 SDK」键盘模式，拔插 USB 时前台应用不再重启、不再黑屏\n' +
+    '2. 需要在手机里用输入法打中文的，可在投屏页把键盘模式切回「UHID 虚拟」',
+  '1.1.23':
+    '1. 修复实时 Logcat 顶部那排过滤控件随抓取左右移动的问题，现在固定在一行\n' +
+    '2. 修复投屏窗口没钉住时，右侧功能栏也浮在其它窗口最上层的问题',
+  '1.1.22':
+    '1. 投屏窗口右侧新增一条功能栏，拖动投屏窗口时出现，静置就淡出\n' +
+    '2. 新增「钉住」按钮：钉住后投屏窗口始终压在其它窗口之上，位置和大小都固定\n' +
+    '3. 再点一次解除钉住，窗口回到钉住之前的位置和大小\n' +
+    '4. 下次投屏会按机型和横竖屏自动恢复上次钉住的位置与大小\n' +
+    '5. 功能栏默认开启，可在设置页关闭，关闭时会解除钉住并清空记录\n' +
+    '6. 修复停止抓取后再保存日志，导出的文件是空的\n' +
+    '7. 修复投屏启动时偶尔先闪一下黑窗口',
   '1.1.21':
-    '这一版主要解决「用得越久越沉」的问题。实时 Logcat 的日志缓冲换成了环形结构：日志达到两万行上限后，新来的行只覆盖最旧的一行，不再每来一行就把整段日志往前挪一遍，刷屏时的卡顿明显减少。页面这边也只处理新到的日志，不再每 120 毫秒把整份日志重算一次，堆到几千行依旧跟手。顺带修正了底部自动跟随的一个毛病 —— 日志满 4000 行之后行数不再变化，新内容就不再自动贴底了，现在会一直跟着最新一行。崩溃自动分析与「保存为文件」的日志导出改成边读边处理：单个瞬间不再需要把整份日志读进内存，崩溃报告出得更快，导出大文件时也不容易卡住；崩溃分析还多了一步提前收工，读到崩溃之后那段就够了，不必把设备缓冲区从头扫到底。玻璃主题的桌面底图改为按窗口实际大小取像素，内存占用降了一个数量级，观感没有变化。',
+    '1. 长时间抓取日志不再越用越卡\n' +
+    '2. 日志满 4000 行后仍会自动跟随最新一行\n' +
+    '3. 崩溃报告出得更快\n' +
+    '4. 导出大日志文件不再卡住\n' +
+    '5. 玻璃主题内存占用明显下降，观感不变',
   '1.1.20':
     'AI 助手的回复现在会自己存成文件：文档、代码块、表格在回答完成时就各写一份到「导出目录\\产出\\<会话标题>\\」，气泡下方直接列出文件卡片，点一下打开、也能定位到所在文件夹；嫌占地方可以在 AI 页的配置里关掉，关掉之后只有手动「导出」才落盘。同一页还修了两处翻看的毛病：往上翻历史时新回答不会再把视图拽回底部，切回页面或新的提问才自动贴到最新。左侧导航的入口可以单独关掉了：改程序目录 Conf\\features.json 里 nav 那一组，把对应项改成 false 再重启即可（界面上没有开关面板），出厂默认把「自动连点器」设成不显示 —— 要用它就把 nav.clicker 改成 true。截图与录屏完成后会自动打开所在文件夹并选中刚存下的那个文件。设备行的快捷动作可以直显四个了，并新增「初始化启动（清空数据后重新进入）」。',
   '1.1.19':
@@ -316,6 +344,50 @@ export default function SettingsPage() {
   useEffect(() => {
     void refreshWinState();
   }, []);
+
+  /*
+   * 投屏窗口功能栏（v1.1.22）。
+   *
+   * 这里只有两件事：开关，和「清除钉住记录」。pin 的动作在投屏窗口那条
+   * 悬浮条上，投屏页不放按钮 —— 那条条子贴着手要放的位置。
+   * 状态走推送（钉住/解除在主进程改），这里订阅一次就够。
+   */
+  const [barState, setBarState] = useState<MirrorBarState | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void window.adbApi.mirrorBarState().then((r) => {
+      if (alive && r?.ok && r.data) setBarState(r.data as MirrorBarState);
+    });
+    const off = window.adbApi.on(IPC.PUSH_MIRROR_BAR, (s: MirrorBarState) => {
+      if (alive) setBarState(s);
+    });
+    return () => {
+      alive = false;
+      off();
+    };
+  }, []);
+  const pinCount = Object.keys(settings?.mirrorPinRecords ?? {}).length;
+  /*
+   * 关开关时主进程会顺手把 pin 记录清空（这是需求），但那份清空发生在
+   * 设置落盘之后的钩子里 —— SETTINGS_SET 返回的是清空**之前**的快照。
+   * 所以这里存完再读一次，界面上的条数才会立刻归零。
+   */
+  const reloadSettings = async () => {
+    const s = await window.adbApi.getSettings();
+    if (s?.ok && s.data) setSettings(s.data);
+  };
+  const toggleBar = async (v: boolean) => {
+    await update({ mirrorBarEnabled: v });
+    await reloadSettings();
+  };
+  const clearPins = async () => {
+    const r = await call<MirrorBarState>(() => window.adbApi.clearMirrorPins(), {
+      successMessage: '已清除钉住记录',
+    });
+    if (r) setBarState(r);
+    // 记录存在 settings 里，清完要重新读一份，界面上的条数才会归零
+    await reloadSettings();
+  };
 
   const checkEnv = async () => {
     setChecking(true);
@@ -757,6 +829,38 @@ export default function SettingsPage() {
           </Button>
         </div>
 
+        {/*
+          投屏窗口功能栏（v1.1.22）：挂在投屏窗口右侧的悬浮条，里面是 pin。
+          关掉 = 立刻解除 pin + 清空所有记录（需求原文），所以这里连记录一起管。
+        */}
+        <div className="setting-line" data-mirror-bar-line="1">
+          <span className="setting-line-label">投屏窗口功能栏</span>
+          <span className="spacer" />
+          <Switch
+            checked={!!settings.mirrorBarEnabled}
+            onChange={toggleBar}
+            aria-label="投屏窗口功能栏"
+          />
+        </div>
+
+        <div className="setting-line">
+          <span className="setting-line-label">钉住记录</span>
+          <span className="spacer" />
+          <span className="text-dim" data-mirror-pin-count="1">
+            {barState?.pinned ? '当前已钉住 · ' : ''}
+            {pinCount ? `${pinCount} 条` : '无'}
+          </span>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={clearPins}
+            disabled={!pinCount && !barState?.pinned}
+            data-mirror-pin-clear="1"
+          >
+            清除钉住记录
+          </Button>
+        </div>
+
       </Card>
 
       <Card
@@ -772,8 +876,10 @@ export default function SettingsPage() {
           <About k="设备通信" v="Android Platform-Tools (adb)" />
         </div>
         <Notice tone="accent">
-          {VERSION_NOTES[__APP_VERSION__] ??
-            '更多高级功能将在后续版本加入。'}
+          <div className="version-notes">
+            {VERSION_NOTES[__APP_VERSION__] ??
+              '更多高级功能将在后续版本加入。'}
+          </div>
         </Notice>
       </Card>
 

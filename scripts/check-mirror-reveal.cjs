@@ -7,7 +7,7 @@
  *
  * 修法（见 electron/services/win-reveal.ts 文件头）：
  *   spawn 时 windowsHide → 系统吞掉 scrcpy 的首次 ShowWindow，屏幕上不出黑窗；
- *   等它日志打出 `Texture:`（首帧解码完成）再由我们 ShowWindow 带出来。
+ *   等**画面真的上屏**再由我们 ShowWindow 带出来。
  *
  * 🔴 这条回归守的是**不能更糟**：
  *   窗口被藏起来后，只有我们能放出来。reveal 链路一旦断掉，现象会从
@@ -16,7 +16,10 @@
  * 判据：
  *   ① 启动后窗口先是不可见（藏住了，没有黑窗先冒出来）
  *   ② 首帧之后窗口变为可见（放出来了）
- *   ③ 运行日志里必须是「首帧就绪」触发的，不是 4s 超时兜底
+ *   ③ 运行日志里必须是「首帧就绪」触发的，不是超时兜底
+ *   ⑥ 放出来的那一刻窗口里已经有画面（不是黑底空壳）
+ *   ⑦ 首帧判定函数本身：`0 fps` / `Texture:` 都不许当首帧（v1.1.23）
+ *   ⑧ 「正在投屏」提示牌：启动时出现、真窗口放出后消失（v1.1.23）
  *
  * 需要一台在线设备；没有就跳过（返回 0），不阻塞流水线。
  *
@@ -257,8 +260,29 @@ app.whenReady().then(async () => {
   const pid = started.pid;
   log('投屏 pid =', pid);
 
+  /*
+   * ⑧ 提示牌（v1.1.23）：等首帧期间屏幕上必须有个「正在投屏」顶着。
+   *    判据用 mirror-splash 导出的 `isMirrorSplashWindow`（按窗口 id 比对），
+   *    不要按尺寸猜 —— DIP / 物理像素换算会骗人（第一版就是按 236×76 比，
+   *    拿到 0 个，白假 FAIL 一次）。
+   */
+  const { BrowserWindow } = electronMain;
+  const splashMod = require('../dist-electron/electron/services/mirror-splash.js');
+  const splashWins = () =>
+    BrowserWindow.getAllWindows().filter(
+      (w) => !w.isDestroyed() && splashMod.isMirrorSplashWindow(w),
+    );
+  const allBounds = () =>
+    BrowserWindow.getAllWindows().map((w) => (w.isDestroyed() ? '-' : JSON.stringify(w.getBounds())));
+  const splashAtStart = splashWins().length;
+  log('提示牌探测：命中', splashAtStart, '全部窗口', allBounds().join(' '));
+  ok(splashAtStart === 1, '⑧ 启动时出现「正在投屏」提示牌', `找到 ${splashAtStart} 个`);
+
   // 采样 6s：覆盖「建窗(≈1.4s) → 首帧(≈2s) → reveal」
   const { rows: samples, luma, lumaAt } = await sampleVisibility(pid, 6000);
+
+  const splashAfter = splashWins().length;
+  ok(splashAfter === 0, '⑧ 真窗口放出后提示牌已消失', `残留 ${splashAfter} 个`);
 
   // 解析成 [ms, visible] 序列
   const seq = samples
@@ -293,7 +317,26 @@ app.whenReady().then(async () => {
   const byTexture = /投屏窗口已显示（首帧就绪）/.test(logText);
   const byTimeout = /投屏窗口已显示（等待首帧超时）/.test(logText);
   ok(byTexture, '④ 由首帧日志触发显示', byTexture ? '' : '日志里没有「首帧就绪」');
-  ok(!byTimeout, '⑤ 没有落到 4s 超时兜底');
+  ok(!byTimeout, '⑤ 没有落到超时兜底（8s）');
+
+  /*
+   * ⑦ 判定函数本身（v1.1.23）：这一层错了整条链路都错，而且不需要设备就能验。
+   *    重点是否掉两个「看着像首帧其实不是」的信号：`0 fps` 与 `Texture:`。
+   */
+  const sig = require('../dist-electron/electron/services/mirror-signal.js');
+  const cases = [
+    ['INFO: 30 fps', 30],
+    ['INFO: 3 fps (+7 frames skipped)', 3],
+    ['INFO: 0 fps', 0],
+    ['INFO: Texture: 1440x640', null],
+  ];
+  const sigOk =
+    cases.every(([txt, want]) => sig.latestFps(txt) === want) &&
+    sig.firstFramePainted('INFO: 0 fps') === false &&
+    sig.firstFramePainted('INFO: Texture: 1440x640') === false &&
+    sig.firstFramePainted('0 fps\nINFO: 12 fps') === true &&
+    sig.firstFramePainted('INFO: 12 fps\nINFO: 0 fps') === false;
+  ok(sigOk, '⑦ 首帧判定：只认最后一条 fps>0，`0 fps`/`Texture:` 都不算');
 
   // 附属信息：窗口始终不可见时，多半是 reveal 本身没成功 —— 再手动探一次看原因
   if (!everVisible) {

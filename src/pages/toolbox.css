@@ -1,0 +1,226 @@
+/* ==================================================================
+   工具箱（v1.1.25）
+   左侧工具清单 + 右侧工具面板。
+   🔴 新增工具不需要动这里的样式：清单项与「标签 + 值 + 复制」行都是通用结构，
+      只要新工具体也用 ResultRow 排结果，视觉自动保持一致。
+   ================================================================== */
+
+.toolbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+/* ---------------- 左侧工具清单 ---------------- */
+
+.toolbox-nav-card {
+  width: 212px;
+  flex: none;
+}
+
+.toolbox-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+}
+
+.toolbox-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: var(--r-md);
+  text-align: left;
+  color: var(--text-secondary);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.toolbox-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.toolbox-nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.toolbox-nav-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+}
+
+.toolbox-nav-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.toolbox-nav-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.toolbox-nav-name {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.toolbox-nav-desc {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-tertiary);
+}
+
+.toolbox-nav-item.active .toolbox-nav-desc {
+  color: inherit;
+  opacity: 0.72;
+}
+
+/* ---------------- 右侧面板 ---------------- */
+
+.toolbox-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * 一块一块的功能区。块与块之间用一条分隔线断开 —— 时间戳那一页有三段
+ * （当前值 / 时间戳→时间 / 时间→时间戳），不分段的话一屏十几行数字全糊在一起。
+ */
+.tb-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tb-block + .tb-block {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* MD5 页的结果区紧跟输入框，不需要那条分隔线 */
+.tb-block.tb-block-flat {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.tb-block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.tb-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tb-input-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tb-input-row .segmented {
+  flex: none;
+}
+
+/* ---------------- 「标签 + 值 + 复制」行 ---------------- */
+
+.tb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px 4px 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.tb-row-label {
+  flex: none;
+  width: 76px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/*
+ * ⚠️ 选择器写成 `.tb-row .tb-row-value`：值区同时挂着 .mono（font-size: 12px），
+ *    单类选择器谁后加载谁赢，打包顺序一变字号就飘。抬一级特异性钉住。
+ */
+.tb-row .tb-row-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* 点一下就能整段选中，比拖选省事（摘要 / 时间戳都是「选中去粘贴」的用法） */
+  user-select: all;
+}
+
+.tb-row-value.is-empty {
+  color: var(--text-tertiary);
+}
+
+.tb-copy {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.tb-copy:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.tb-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.tb-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  min-height: 28px;
+}
+
+/* ---------------- 窄窗口：清单改横排 ---------------- */
+
+@media (max-width: 880px) {
+  .toolbox {
+    flex-direction: column;
+  }
+
+  .toolbox-nav-card {
+    width: 100%;
+  }
+
+  .toolbox-nav {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .toolbox-nav-item {
+    width: auto;
+    flex: none;
+  }
+
+  .toolbox-nav-desc {
+    display: none;
+  }
+}

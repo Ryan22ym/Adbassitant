@@ -295,8 +295,15 @@ export function spawnBinary(
       for (const line of lines) {
         const t = line.trim();
         if (!t) continue;
-        tail.push(t);
-        if (tail.length > TAIL_LIMIT) tail.shift();
+        /*
+         * `--print-fps` 每秒吐一行 `<n> fps`（见 mirror.ts）。
+         * 这类行只有 mirror.ts 的判定逻辑在乎，不进尾部缓冲 —— 否则 200 行的
+         * 排障窗口几十秒就被刷满，真出事时一条有用信息都看不到。
+         */
+        if (!/^\d+ fps/i.test(t)) {
+          tail.push(t);
+          if (tail.length > TAIL_LIMIT) tail.shift();
+        }
         // scrcpy 的输出较频繁，仅记录关键行，避免日志被刷爆
         if (/ERROR|WARN|error|failed|Exception|Device:|Renderer:|Texture:/i.test(t)) {
           log(level, source, t.slice(0, 300));

@@ -130,6 +130,47 @@ export interface MirrorStatus {
 }
 
 /* ------------------------------------------------------------------ */
+/* 投屏窗口功能栏 / pin（v1.1.22）                                     */
+/* ------------------------------------------------------------------ */
+
+/** 投屏窗口的方向（按窗口宽高现算，不是问设备） */
+export type MirrorOrientation = 'portrait' | 'landscape';
+
+/**
+ * 一台机型 + 一个方向下的「钉住记录」。
+ *
+ * 坐标是 **Windows 物理像素**（Win32 的 GetWindowRect 原值），与 BrowserWindow
+ * 用的 DIP 无关 —— 这样跨不同缩放比例的显示器也能原样还原（见
+ * electron/services/mirror-bar.ts 的说明）。
+ */
+export interface MirrorPinRecord {
+  /** 钉住状态：true 表示下次这台机器这个方向投屏时自动钉回这个位置 */
+  pinned: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** 落盘时间（ms），排障用 */
+  at: number;
+}
+
+/** key = `<机型>#<方向>`，见 mirror-bar.ts 的 keyOf() */
+export type MirrorPinRecordMap = Record<string, MirrorPinRecord>;
+
+/** 功能栏当前状态（功能栏窗口与设置页都读它） */
+export interface MirrorBarState {
+  /** 设置页的开关：关掉时功能栏不出现、pin 记录已清空 */
+  enabled: boolean;
+  /** 是否有一台设备正在投屏并被功能栏接管 */
+  running: boolean;
+  pinned: boolean;
+  orientation: MirrorOrientation | null;
+  /** 机型（ro.product.model），拿不到时为 null */
+  model: string | null;
+  serial: string | null;
+}
+
+/* ------------------------------------------------------------------ */
 /* 屏幕分辨率                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1330,6 +1371,25 @@ export interface AppSettings {
    *    否则用户会看到窗口弹在屏幕外、以为程序没启动。
    */
   windowBounds: WindowBoundsState | null;
+
+  /*
+   * 投屏窗口功能栏 / pin（v1.1.22）
+   */
+  /**
+   * 投屏窗口右侧的悬浮功能栏（含 pin）。
+   *
+   * 默认 **true** —— 它是投屏窗口的配件，不改变投屏本身的行为；
+   * 关掉时：功能栏立即消失、pin 立即解除、**所有机型的 pin 记录一并清空**
+   * （需求原话：「关闭后 pin 状态解除并清除所有 pin 记录信息」）。
+   */
+  mirrorBarEnabled: boolean;
+  /**
+   * 各机型 × 方向的 pin 记录。key = `<机型>#<portrait|landscape>`。
+   *
+   * 按机型而不是按 serial：同一台手机换根线 serial 会变，机型是稳定标识。
+   * 横竖屏分开记：两种方向下窗口的形状完全不同，共用一条记录必然对不上。
+   */
+  mirrorPinRecords: MirrorPinRecordMap;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1869,6 +1929,14 @@ export const IPC = {
   MIRROR_START: 'mirror:start',
   MIRROR_STOP: 'mirror:stop',
   MIRROR_STATUS: 'mirror:status',
+  /*
+   * 投屏窗口功能栏（v1.1.22）—— 挂在 scrcpy 那个独立窗口右侧的悬浮条。
+   * 位置/置顶/锁尺寸全在 Win32 层（见 services/mirror-win.ts），
+   * 这里只暴露「读状态 / 钉住 / 解除 / 清记录」四个动作。
+   */
+  MIRROR_BAR_STATE: 'mirrorBar:state',
+  MIRROR_BAR_SET_PIN: 'mirrorBar:setPin',
+  MIRROR_BAR_CLEAR_PINS: 'mirrorBar:clearPins',
 
   /* 文件 */
   FILE_PUSH: 'file:push',
@@ -2149,6 +2217,8 @@ export const IPC = {
   /* 主进程 -> 渲染进程 推送 */
   PUSH_LOG: 'push:log',
   PUSH_MIRROR_STATUS: 'push:mirrorStatus',
+  /** 投屏窗口功能栏状态变化（v1.1.22）：钉住/解除/方向切换 */
+  PUSH_MIRROR_BAR: 'push:mirrorBar',
   PUSH_RECORD_STATUS: 'push:recordStatus',
   PUSH_DEVICE_CHANGED: 'push:deviceChanged',
   PUSH_MONKEY_OUTPUT: 'push:monkeyOutput',

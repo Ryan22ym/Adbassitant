@@ -26,6 +26,9 @@ const IPC = {
   MIRROR_START: 'mirror:start',
   MIRROR_STOP: 'mirror:stop',
   MIRROR_STATUS: 'mirror:status',
+  MIRROR_BAR_STATE: 'mirrorBar:state',
+  MIRROR_BAR_SET_PIN: 'mirrorBar:setPin',
+  MIRROR_BAR_CLEAR_PINS: 'mirrorBar:clearPins',
   FILE_PUSH: 'file:push',
   FILE_PULL: 'file:pull',
   FILE_PICK: 'file:pick',
@@ -222,6 +225,7 @@ const IPC = {
   UPDATE_CANCEL_DOWNLOAD: 'update:cancelDownload',
   PUSH_LOG: 'push:log',
   PUSH_MIRROR_STATUS: 'push:mirrorStatus',
+  PUSH_MIRROR_BAR: 'push:mirrorBar',
   PUSH_RECORD_STATUS: 'push:recordStatus',
   PUSH_DEVICE_CHANGED: 'push:deviceChanged',
   PUSH_MONKEY_OUTPUT: 'push:monkeyOutput',
@@ -282,6 +286,14 @@ const api = {
   startMirror: (options: any) => invoke(IPC.MIRROR_START, options),
   stopMirror: () => invoke(IPC.MIRROR_STOP),
   mirrorStatus: () => invoke(IPC.MIRROR_STATUS),
+
+  /* 投屏窗口功能栏（v1.1.22） */
+  /** 功能栏当前状态：开关 / 是否在投屏 / 是否钉住 / 方向 / 机型 */
+  mirrorBarState: () => invoke(IPC.MIRROR_BAR_STATE),
+  /** 钉住 / 解除钉住（true = 置顶 + 固定位置尺寸，false = 还原原状） */
+  setMirrorPin: (pin: boolean) => invoke(IPC.MIRROR_BAR_SET_PIN, pin),
+  /** 清空所有机型的钉住记录（并解除当前 pin） */
+  clearMirrorPins: () => invoke(IPC.MIRROR_BAR_CLEAR_PINS),
 
   /* 文件 */
   pickFiles: (multi = true, filters?: any[]) => invoke(IPC.FILE_PICK, multi, filters),
@@ -639,6 +651,7 @@ const api = {
     const allowed = [
       IPC.PUSH_LOG,
       IPC.PUSH_MIRROR_STATUS,
+      IPC.PUSH_MIRROR_BAR,
       IPC.PUSH_RECORD_STATUS,
       IPC.PUSH_DEVICE_CHANGED,
       IPC.PUSH_MONKEY_OUTPUT,

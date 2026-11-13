@@ -48,6 +48,7 @@
 | `device` | 设备 |
 | `mirror` | 投屏 |
 | `tools` | 常用工具 |
+| `toolbox` | 工具箱 |
 | `apps` | 应用管理 |
 | `logcat` | 实时 Logcat |
 | `weaknet` | 弱网模拟 |
@@ -133,8 +134,9 @@
 
 | 分组 | id | 对应入口 |
 | --- | --- | --- |
-| `nav` | 同「导航 id」 | 左侧功能栏的十个入口 |
+| `nav` | 同「导航 id」 | 左侧功能栏的十一个入口 |
 | `tools` | 同「工具标签 id」 | 「常用工具」页的七个标签 |
+| `toolbox` | `timestamp` / `md5` | 「工具箱」页里的各个工具（程序将来新增的工具默认显示，不必在这里补） |
 | `device` | `device.wireless` | 设备页的「无线连接」整块 |
 | | `device.quickActions` | 设备行上的快捷动作按钮（清数据 / 冷启动…） |
 | `clicker` | `clicker.record` | 连点器页的「手机端录制」标签 |

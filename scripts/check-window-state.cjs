@@ -19,6 +19,7 @@
  *      B2 「记住窗口大小和位置」开关默认开
  *      B3 显示当前尺寸（数字 × 数字）
  *      B4 「恢复默认尺寸」按钮点了真的变 1280×860，且落盘
+ *         （卡片里的说明小字在 v1.1.18 被清掉了，所以不再断言那句文案）
  *      B5 Conf/panels.json 的 settings.window 默认收起（低频设置不占主流程）
  *
  * 🔴 不碰真机、不联网。
@@ -277,18 +278,26 @@ app.whenReady().then(async () => {
          switchOn: sw ? sw.getAttribute('aria-checked') === 'true' : null,
          size: (c.querySelector('[data-win-size]')?.textContent || '').trim(),
          hasReset: !!c.querySelector('[data-win-reset]'),
-         note: (c.querySelector('.setting-note')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+         firstLabel: (c.querySelector('.setting-line-label')?.textContent || '').trim(),
        };
      })()`,
   );
 
   ok(!!card, 'B1 设置页有「窗口」卡片');
   if (card) {
-    ok(card.title === '窗口' && /记住窗口大小/.test(card.subtitle), 'B1b 标题与副标题文案', `${card.title} / ${card.subtitle}`);
+    /*
+     * B1b 原来查的是卡片副标题（.card-subtitle）。v1.1.18「各页面多余的说明小字
+     * 一并清掉」之后这张卡片已经没有副标题了，改成查标题 + 第一行的行标，
+     * 守的还是「这张卡片是给谁用的」这件事。
+     */
+    ok(
+      card.title === '窗口' && /记住窗口大小/.test(card.firstLabel),
+      'B1b 标题与首行文案',
+      `${card.title} / ${card.firstLabel}`,
+    );
     ok(card.switchOn === true, 'B2 「记住窗口大小和位置」默认开', `aria-checked=${card.switchOn}`);
     ok(/\d+\s*×\s*\d+/.test(card.size), 'B3 显示当前窗口尺寸', `size=${card.size}`);
     ok(card.hasReset, 'B3b 有「恢复默认尺寸」按钮');
-    ok(/1280\s*×\s*860/.test(card.note), 'B4 说明里点明了默认值 1280 × 860', '');
     ok(card.collapsed === true, 'B5 Conf 里 settings.window 默认收起（低频设置不占主流程）', `collapsed=${card.collapsed}`);
   }
 

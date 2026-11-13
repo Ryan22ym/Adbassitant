@@ -296,7 +296,12 @@ interface SegmentedProps<T extends string> {
    * display:none 的元素 Tab 聚焦不到，所以对用户来说就是「没有这个入口」；
    * 程序化 `.click()` 不受影响。
    */
-  options: { value: T; label: string; hidden?: boolean }[];
+  /*
+   * label 允许 ReactNode（v1.1.23）：实时 Logcat 的级别计数要放进**固定宽度的槽**
+   * 里，否则计数从 9 跳到 4000 时每一项都在变宽，整条工具栏跟着左右漂移。
+   * 传字符串的老用法完全不受影响。
+   */
+  options: { value: T; label: React.ReactNode; hidden?: boolean }[];
   size?: 'sm' | 'md';
 }
 
