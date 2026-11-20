@@ -215,8 +215,8 @@ const READ_ROWS = `[...document.querySelectorAll('.toolbox-main .tb-row')].map(r
   ok(title === '工具箱', 'B1 页头标题 = 工具箱', title);
   ok(panel === 'timestamp', 'B2 默认停在时间戳', String(panel));
   ok(
-    JSON.stringify(tools) === JSON.stringify(['timestamp', 'md5']),
-    'B3 工具清单两项',
+    JSON.stringify(tools) === JSON.stringify(['timestamp', 'md5', 'rank']),
+    'B3 工具清单三项',
     JSON.stringify(tools),
   );
 
@@ -246,12 +246,26 @@ const READ_ROWS = `[...document.querySelectorAll('.toolbox-main .tb-row')].map(r
     await rowValue('32 位小写'),
   );
 
-  /* ---- 5. 截图 ---- */
+  /* ---- 5. 段位换算（只验两个锚点：证明新工具真的进了包、算得对） ---- */
+  await page.eval(`document.querySelector('.toolbox-nav-item[data-tool="rank"]')?.click()`);
+  await sleep(400);
+  const rankText = () =>
+    page.eval(`document.querySelector('.rank-result')?.getAttribute('data-rank-result') ?? ''`);
+
+  await setVal('[data-tb-input="rank-level"]', '91');
+  await sleep(350);
+  ok((await rankText()) === '大师 Ⅰ 4⭐', 'E1 91 → 大师 Ⅰ 4⭐', await rankText());
+
+  await setVal('[data-tb-input="rank-level"]', '92');
+  await sleep(350);
+  ok((await rankText()) === '王者 1⭐', 'E2 92 → 王者 1⭐', await rankText());
+
+  /* ---- 6. 截图 ---- */
   await sleep(600);
   const shot = await page.send('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(path.join(OUT, '_toolbox-installed.png'), Buffer.from(shot.data, 'base64'));
 
-  ok(page.errors.length === 0, 'E1 渲染层无 error 级日志', page.errors.join(' | ') || '(空)');
+  ok(page.errors.length === 0, 'F1 渲染层无 error 级日志', page.errors.join(' | ') || '(空)');
 
   page.close();
   try {

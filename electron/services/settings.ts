@@ -100,6 +100,11 @@ const DEFAULTS: AppSettings = {
   // 关掉会同时解除 pin 并清空所有记录，所以记录默认给空表（每次一份新对象）
   mirrorBarEnabled: true,
   mirrorPinRecords: {},
+  // 导航增强（v1.1.27 / v1.1.28 默认开）：顺序默认空（= 完全按 Conf/layout.json）
+  navOrder: [],
+  navAdvanced: true,
+  // 浮动小窗的位置尺寸（v1.1.28）：空表 = 第一次打开时贴着鼠标
+  miniWinBounds: {},
 };
 
 /** Logcat 导出的默认根目录（产品约定，写死；见 defaultDirs 注释） */
@@ -194,6 +199,11 @@ function defaultDirs(): AppSettings {
     // 投屏窗口功能栏（v1.1.22）：与 DEFAULTS 保持一致；空表每次给新实例
     mirrorBarEnabled: true,
     mirrorPinRecords: {},
+    // 导航增强（v1.1.27 / v1.1.28 默认开）：与 DEFAULTS 一致；空数组每次给新实例
+    navOrder: [],
+    navAdvanced: true,
+    // 浮动小窗位置（v1.1.28）：与 DEFAULTS 一致；空表每次给新实例
+    miniWinBounds: {},
   };
 }
 

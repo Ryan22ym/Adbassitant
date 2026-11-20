@@ -2,6 +2,14 @@ import { ipcMain, dialog, shell, clipboard, BrowserWindow, app, desktopCapturer,
 import { existsSync, mkdirSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import {
+  openMiniWin,
+  closeMiniWin,
+  setMiniWinPin,
+  listMiniWins,
+  focusMainAndNavigate,
+} from './services/mini-win';
+import { getSharedUi, setSharedUi, syncSharedTheme } from './services/ui-shared';
+import {
   IPC,
   TITLEBAR_HEIGHT,
   type MirrorOptions,
@@ -50,6 +58,7 @@ import {
   getMirrorBarState,
   isMirrorBarWindow,
   onMirrorBarChange,
+  setMirrorAirplane,
   setMirrorPin,
 } from './services/mirror-bar';
 import { isMirrorSplashWindow } from './services/mirror-splash';
@@ -168,6 +177,8 @@ import { getLogs, clearLogs, exportLogs, setLogPushSink, addLog, getLogDir } fro
 import { getWallpaperDataURL, backdropPixelSize } from './services/wallpaper';
 import { getSettings, saveSettings, resolveDir, DEFAULT_LOGX_ROOT } from './services/settings';
 import { getUiConf, resolveUiConfDir } from './services/ui-conf';
+import { SIDEBAR_IDS } from '../shared/ui-conf';
+import { getNavAdvanced, setNavAdvanced } from './services/nav-advanced';
 import { resetWindowSize, windowStateSnapshot } from './services/window-state';
 import { applyAutoLaunch } from './services/auto-launch';
 import {
@@ -496,6 +507,10 @@ export function registerIpc() {
   ipcMain.handle(IPC.MIRROR_BAR_STATE, wrap(() => getMirrorBarState()));
   ipcMain.handle(IPC.MIRROR_BAR_SET_PIN, wrap((_e, pin: boolean) => setMirrorPin(!!pin)));
   ipcMain.handle(IPC.MIRROR_BAR_CLEAR_PINS, wrap(() => clearMirrorPins()));
+  ipcMain.handle(
+    IPC.MIRROR_BAR_SET_AIRPLANE,
+    wrap((_e, on: boolean) => setMirrorAirplane(!!on)),
+  );
 
   /* ---------------- 文件 ---------------- */
 
@@ -1423,6 +1438,60 @@ export function registerIpc() {
   ipcMain.handle(IPC.CONF_GET, wrap(() => getUiConf()));
   ipcMain.handle(IPC.CONF_DIR, wrap(() => resolveUiConfDir()));
 
+  /* ---------------- 导航增强开关（v1.1.27） ---------------- */
+
+  /*
+   * 一次 GET 就是一次「启动即解析」：第一次调用会把 settings 与 Conf 对齐并缓存生效值，
+   * 之后返回的都是同一份（改了开关要重启才变，见 services/nav-advanced.ts）。
+   */
+  ipcMain.handle(IPC.NAV_ADV_GET, wrap(() => getNavAdvanced()));
+  ipcMain.handle(
+    IPC.NAV_ADV_SET,
+    wrap((_e, value: unknown) => setNavAdvanced(!!value)),
+  );
+
+  /* ---------------- 浮动小窗（v1.1.28） ---------------- */
+
+  /*
+   * 小窗是独立 BrowserWindow，生命周期归主进程 —— 渲染层的 store 只保存
+   * 「哪些页面开着」，通过 PUSH_MINI_WINS 同步（见 services/mini-win.ts）。
+   *
+   * 🔴 id 必须过白名单：它会被拼进 `#/mini/<id>` 的 hash 里，
+   *    不校验的话渲染层传什么就会建什么窗口。
+   */
+  const miniId = (v: unknown): string => {
+    const id = typeof v === 'string' ? v : '';
+    if (!SIDEBAR_IDS.includes(id as (typeof SIDEBAR_IDS)[number])) {
+      throw new Error(`未知的小窗页面：${id}`);
+    }
+    return id;
+  };
+
+  ipcMain.handle(IPC.MINI_WIN_OPEN, wrap((_e, id: unknown) => openMiniWin(miniId(id))));
+  ipcMain.handle(
+    IPC.MINI_WIN_CLOSE,
+    wrap((_e, id?: unknown) =>
+      closeMiniWin(typeof id === 'string' && id ? miniId(id) : undefined),
+    ),
+  );
+  ipcMain.handle(
+    IPC.MINI_WIN_PIN,
+    wrap((_e, id: unknown, pin: unknown) => setMiniWinPin(miniId(id), !!pin)),
+  );
+  ipcMain.handle(IPC.MINI_WIN_LIST, wrap(() => listMiniWins()));
+  ipcMain.handle(
+    IPC.MINI_WIN_GO_MAIN,
+    wrap((_e, path: unknown) => {
+      const p = typeof path === 'string' && path.startsWith('/') ? path : '/';
+      focusMainAndNavigate(p);
+      return true;
+    }),
+  );
+
+  /* 跨窗口共享的界面状态（v1.1.28）：当前设备 / 主题 */
+  ipcMain.handle(IPC.UI_SHARED_GET, wrap(() => getSharedUi()));
+  ipcMain.handle(IPC.UI_SHARED_SET, wrap((_e, patch: unknown) => setSharedUi(patch ?? {})));
+
   /*
    * 保存设置。带 `autoLaunch` 的这次要落到系统（注册表启动项），并且**以系统回读为准** ——
    * 写不进去（组策略锁死等）时把开关弹回实际状态，免得界面显示已开启、开机却没动静。
@@ -1431,6 +1500,14 @@ export function registerIpc() {
     IPC.SETTINGS_SET,
     wrap((_e, patch: Partial<AppSettings>) => {
       let next = saveSettings(patch);
+      /*
+       * 主题 / 主题色变了就广播一次（v1.1.28）：
+       * 浮动小窗是独立窗口，自己那份 store 不会跟着主窗口变 ——
+       * 不同步的话主窗口切成深色，小窗还是白底，像贴了块亮片。
+       */
+      if (patch && ('theme' in patch || 'accent' in patch)) {
+        syncSharedTheme(next.theme, next.accent);
+      }
       if (patch && 'autoLaunch' in patch) {
         const actual = applyAutoLaunch(next.autoLaunch);
         if (actual !== next.autoLaunch) next = saveSettings({ autoLaunch: actual });

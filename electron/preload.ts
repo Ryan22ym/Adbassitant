@@ -29,6 +29,7 @@ const IPC = {
   MIRROR_BAR_STATE: 'mirrorBar:state',
   MIRROR_BAR_SET_PIN: 'mirrorBar:setPin',
   MIRROR_BAR_CLEAR_PINS: 'mirrorBar:clearPins',
+  MIRROR_BAR_SET_AIRPLANE: 'mirrorBar:setAirplane',
   FILE_PUSH: 'file:push',
   FILE_PULL: 'file:pull',
   FILE_PICK: 'file:pick',
@@ -158,6 +159,19 @@ const IPC = {
   /* 界面配置（Conf/*.json，见 shared/ui-conf.ts） */
   CONF_GET: 'conf:get',
   CONF_DIR: 'conf:dir',
+  /* 导航增强开关（v1.1.27）：设置页与 Conf/features.json 双源，重启生效 */
+  NAV_ADV_GET: 'nav:advanced',
+  NAV_ADV_SET: 'nav:advancedSet',
+
+  /* 浮动小窗（v1.1.28）：独立 BrowserWindow，生命周期归主进程 */
+  MINI_WIN_OPEN: 'miniWin:open',
+  MINI_WIN_CLOSE: 'miniWin:close',
+  MINI_WIN_PIN: 'miniWin:pin',
+  MINI_WIN_LIST: 'miniWin:list',
+  MINI_WIN_GO_MAIN: 'miniWin:goMain',
+  /* 跨窗口共享的界面状态：当前设备 / 主题 */
+  UI_SHARED_GET: 'ui:sharedGet',
+  UI_SHARED_SET: 'ui:sharedSet',
   /* 窗口外观（v1.1.3）：自绘标题栏的底色 */
   WINDOW_SET_TITLEBAR: 'window:setTitlebar',
   /* 透明玻璃主题（v1.1.13）：整窗 Acrylic 与自绘窗口按钮 */
@@ -242,6 +256,10 @@ const IPC = {
   PUSH_AI_CRASH_STATUS: 'push:aiCrashStatus',
   /* AI 自动执行 adb 指令（v1.1.15）：每执行完一条推一次 */
   PUSH_AI_AGENT_STEP: 'push:aiAgentStep',
+  /* 浮动小窗（v1.1.28） */
+  PUSH_MINI_WINS: 'push:miniWins',
+  PUSH_UI_SHARED: 'push:uiShared',
+  PUSH_NAV_TO: 'push:navTo',
 } as const;
 
 /**
@@ -294,6 +312,8 @@ const api = {
   setMirrorPin: (pin: boolean) => invoke(IPC.MIRROR_BAR_SET_PIN, pin),
   /** 清空所有机型的钉住记录（并解除当前 pin） */
   clearMirrorPins: () => invoke(IPC.MIRROR_BAR_CLEAR_PINS),
+  /** 一键开关手机飞行模式（v1.1.28）：true = 开，false = 关 */
+  setMirrorAirplane: (on: boolean) => invoke(IPC.MIRROR_BAR_SET_AIRPLANE, on),
 
   /* 文件 */
   pickFiles: (multi = true, filters?: any[]) => invoke(IPC.FILE_PICK, multi, filters),
@@ -546,6 +566,34 @@ const api = {
   /** 用户可改的那份 Conf 目录绝对路径（用于「打开配置文件夹」） */
   uiConfDir: () => invoke(IPC.CONF_DIR),
 
+  /*
+   * 导航增强（v1.1.27）：拖拽排序 + 页面浮动小窗口。
+   * 返回的是完整状态（生效值 / 落盘值 / 是否待重启），不是一个 boolean ——
+   * 界面需要同时表达「现在是开还是关」和「下次启动会不会变」。
+   */
+  navAdvanced: () => invoke(IPC.NAV_ADV_GET),
+  /** 改开关：只落盘，重启后才生效 */
+  setNavAdvanced: (value: boolean) => invoke(IPC.NAV_ADV_SET, value),
+
+  /*
+   * 浮动小窗（v1.1.28）：每个页面一扇独立系统窗口。
+   *
+   * 返回的都是**最新的窗口列表**（MiniWinInfo[]），调用方直接用它覆盖 store ——
+   * 不要在后端各算一份，两处不一致就会出现「侧栏显示开着、窗口其实没了」。
+   */
+  miniWinOpen: (id: string) => invoke(IPC.MINI_WIN_OPEN, id),
+  /** 关一扇；不传 id = 全关 */
+  miniWinClose: (id?: string) => invoke(IPC.MINI_WIN_CLOSE, id),
+  miniWinPin: (id: string, pinned: boolean) => invoke(IPC.MINI_WIN_PIN, id, pinned),
+  miniWinList: () => invoke(IPC.MINI_WIN_LIST),
+  /** 小窗里点「打开完整页面」：主窗口导航过去 */
+  miniWinGoMain: (path: string) => invoke(IPC.MINI_WIN_GO_MAIN, path),
+
+  /* 跨窗口共享的界面状态：当前设备 / 主题（主窗口 ↔ 小窗） */
+  uiSharedGet: () => invoke(IPC.UI_SHARED_GET),
+  uiSharedSet: (patch: { currentSerial?: string; theme?: string; accent?: string }) =>
+    invoke(IPC.UI_SHARED_SET, patch),
+
   /* 自绘标题栏（v1.1.3）：把当前主题色下的顶栏底色交给主进程 */
   setTitlebar: (opts: { color: string; symbolColor?: string; height?: number }) =>
     invoke(IPC.WINDOW_SET_TITLEBAR, opts),
@@ -666,6 +714,9 @@ const api = {
       IPC.PUSH_AI_CRASH_REPORT,
       IPC.PUSH_AI_CRASH_STATUS,
       IPC.PUSH_AI_AGENT_STEP,
+      IPC.PUSH_MINI_WINS,
+      IPC.PUSH_UI_SHARED,
+      IPC.PUSH_NAV_TO,
       'push:screenshot',
     ];
     if (!allowed.includes(channel as any)) {

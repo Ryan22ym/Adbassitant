@@ -1,12 +1,22 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Card, Input, Notice, Segmented, Textarea } from '@/components/ui';
+import { Button, Card, Input, Notice, Segmented, Select, Textarea } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { useApp } from '@/store/app';
 import { useUiConf } from '@/lib/ui-conf';
 import { featureOnOf } from '@shared/ui-conf';
 import { copyToClipboard } from '@/lib/clipboard';
 import { md5 } from '@/lib/md5';
+import {
+  describeLevel,
+  kingLevel,
+  levelOf,
+  MAX_LEVEL,
+  KING_MAX_STARS,
+  parseLevelInput,
+  RANK_TIERS,
+  ROMAN,
+} from '@/lib/rank';
 import './toolbox.css';
 
 /* ================================================================== */
@@ -47,6 +57,13 @@ const TOOL_DEFS: ToolDef[] = [
     desc: '文本摘要，不可逆',
     icon: Icon.hash,
     render: () => <Md5Tool />,
+  },
+  {
+    id: 'rank',
+    name: '段位换算',
+    desc: '编号与段位互查',
+    icon: Icon.bolt,
+    render: () => <RankTool />,
   },
 ];
 
@@ -326,6 +343,134 @@ function Md5Tool() {
         <ResultRow label="32 位小写" value={digest || '—'} onCopy={(v) => copy('MD5', v)} />
         <ResultRow label="32 位大写" value={digest ? digest.toUpperCase() : '—'} onCopy={(v) => copy('MD5', v)} />
         <ResultRow label="16 位" value={digest ? digest.slice(8, 24) : '—'} onCopy={(v) => copy('MD5', v)} />
+      </div>
+    </Card>
+  );
+}
+
+/* ================================================================== */
+/* 段位换算                                                            */
+/* ================================================================== */
+
+/**
+ * 两条独立的路径，互不联动：上面「输编号看段位」，下面「选段位看编号」。
+ * 联动会让两边互相回写，改一个字符就跳回上一格，手感很差。
+ */
+function RankTool() {
+  const toast = useApp((s) => s.toast);
+
+  /* ---------------- 编号 → 段位 ---------------- */
+  const [raw, setRaw] = useState('');
+  const level = parseLevelInput(raw);
+  const info = level === null ? null : describeLevel(level);
+
+  /* ---------------- 段位 → 编号 ---------------- */
+  /* tierIdx 等于 RANK_TIERS.length 时是王者（没有小段） */
+  const KING = RANK_TIERS.length;
+  const [tierIdx, setTierIdx] = useState(0);
+  const [sub, setSub] = useState(RANK_TIERS[0].subs[0]);
+  const [star, setStar] = useState(1);
+  const [kingStar, setKingStar] = useState(1);
+
+  const isKing = tierIdx === KING;
+  const tier = isKing ? null : RANK_TIERS[tierIdx];
+  const picked = isKing ? kingLevel(kingStar) : levelOf(tierIdx, sub, star);
+
+  const changeTier = (i: number) => {
+    setTierIdx(i);
+    /* 换大段后旧的小段/星级可能不存在（青铜没有 Ⅴ、大师没有 1⭐ 以外的 3⭐） */
+    if (i < KING) {
+      setSub(RANK_TIERS[i].subs[0]);
+      setStar(1);
+    }
+  };
+
+  const copy = async (value: string) => {
+    const ok = await copyToClipboard(value);
+    toast(ok ? 'success' : 'warn', ok ? '编号已复制' : '复制失败', ok ? value : '');
+  };
+
+  const tierOptions = [
+    ...RANK_TIERS.map((t, i) => ({ value: String(i), label: t.name })),
+    { value: String(KING), label: '王者' },
+  ];
+
+  return (
+    <Card title="段位换算" subtitle="编号与段位互查">
+      <div className="tb-block">
+        <div className="tb-block-title">编号 → 段位</div>
+        <Input
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          placeholder="输入编号，如 55"
+          inputMode="numeric"
+          spellCheck={false}
+          data-tb-input="rank-level"
+        />
+        {info ? (
+          <div className="rank-result" data-rank-result={info.text}>
+            <span className="rank-name">{info.name}</span>
+            {info.sub !== null && <span className="rank-sub">{ROMAN[info.sub]}</span>}
+            <span className="rank-stars">{info.star}⭐</span>
+            <span className="rank-range">
+              {info.from === info.to ? info.from : `${info.from} – ${info.to}`}
+            </span>
+          </div>
+        ) : (
+          <div className="tb-hint">
+            {raw.trim() ? `只认 0 – ${MAX_LEVEL} 的整数编号` : '输入后自动换算'}
+          </div>
+        )}
+      </div>
+
+      <div className="tb-block">
+        <div className="tb-block-title">段位 → 编号</div>
+        <div className="tb-input-row rank-picker">
+          <Select
+            value={String(tierIdx)}
+            onChange={(e) => changeTier(Number(e.target.value))}
+            options={tierOptions}
+            data-rank-tier=""
+          />
+          {!isKing && (
+            <Select
+              value={String(sub)}
+              onChange={(e) => setSub(Number(e.target.value))}
+              options={tier!.subs.map((s) => ({ value: String(s), label: ROMAN[s] }))}
+              data-rank-sub=""
+            />
+          )}
+          {isKing ? (
+            <Input
+              type="number"
+              min={1}
+              max={KING_MAX_STARS}
+              value={String(kingStar)}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setKingStar(
+                  Number.isFinite(n) ? Math.min(KING_MAX_STARS, Math.max(1, Math.trunc(n))) : 1,
+                );
+              }}
+              data-rank-star=""
+            />
+          ) : (
+            <Select
+              value={String(star)}
+              onChange={(e) => setStar(Number(e.target.value))}
+              options={Array.from({ length: tier!.stars }, (_, i) => ({
+                value: String(i + 1),
+                label: `${i + 1}⭐`,
+              }))}
+              data-rank-star=""
+            />
+          )}
+        </div>
+        <ResultRow
+          label="编号"
+          value={picked === null ? '—' : String(picked)}
+          onCopy={picked === null ? undefined : (v) => copy(v)}
+        />
       </div>
     </Card>
   );

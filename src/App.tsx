@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import type React from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar, Header, ToastHost, DevicePicker } from './components/layout';
 import DragInstallHost from './components/DragInstallHost';
+import MiniWindowHost from './components/mini/MiniWindowHost';
 import { useApp } from './store/app';
 import { toHexColor, dimOver } from './lib/color';
 import { applyCustomAccent, clearCustomAccent, customAccentApplies } from './lib/accent-custom';
 import { useUpdateWatcher } from './lib/update-watch';
 import { IPC } from '@shared/types';
-import type { UpdateResult, AabSigningInfo, CrashReportMeta, CrashWatchStatus } from '@shared/types';
+import type { UpdateResult, AabSigningInfo, CrashReportMeta, CrashWatchStatus, NavAdvancedState, SharedUiState } from '@shared/types';
 import type { UiConf } from '@shared/ui-conf';
 
 import DevicePage from './pages/DevicePage';
@@ -40,6 +42,33 @@ const PAGE_META: Record<string, { title: string; desc: string }> = {
   '/ai': { title: 'AI 助手', desc: '' },
   '/settings': { title: '设置', desc: '' },
 };
+
+/**
+ * 页面清单（v1.1.28 keep-alive）。
+ *
+ * 🔴 为什么把路由表搬到一个模块级常量，而不是继续写 <Routes>：
+ *    页面现在**只挂载一次、之后常驻**（切走只是隐藏）。React Router 的
+ *    <Routes> 每次切换都会卸载旧元素、挂载新元素 —— 那会把页面里的 useState
+ *    全部销毁，表现就是用户说的「弱网设好参数，切去设备页再回来又回到默认」。
+ *
+ * 顺序 = DOM 顺序，也就是叠层顺序（后渲染的压在上面）。
+ * 活动页另有 z-index，不依赖这个顺序，但保持稳定可以让「同一次切换」的
+ * 绘制顺序可预测。
+ */
+const PAGES: { path: string; el: React.ReactNode }[] = [
+  { path: '/', el: <DevicePage /> },
+  { path: '/mirror', el: <MirrorPage /> },
+  { path: '/tools', el: <ToolsPage /> },
+  { path: '/toolbox', el: <ToolboxPage /> },
+  { path: '/apps', el: <AppsPage /> },
+  { path: '/logcat', el: <LogcatPage /> },
+  { path: '/weaknet', el: <WeakNetworkPage /> },
+  { path: '/clicker', el: <AutoClickerPage /> },
+  { path: '/command', el: <CommandPage /> },
+  { path: '/logs', el: <LogsPage /> },
+  { path: '/ai', el: <AiPage /> },
+  { path: '/settings', el: <SettingsPage /> },
+];
 
 /**
  * 页面上的全屏遮罩（有视觉色彩的那些）。
@@ -76,6 +105,7 @@ function readScrim(): { color: string; alpha: number } | null {
 
 export default function App() {
   const location = useLocation();
+  const navigate = useNavigate();
   const setDevices = useApp((s) => s.setDevices);
   const appendLog = useApp((s) => s.appendLog);
   const setMirror = useApp((s) => s.setMirror);
@@ -134,6 +164,19 @@ export default function App() {
       const confRes = await window.adbApi.getUiConf();
       if (alive && confRes?.ok && confRes.data) {
         setUiConf(confRes.data as UiConf);
+      }
+
+      /*
+       * 导航增强开关（v1.1.27）。
+       *
+       * 这次 IPC 同时承担「启动即解析」：主进程会把 settings.json 与
+       * Conf/features.json 对齐后缓存本次进程的生效值，之后改开关只落盘、
+       * 不改变这里拿到的 effective —— 所以「重启生效」是真的。
+       * 放在设置之前取：侧栏要按 effective 决定渲不渲染拖拽形态，越早越少闪。
+       */
+      const navAdv = await window.adbApi.navAdvanced();
+      if (alive && navAdv?.ok && navAdv.data) {
+        useApp.getState().setNavAdvanced(navAdv.data as NavAdvancedState);
       }
 
       const res = await window.adbApi.getSettings();
@@ -257,6 +300,27 @@ export default function App() {
       useApp.getState().setCrashStatus(s),
     );
 
+    /*
+     * 小窗 → 主窗口的两条通道（v1.1.28）。
+     *
+     * ① PUSH_NAV_TO：小窗里点「打开完整页面」，主进程把目标路径发过来，
+     *    主窗口负责真正导航 —— 小窗自己不持有路由表，改自己的 hash 只会
+     *    把那扇小窗变成第二份主界面。
+     * ② PUSH_UI_SHARED：小窗里换了设备 / 主题，这边要跟着变。
+     *    直接 setState 而不是调 setCurrentSerial —— 后者会再上报一次，
+     *    虽然主进程做了等值闸门，但少一次往返更干净。
+     */
+    const offNav = window.adbApi.on(IPC.PUSH_NAV_TO, (path: string) => {
+      if (typeof path === 'string' && path.startsWith('/')) navigate(path);
+    });
+    const offShared = window.adbApi.on(IPC.PUSH_UI_SHARED, (s: SharedUiState) => {
+      if (!s) return;
+      const st = useApp.getState();
+      if (typeof s.currentSerial === 'string' && s.currentSerial !== st.currentSerial) {
+        useApp.setState({ currentSerial: s.currentSerial });
+      }
+    });
+
     return () => {
       alive = false;
       offLog();
@@ -265,12 +329,29 @@ export default function App() {
       offRecord();
       offCrashReport();
       offCrashStatus();
+      offNav();
+      offShared();
     };
     // 仅在挂载时执行一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const meta = PAGE_META[location.pathname] || PAGE_META['/'];
+
+  /*
+   * 当前活动页（未知路径回落设备页，与上面的 meta 同一套判定）。
+   *
+   * 🔴 mounted 只增不减：某个页面第一次被打开时挂载，之后**永远保持挂载**。
+   *    这正是「切出去再回来，弱网参数 / 日志过滤器 / 命令历史都还在」的实现 ——
+   *    页面的 useState 与定时器不再被路由切换销毁，设备侧的长任务也继续跑。
+   *    不一次性全量挂载是为了启动速度：12 个页面同时初始化会各发一轮 IPC。
+   */
+  const activePath = PAGE_META[location.pathname] ? location.pathname : '/';
+  const [mountedPaths, setMountedPaths] = useState<string[]>([activePath]);
+
+  useEffect(() => {
+    setMountedPaths((prev) => (prev.includes(activePath) ? prev : [...prev, activePath]));
+  }, [activePath]);
 
   /*
    * 盯着页面上有没有全屏遮罩，供下面那个标题栏配色的 effect 用。
@@ -543,28 +624,39 @@ export default function App() {
             desc={meta.desc}
             actions={location.pathname !== '/' ? <DevicePicker compact /> : undefined}
           />
-          <div className="page">
-            <div className="page-inner">
-              <Routes>
-                <Route path="/" element={<DevicePage />} />
-                <Route path="/mirror" element={<MirrorPage />} />
-                <Route path="/tools" element={<ToolsPage />} />
-                <Route path="/toolbox" element={<ToolboxPage />} />
-                <Route path="/apps" element={<AppsPage />} />
-                <Route path="/logcat" element={<LogcatPage />} />
-                <Route path="/weaknet" element={<WeakNetworkPage />} />
-                <Route path="/clicker" element={<AutoClickerPage />} />
-                <Route path="/command" element={<CommandPage />} />
-                <Route path="/logs" element={<LogsPage />} />
-                <Route path="/ai" element={<AiPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-              </Routes>
-            </div>
+          {/*
+            页面容器（v1.1.28 keep-alive）。
+
+            🔴 这里不再用 <Routes>：路由切换会卸载页面组件，页面里的 useState
+               随之销毁 —— 那正是「弱网设好参数、切去设备页再回来又回默认」的根因。
+               现在改成：**访问过的页面全部常驻**，只有当前页可见（.is-active），
+               其余用 visibility:hidden 藏起来 —— 不用 display:none，因为那会
+               让元素失去布局、把每个页面各自的滚动位置一并重置。
+
+            隐藏页保留在 DOM 里，它的定时器 / 订阅 / 设备侧长任务继续运行，
+            所以「切出去就停」的东西现在能保持后台运行；切回来直接看到原状态。
+          */}
+          <div className="page-stack" data-page-stack="1">
+            {PAGES.filter((p) => mountedPaths.includes(p.path)).map((p) => {
+              const active = p.path === activePath;
+              return (
+                <div
+                  key={p.path}
+                  className={`page${active ? ' is-active' : ' is-idle'}`}
+                  data-page={p.path}
+                  aria-hidden={active ? undefined : true}
+                >
+                  <div className="page-inner">{p.el}</div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
       {/* 整窗拖放安装 + 安装进度弹窗（拖放区无法做在 scrcpy 的原生投屏窗口上） */}
       <DragInstallHost />
+      {/* 浮动小窗（v1.1.27）：开关关着时整层不渲染，见 MiniWindowHost */}
+      <MiniWindowHost />
       <ToastHost />
     </div>
   );

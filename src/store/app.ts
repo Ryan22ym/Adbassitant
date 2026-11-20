@@ -14,6 +14,7 @@ import type {
   CrashReportMeta,
   CrashWatchStatus,
   UpdateTipInfo,
+  NavAdvancedState,
 } from '@shared/types';
 import { cloneDefaultUiConf, type UiConf } from '@shared/ui-conf';
 
@@ -238,6 +239,16 @@ interface AppState {
   setUiConf: (c: UiConf) => void;
 
   /*
+   * 导航增强（v1.1.27）：拖拽排序 + 页面浮动小窗口的总开关状态。
+   *
+   * 初值就是出厂形态（关闭）。主进程回来的那份才带「已落盘值 / 是否待重启」，
+   * 所以在 App 初始化里取一次写进来 —— 渲染层只读 `effective` 来决定要不要
+   * 渲染拖拽与入口，**不要**在这里做任何「乐观开关」：需求就是重启生效。
+   */
+  navAdvanced: NavAdvancedState;
+  setNavAdvanced: (s: NavAdvancedState) => void;
+
+  /*
    * 主题（v1.1.11 起是**同级多选一**，见 shared/types.ts 的 ThemeId）。
    *
    * 'genshin' / 'arknights' 不是「第 N 个主题色」，而是和浅色/深色平级的
@@ -435,9 +446,31 @@ export const useApp = create<AppState>((set, get) => ({
     if (sameList && next === currentSerial) return;
 
     set({ devices, currentSerial: next });
+    /*
+     * 设备掉线 → 自动切了设备，也要通知小窗（v1.1.28）。
+     *
+     * 这条路径绕过了 setCurrentSerial，不补这一下的话：
+     * 主窗口已经切到另一台机器，小窗还指着拔掉的那台 serial，
+     * 在小窗里点截图 / 执行命令会一直失败，而两边界面看起来都「正常」。
+     */
+    if (next !== currentSerial) {
+      void window.adbApi?.uiSharedSet?.({ currentSerial: next ?? '' });
+    }
   },
 
-  setCurrentSerial: (currentSerial) => set({ currentSerial }),
+  setCurrentSerial: (currentSerial) => {
+    if (get().currentSerial === currentSerial) return;
+    set({ currentSerial });
+    /*
+     * 跨窗口同步（v1.1.28）。
+     *
+     * 主窗口和浮动小窗是两个渲染进程，各有一份 store —— 不同步的话，
+     * 在小窗里换了设备，主窗口的截图 / 安装还打在同一台旧机器上。
+     * 值没变就不发（上面那行早退），主进程那边也做了等值判断，
+     * 所以「A 推送 → B 写入 → B 再上报」不会来回弹。
+     */
+    void window.adbApi?.uiSharedSet?.({ currentSerial: currentSerial ?? '' });
+  },
   setScanning: (scanning) => set({ scanning }),
 
   /* ---------------- 日志 ---------------- */
@@ -536,6 +569,17 @@ export const useApp = create<AppState>((set, get) => ({
   // 对象字段都给新副本同一个理由）
   uiConf: cloneDefaultUiConf(),
   setUiConf: (uiConf) => set({ uiConf }),
+
+  /* ---------------- 导航增强（v1.1.27） ---------------- */
+  navAdvanced: {
+    effective: false,
+    persisted: false,
+    setting: false,
+    file: false,
+    source: 'default',
+    restartPending: false,
+  },
+  setNavAdvanced: (navAdvanced) => set({ navAdvanced }),
 
   /* ---------------- 主题 ---------------- */
   theme: 'light',

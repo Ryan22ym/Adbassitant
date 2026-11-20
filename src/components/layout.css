@@ -350,6 +350,31 @@
   height: 7px;
 }
 
+/*
+ * 「已在浮动小窗中打开」标记（v1.1.28）。
+ *
+ * 小窗是独立系统窗口，可以被拖到副屏、也可能被别的窗口盖住 ——
+ * 侧栏这一枚空心方框是用户唯一能确认「它还开着」的常驻线索，
+ * 同时也是右键菜单里「关闭浮动小窗」的提示。
+ * 用方形而不是圆点：圆点已经被「未读崩溃报告」占用了，语义必须一眼分开。
+ */
+.nav-mini-flag {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+.sidebar.collapsed .nav-mini-flag {
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+}
+
 /* ---- 收起态：导航只留图标 ---- */
 
 .sidebar.collapsed .sidebar-nav {
@@ -677,11 +702,44 @@
   height: 15px;
 }
 
-.page {
+/*
+ * 页面栈（v1.1.28 keep-alive）。
+ *
+ * 所有访问过的页面都常驻 DOM，叠在同一个矩形里，只有活动页可见。
+ * 🔴 用 absolute 叠层而不是 flex 流：每个页面要保留**自己的滚动位置**，
+ *    如果共用一个滚动容器，切页时滚动条会是上一页的那一条。
+ */
+.page-stack {
+  position: relative;
   flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.page {
+  position: absolute;
+  inset: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 20px 22px 28px;
+}
+
+.page.is-active {
+  z-index: 1;
+}
+
+/*
+ * 非活动页（v1.1.28）。
+ *
+ * 🔴 用 visibility:hidden 而不是 display:none：
+ *    display:none 会让元素退出布局，滚动位置随之归零 —— 切回来就跳回顶部。
+ *    visibility:hidden 的元素仍然保留布局与滚动位置，只是不绘制、不接收事件。
+ * 🔴 pointer-events:none 是兜底：万一同层里还有别的浮层，隐藏页不能吃掉点击。
+ */
+.page.is-idle {
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .page-inner {
@@ -972,4 +1030,172 @@
 }
 .lv-error .log-msg {
   color: var(--danger);
+}
+
+/* ==================================================================
+   导航增强（v1.1.27）：拖拽排序 / 小窗入口 / 右键菜单
+   ==================================================================
+   为什么每个条目外面多套一层 .nav-slot：
+   拖动时要给「被拖的那格」写 transform，而 .nav-item 是 NavLink（本身有
+   background / color 的过渡），把 transform 写在它身上会让「按下高亮」和
+   「拖动位移」两套过渡互相打架。外面这层只负责位移，职责干净。
+   ================================================================== */
+
+.nav-slot {
+  position: relative;
+  flex: none;
+  /* 让位动画：0.18s 是「看得出在动、但不会等」的时长（拖拽场景再长就跟不上手了） */
+  transition: transform 0.18s cubic-bezier(0.22, 0.8, 0.28, 1);
+}
+
+/*
+ * 松手那一帧必须**没有**过渡：
+ * 顺序已经在同一帧换掉了，如果 transform 还从 ±step 慢慢回到 0，
+ * 视觉上会「先到位、再滑回来一下」。见 layout.tsx 的 settling 状态。
+ */
+.sidebar-nav.settling .nav-slot {
+  transition: none;
+}
+
+.nav-slot.dragging {
+  transition: none;
+  z-index: 3;
+}
+
+/* 被拖的那格「抬起来」：描边走 outline（不占位、不改变高度，否则邻居会一起抖） */
+.nav-slot.dragging .nav-item {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: 0 6px 16px rgba(16, 24, 40, 0.16), 0 0 0 1px var(--accent-border);
+}
+
+/* 增强开启时整列都可以抓（收起态也一样，只是入口换成了右键菜单） */
+.sidebar-nav[data-nav-enhanced='1'] .nav-item {
+  cursor: grab;
+  user-select: none;
+}
+
+.sidebar-nav[data-nav-enhanced='1'] .nav-slot.dragging .nav-item {
+  cursor: grabbing;
+}
+
+/* 被拖到功能栏外面时，列表里那一格留在原地淡下去（真正的跟手是 .nav-tear 拖影） */
+.nav-slot.tearing .nav-item {
+  opacity: 0.32;
+  outline: 1px dashed var(--accent-border);
+  outline-offset: -1px;
+}
+
+/* ---------------- 拖出去时的拖影 ---------------- */
+
+/*
+ * 跟着指针走的小牌子：图标 + 名称 + 「松手开小窗」。
+ * 它是这个交互**唯一**的提示 —— 拖影一出现，用户就知道松手会发生什么；
+ * 所以不要把它做成半透明的虚影，要做成一块清楚的小卡片。
+ */
+.nav-tear {
+  position: fixed;
+  z-index: 1000;
+  transform: translate(10px, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px dashed var(--accent-border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: nav-tear-in 0.12s ease-out;
+}
+
+.nav-tear-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--accent);
+}
+
+.nav-tear-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.nav-tear-hint {
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+@keyframes nav-tear-in {
+  from {
+    opacity: 0;
+    transform: translate(10px, -50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(10px, -50%) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-tear {
+    animation: none;
+  }
+}
+
+/* ---------------- 右键菜单 ---------------- */
+
+.nav-menu {
+  position: fixed;
+  z-index: 900;
+  min-width: 200px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.nav-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-menu-item svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.nav-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.nav-menu-hint {
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
 }

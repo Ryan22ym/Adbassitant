@@ -24,6 +24,7 @@ import type {
   GlassBackdropMode,
   GlassTintId,
   MirrorBarState,
+  NavAdvancedState,
   UpdateCheckResult,
   UpdateContext,
   UpdateDownloadProgress,
@@ -182,6 +183,21 @@ const FIXED_ACCENT_NOTE: Partial<Record<'genshin' | 'arknights', string>> = {
  * ⚠️ 发版改 package.json version 时，这里同步加一条（漏加会回退到默认文案）。
  */
 const VERSION_NOTES: Record<string, string> = {
+  '1.1.28':
+    '1. 浮动小窗改为独立窗口，可以拖到屏幕任意位置，不再限制在软件页面内\n' +
+    '2. 小窗里可以直接操作：设备扫描与切换、截图、执行命令、弱网调参并应用、Logcat 开始与停止\n' +
+    '3. 小窗与主界面状态实时同步：换设备、换主题两边一起变，小窗里点「完整页面」会跳回主界面\n' +
+    '4. 小窗的位置和大小会记住，下次打开或重启程序都回到原处；标题栏上可置顶\n' +
+    '5. 各功能页切走后再回来保持原状态并继续在后台运行，不再重置为默认\n' +
+    '6. 「导航增强」改为默认开启\n' +
+    '7. 投屏窗口右侧功能栏新增「飞行模式」，点一下打开、再点一下关闭',
+  '1.1.27':
+    '1. 新增「导航增强」：左侧功能栏可拖动排序，顺序会记住，也可用 Alt+↑/↓ 调整\n' +
+    '2. 把左侧功能项拖到功能栏外面松手，就能开成应用内浮动小窗，可拖动、可缩放，固定后点外部不会关\n' +
+    '3. 开关在设置页与配置文件里各有一个，重启程序后生效',
+  '1.1.26':
+    '1. 工具箱新增「段位换算」，输入编号即可看到对应段位，也可调段位反查编号\n' +
+    '2. 段位按青铜到王者逐级排列，星数与罗马数字小段一一对应，王者可到 9999 星',
   '1.1.25':
     '1. 左侧新增「工具箱」，内置时间戳转换：时间戳与日期互转，附 UTC、ISO 8601 与距今时长\n' +
     '2. 工具箱内新增 MD5 计算，一次给出 32 位小写、32 位大写与 16 位结果\n' +
@@ -333,6 +349,31 @@ export default function SettingsPage() {
    * 显示出来 —— 用户拖完窗口想知道记没记住，看一眼数字比拖回去重启一次快得多。
    */
   const windowOpen = usePanelOpen('settings', 'window');
+
+  /*
+   * 导航增强（v1.1.27）。
+   *
+   * 这里读的是 store 里的那份状态（App 启动时从主进程取回），不是直接读设置 ——
+   * 因为它带着「本次生效值 / 是否待重启」，而设置里只有一个布尔。
+   * 开关写盘后主进程会把两边（settings.json + Conf/features.json）同步成同一份值，
+   * 返回的新状态里 persisted 变了、effective 没变，界面据此提示「重启后生效」。
+   */
+  const navAdv = useApp((s) => s.navAdvanced);
+  const setNavAdv = useApp((s) => s.setNavAdvanced);
+  const navAdvancedOpen = usePanelOpen('settings', 'navAdvanced');
+  const [navBusy, setNavBusy] = useState(false);
+
+  const toggleNavAdv = async (v: boolean) => {
+    setNavBusy(true);
+    const next = await tryCall<NavAdvancedState>(() => window.adbApi.setNavAdvanced(v));
+    setNavBusy(false);
+    if (!next) {
+      toast('error', '保存失败', '开关没能写入，请查看运行日志');
+      return;
+    }
+    setNavAdv(next);
+    toast('success', v ? '已开启导航增强' : '已关闭导航增强', '重启程序后生效');
+  };
   const [winState, setWinState] = useState<{
     current: { width: number; height: number; maximized: boolean } | null;
     saved: { x: number; y: number; width: number; height: number; maximized: boolean } | null;
@@ -861,6 +902,49 @@ export default function SettingsPage() {
           </Button>
         </div>
 
+      </Card>
+
+      {/*
+        导航增强（v1.1.27）：左侧功能栏拖拽排序 + 页面浮动小窗。
+        放在「窗口」之后、「关于」之前 —— 它同样是界面形态的设置，但不常改。
+
+        🔴 这个开关**不即时生效**：和它对外承诺的一致，点了只落盘，
+           本次启动继续按老形态跑（见 electron/services/nav-advanced.ts）。
+           所以界面上必须把「当前生效」和「下次启动」两件事同时说清楚，
+           否则用户点了开关发现没变化，会以为坏了。
+      */}
+      <Card title="导航增强" collapsible defaultOpen={navAdvancedOpen}>
+        <div className="setting-line" data-nav-adv-switch="1">
+          <span className="setting-line-label">拖拽排序与浮动小窗</span>
+          <span className="spacer" />
+          <Switch
+            checked={navAdv.persisted}
+            onChange={toggleNavAdv}
+            disabled={navBusy}
+            aria-label="导航增强"
+          />
+        </div>
+
+        <div className="setting-line">
+          <span className="setting-line-label">当前状态</span>
+          <span className="spacer" />
+          <span className="text-dim" data-nav-adv-effective={navAdv.effective ? '1' : '0'}>
+            本次启动{navAdv.effective ? '已开启' : '未开启'}
+            {navAdv.restartPending ? ` · 下次启动${navAdv.persisted ? '开启' : '关闭'}` : ''}
+          </span>
+        </div>
+
+        <Notice tone="accent">
+          开启后左侧功能栏可以拖动排序（也可 Alt+↑/↓）；把某个功能<b>拖到功能栏外面</b>松手，
+          它就会开成一个<b>独立的浮动小窗</b> —— 可以拖到屏幕上任何位置，甚至拖到主窗口外面。
+          小窗里能直接操作，也会和主界面实时同步。配置文件里的开关是 Conf\features.json 的
+          features.ui.navAdvanced，改完同样要重启。
+        </Notice>
+        {navAdv.restartPending && (
+          <Notice tone="warn">
+            开关已保存，<b>重启程序后生效</b>。设置页与配置文件里的值已同步为同一份。
+          </Notice>
+        )}
       </Card>
 
       <Card

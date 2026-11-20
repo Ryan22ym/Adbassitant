@@ -198,6 +198,8 @@ export const DEFAULT_PANELS: PanelsConf = {
       autoMirror: true,
       /* 记录窗口大小（v1.1.16）：低频设置，默认收起 */
       window: false,
+      /* 导航增强（v1.1.27）：它是「要不要用这个能力」的入口，默认展开让人看得见 */
+      navAdvanced: true,
     },
   },
 };
@@ -253,6 +255,17 @@ export const DEFAULT_FEATURES: FeaturesConf = {
     clicker: { record: true },
     /* 设置页里的整块入口 */
     settings: { autoMirror: true, update: true, envCheck: true },
+    /*
+     * 导航增强（v1.1.27）：左侧功能栏拖拽排序 + 页面浮动小窗口。
+     *
+     * 出厂 **true**（v1.1.28 起，小杨要求「拖动小窗口功能默认打开」）：
+     * 它已经是主力交互，不该再让用户先去设置页找开关。
+     *
+     * 🔴 它是**双源开关**：settings.json 的 navAdvanced 也是同一个开关。
+     *    两边不一致时以本文件为准，解析完立刻把同一份值写回两边
+     *    （electron/services/nav-advanced.ts）。改这里要重启才生效。
+     */
+    ui: { navAdvanced: true },
   },
 };
 
@@ -412,6 +425,24 @@ export function normalizeUiConf(raws: {
     panels: normalizePanels(raws.panels),
     features: normalizeFeatures(raws.features),
   };
+}
+
+/**
+ * 把「用户拖出来的顺序」叠在「配置文件顺序」之上：给出的在前，未给出的按底稿补齐。
+ *
+ * 与 mergeOrder 的区别：那个吃的是**原始 JSON**（要容错），这个吃的是已经
+ * 校验过的 id 数组（来自 settings.json 的 navOrder）—— 但同样会过一遍白名单，
+ * 因为 settings.json 也会被手改，里面可能躺着上一版本的 id。
+ */
+export function applyUserOrder(
+  base: readonly string[],
+  incoming: readonly string[],
+  allowed: readonly string[],
+): string[] {
+  const given = sanitizeOrder(incoming, allowed);
+  if (!given || given.length === 0) return [...base];
+  const seen = new Set(given);
+  return [...given, ...base.filter((id) => !seen.has(id))];
 }
 
 /* ------------------------------------------------------------------ */

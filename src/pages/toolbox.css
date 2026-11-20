@@ -135,6 +135,58 @@
   flex: none;
 }
 
+/* ---------------- 段位换算 ---------------- */
+
+/*
+ * 结果是一整块（不是 tb-row）：段位名要撑得住字号，右侧留区间提示。
+ * user-select: all —— 点一下整段选中，分享段位时省得拖选（「钻石 Ⅳ 3⭐」中间有空格，
+ * 双击只能选到半个词）。
+ */
+.rank-result {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  user-select: all;
+}
+
+.rank-name {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.rank-sub {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.rank-stars {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* 该小段覆盖的编号区间，靠右、弱化：是用来核对边界的，不是主角 */
+.rank-range {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 三个选择器等宽，星级那格不比段位窄——不然「王者 9999」会和下拉挤在一起 */
+.rank-picker .select,
+.rank-picker .input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ---------------- 「标签 + 值 + 复制」行 ---------------- */
 
 .tb-row {

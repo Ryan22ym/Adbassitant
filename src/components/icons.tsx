@@ -286,6 +286,17 @@ export const Icon = {
       <path d="M12 11.8v8.7" strokeLinecap="round" />
     </svg>
   ),
+  /**
+   * 弹出小窗：一个方框 + 一支往右上方指的箭头（= 把这个页面拎出来单独看）。
+   * 与 pin（图钉）刻意长得不一样：pin 是「钉住」，这个是「拎出来」。
+   */
+  popOut: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M13.5 4.5H5.6A1.6 1.6 0 004 6.1v12.3a1.6 1.6 0 001.6 1.6h12.3a1.6 1.6 0 001.6-1.6v-7.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14.4 3.8h5.8v5.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M20 4.2l-8.6 8.6" strokeLinecap="round" />
+    </svg>
+  ),
   /** 复制：两张叠起来的纸（与「另存为」的向下箭头区分开） */
   copy: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">

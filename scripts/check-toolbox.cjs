@@ -1,10 +1,11 @@
 /**
- * 工具箱页回归（v1.1.25）
+ * 工具箱页回归（v1.1.25 起，v1.1.26 加段位换算）
  * ============================================================
- * 验三件事：
+ * 验四件事：
  *   1. 入口 —— 侧栏有「工具箱」、点进去标题与高亮都对；
  *   2. 时间戳 —— 时间戳↔时间双向换算自洽，UTC 结果绝对正确；
- *   3. MD5 —— 固定输入的摘要与 `md5sum` 一致（含 32/16 位）。
+ *   3. MD5 —— 固定输入的摘要与 `md5sum` 一致（含 32/16 位）；
+ *   4. 段位换算 —— 0/91/92 三个锚点、小段边界、段位选择器反查。
  *
  * 用法：
  *   electron scripts/check-toolbox.cjs
@@ -50,6 +51,17 @@ const SET_VAL = `
       : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, val);
     el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+`;
+
+/** 原生 select：React 在 select 上监听的是 change 事件，dispatch input 不生效 */
+const SET_SELECT = `
+  (sel, val) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, val);
+    el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   }
 `;
@@ -112,8 +124,8 @@ app.whenReady().then(async () => {
     JSON.stringify(shell.active),
   );
   ok(
-    JSON.stringify(shell.tools) === JSON.stringify(['timestamp', 'md5']),
-    'A3 工具清单 = 时间戳 + MD5',
+    JSON.stringify(shell.tools) === JSON.stringify(['timestamp', 'md5', 'rank']),
+    'A3 工具清单 = 时间戳 + MD5 + 段位换算',
     JSON.stringify(shell.tools),
   );
   ok(shell.panel === 'timestamp', 'A4 默认停在第一个工具（时间戳）', shell.panel);
@@ -204,6 +216,86 @@ app.whenReady().then(async () => {
     'C6 清空后摘要回到占位（不留旧值）',
     await rowValue('32 位小写'),
   );
+
+  /* ---------- 4. 段位换算 ---------- */
+  await evalJS(`document.querySelector('.toolbox-nav-item[data-tool="rank"]').click()`);
+  await sleep(300);
+  ok(
+    (await evalJS(`document.querySelector('.toolbox-main').getAttribute('data-tool-panel')`)) ===
+      'rank',
+    'D1 点击清单可切到段位换算',
+  );
+
+  const rankText = () =>
+    evalJS(`document.querySelector('.rank-result')?.getAttribute('data-rank-result') ?? ''`);
+
+  /*
+   * 锚点表：青铜 4 的 1⭐ = 0，王者 1⭐ = 92。
+   * 专挑「小段边界」和「大段交界」—— 满星算成下一小段 1⭐ 这类差一格的错，
+   * 只在边界上露出来，取中间值永远是 PASS 的。
+   */
+  const RANK_CASES = [
+    [0, '青铜 Ⅳ 1⭐'],
+    [2, '青铜 Ⅳ 3⭐'],
+    [3, '青铜 Ⅲ 1⭐'],
+    [11, '青铜 Ⅰ 3⭐'],
+    [12, '白银 Ⅳ 1⭐'],
+    [24, '黄金 Ⅳ 1⭐'],
+    [35, '黄金 Ⅰ 3⭐'],
+    [36, '白金 Ⅳ 1⭐'],
+    [51, '白金 Ⅰ 4⭐'],
+    [52, '钻石 Ⅴ 1⭐'],
+    [71, '钻石 Ⅰ 4⭐'],
+    [72, '大师 Ⅴ 1⭐'],
+    [91, '大师 Ⅰ 4⭐'],
+    [92, '王者 1⭐'],
+    [10090, '王者 9999⭐'],
+  ];
+  for (const [n, expect] of RANK_CASES) {
+    await setVal('[data-tb-input="rank-level"]', String(n));
+    await sleep(120);
+    const got = await rankText();
+    ok(got === expect, `D2 编号 ${n} → ${expect}`, got);
+  }
+
+  /* 负数 / 小数 / 超上限 都不该换算，也不该崩 */
+  for (const bad of ['abc', '-1', '12.5', '10091']) {
+    await setVal('[data-tb-input="rank-level"]', bad);
+    await sleep(120);
+    ok((await rankText()) === '', `D3 非法编号「${bad}」不换算`, await rankText());
+  }
+
+  /* ---------------- 反向：选段位看编号 ---------------- */
+  const setSelect = (sel, val) =>
+    evalJS(`(${SET_SELECT})(${JSON.stringify(sel)}, ${JSON.stringify(val)})`);
+
+  await setSelect('[data-rank-tier]', '0');
+  await sleep(150);
+  ok((await rowValue('编号')) === '0', 'D4 默认 青铜 Ⅳ 1⭐ = 0', await rowValue('编号'));
+
+  await setSelect('[data-rank-tier]', '4'); /* 钻石：5→1 */
+  await sleep(200);
+  ok((await rowValue('编号')) === '52', 'D5 切大段后落到 钻石 Ⅴ 1⭐ = 52', await rowValue('编号'));
+
+  await setSelect('[data-rank-sub]', '1');
+  await sleep(150);
+  ok((await rowValue('编号')) === '68', 'D6 钻石 Ⅰ 1⭐ = 68', await rowValue('编号'));
+
+  await setSelect('[data-rank-star]', '4');
+  await sleep(150);
+  ok((await rowValue('编号')) === '71', 'D7 钻石 Ⅰ 4⭐ = 71', await rowValue('编号'));
+
+  await setSelect('[data-rank-tier]', '6'); /* 王者：没有小段 */
+  await sleep(200);
+  ok((await rowValue('编号')) === '92', 'D8 王者 1⭐ = 92', await rowValue('编号'));
+
+  await setVal('[data-rank-star]', '123');
+  await sleep(200);
+  ok((await rowValue('编号')) === '214', 'D9 王者 123⭐ = 214', await rowValue('编号'));
+
+  /* 截图停在有结果的一格：截图是给人看的，停在提示文字上等于没截 */
+  await setVal('[data-tb-input="rank-level"]', '55');
+  await sleep(300);
 
   await sleep(400);
   const shot = await win.webContents.capturePage();

@@ -1,0 +1,137 @@
+/* ==================================================================
+   浮动小窗 · 独立窗口外壳（v1.1.28）
+   ==================================================================
+   小窗现在是真正的 BrowserWindow（frame:false），这一份管的是
+   「窗口本身」那层：整窗铺满、标题栏可拖、内容区滚动。
+   里面各页的紧凑排版仍在 mini.css 的 .mv-* 里，两边不重叠。
+
+   🔴 三条不能改的：
+     1. html/body/#root 必须 height:100% —— 否则 .miniwin 的
+        height:100vh 之外的百分比高度全部塌成 0，内容区不会滚动；
+     2. 标题栏 -webkit-app-region: drag；其中所有可点的东西必须 no-drag，
+        不然点按钮等于拖窗，按钮永远没有响应；
+     3. 不做圆角：窗口是不透明的（transparent:false，理由见 mini-win.ts），
+        CSS 圆角只会把四个角露成窗口底色，看起来像缺了块。
+   ================================================================== */
+
+html[data-win='mini-win'],
+html[data-win='mini-win'] body,
+html[data-win='mini-win'] #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-app);
+}
+
+.miniwin {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+/* ---------------- 标题栏（可拖动区） ---------------- */
+
+.miniwin-head {
+  flex: none;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 10px;
+  background: var(--bg-titlebar, var(--bg-panel));
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  /* 🔴 整条可拖：这是无边框窗口唯一的移动方式 */
+  -webkit-app-region: drag;
+}
+
+.miniwin-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  flex: none;
+}
+
+.miniwin-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.miniwin-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.miniwin-head .spacer {
+  flex: 1;
+}
+
+.miniwin-btn {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.miniwin-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.miniwin-btn:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+  color: var(--text-primary);
+}
+
+/* 置顶中：主色描边，一眼能看出「这扇窗压在最上面」 */
+.miniwin-btn.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.miniwin-btn.close:hover {
+  background: #e5484d;
+  color: #fff;
+}
+
+/* ---------------- 内容区 ---------------- */
+
+.miniwin-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* 首帧（设置还没回来）先淡入，避免主题切换时闪一下 */
+.miniwin[data-mini-ready='0'] .miniwin-body {
+  opacity: 0;
+}
+
+.miniwin .miniwin-body {
+  transition: opacity 0.12s ease-out;
+}

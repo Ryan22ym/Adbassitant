@@ -25,6 +25,7 @@ import { shutdownCrashWatch, syncCrashWatch } from './services/crash';
 import { refreshShortcutIcons } from './services/shortcuts';
 import { syncAutoLaunch } from './services/auto-launch';
 import { syncGlassCorners, resetGlassCornerCache } from './services/win-corners';
+import { setMiniWinMainWindowProvider } from './services/mini-win';
 import {
   centeredDefaultBounds,
   savedWindowState,
@@ -626,6 +627,13 @@ app.whenReady().then(() => {
   } catch {
     /* 清理失败不影响启动 */
   }
+
+  /*
+   * 浮动小窗（v1.1.28）要能找回主窗口：小窗标题栏上的「打开完整页面」
+   * 会聚焦主窗口并导航。用回调而不是直接传引用 —— 玻璃主题切换时
+   * 主窗口会被重建，闭包每次读到的必须是最新那一个。
+   */
+  setMiniWinMainWindowProvider(() => mainWindow);
 
   registerIpc();
 

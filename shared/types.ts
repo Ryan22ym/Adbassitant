@@ -168,6 +168,12 @@ export interface MirrorBarState {
   /** 机型（ro.product.model），拿不到时为 null */
   model: string | null;
   serial: string | null;
+  /**
+   * 手机当前是否处于飞行模式（v1.1.28）。
+   * 只作为按钮的点亮状态用：真值以手机读回来的 global airplane_mode_on 为准，
+   * 点按钮时先乐观翻转，1.2s 后再读一次校准（见 mirror-bar.ts 的 setMirrorAirplane）。
+   */
+  airplane: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1145,6 +1151,52 @@ export interface WindowBoundsState {
   maximized: boolean;
 }
 
+/* ------------------------------------------------------------------ */
+/* 浮动小窗（v1.1.28）                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 一扇小窗的对外状态。
+ *
+ * 只有这三件事需要让渲染层知道：开的是哪个页面、置顶没置顶、叫什么。
+ * 位置尺寸不在这里 —— 它由主进程直接管（窗口拖动是原生行为），
+ * 渲染层既不需要、也不该插手中途的每一帧。
+ */
+export interface MiniWinInfo {
+  /** 页面 id，与 SIDEBAR_IDS 同一套 */
+  id: string;
+  /** 置顶（alwaysOnTop） */
+  pinned: boolean;
+}
+
+/**
+ * 小窗几何（DIP，屏幕坐标）。
+ *
+ * 与主窗口的 WindowBoundsState 分开存：小窗可能是好几扇，每扇记自己那份，
+ * 而且它的坐标是**屏幕坐标**（可以拖到主窗口外面），与窗口内视口坐标完全两码事。
+ */
+export interface MiniWinBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 跨窗口共享的界面状态（v1.1.28）。
+ *
+ * 只放「主窗口和小窗必须看到同一个值」的两项。业务状态不进这里 ——
+ * 投屏 / 弱网 / 连点器的真相本来就在主进程，两边各自拉取即可。
+ */
+export interface SharedUiState {
+  /** 当前选中的设备 serial（空串 = 未选） */
+  currentSerial: string;
+  /** 主题（小窗要跟主窗口一个配色，否则白底窗飘在深色界面上很扎眼） */
+  theme: ThemeId;
+  /** 主题色 */
+  accent: AccentId;
+}
+
 export interface AppSettings {
   theme: ThemeId;
   /** 主题色（v1.1.2）。决定 --accent 及整套界面底色，见 AccentId */
@@ -1390,6 +1442,66 @@ export interface AppSettings {
    * 横竖屏分开记：两种方向下窗口的形状完全不同，共用一条记录必然对不上。
    */
   mirrorPinRecords: MirrorPinRecordMap;
+
+  /* ---------------- 导航增强（v1.1.27） ---------------- */
+
+  /**
+   * 左侧功能栏的**拖拽顺序**（用户拖出来的结果）。
+   *
+   * 与 Conf/layout.json 的 `sidebar.order` 是「底稿 + 覆盖」的关系：
+   * 底稿仍是配置文件里的顺序（没拖过的项按它排），这里只记用户亲手挪过的结果。
+   * 空数组 = 没拖过，完全按配置文件。
+   *
+   * 🔴 只有 `navAdvanced` 生效（见下）时才会被读取 —— 功能关掉时侧栏回到配置文件顺序，
+   *    这份数据保留着不删，下次打开功能立刻恢复。
+   */
+  navOrder: string[];
+
+  /**
+   * 「导航增强」总开关：拖拽排序 + 页面浮动小窗口。
+   *
+   * 与其它设置不同，它是**双源**的：界面上有开关，Conf/features.json 里
+   * `features.ui.navAdvanced` 也是一个开关。解析规则与一致性同步见
+   * electron/services/nav-advanced.ts —— 一句话：两者不一致时以文件为准，
+   * 解析完立刻把同一份值写回两边，所以永远不会出现「界面开着、文件关着」。
+   *
+   * 🔴 **改了要重启才生效**：本次启动的生效值是进程内缓存的（getNavAdvanced），
+   *    改完只落盘，立刻返回的 state 会带 restartPending=true，界面据此提示。
+   */
+  navAdvanced: boolean;
+
+  /*
+   * 浮动小窗的位置尺寸（v1.1.28）
+   */
+  /**
+   * 每个页面小窗最后一次的位置与尺寸，key = 页面 id。
+   *
+   * 为什么要落盘：小窗是**独立窗口**，用户把它拖到副屏角落就是在布置自己的工作台，
+   * 关掉再开、重启程序都该回到原处 —— 每次弹在鼠标旁会让人反复搬窗。
+   * 与主窗口的 windowBounds 同一种性质，只是按页面分了多份。
+   */
+  miniWinBounds: Record<string, MiniWinBounds>;
+}
+
+/**
+ * 「导航增强」开关的完整状态（主进程 → 渲染层）。
+ *
+ * 为什么不是一个 boolean：界面要同时表达四件事 —— 现在生效的是什么、
+ * 下次启动会是什么、这个值是谁说了算、要不要提示重启。
+ */
+export interface NavAdvancedState {
+  /** 本次启动**已生效**的值（进程内缓存，改开关不会立刻变） */
+  effective: boolean;
+  /** 已落盘的值（= 下次启动会生效的值） */
+  persisted: boolean;
+  /** settings.json 里的值（解析前的那份，仅供诊断） */
+  setting: boolean;
+  /** Conf/features.json 里的值（解析前的那份，仅供诊断） */
+  file: boolean;
+  /** 生效值的来源 */
+  source: 'settings' | 'file' | 'default';
+  /** true = 已经改了但还没重启（persisted !== effective） */
+  restartPending: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1932,11 +2044,13 @@ export const IPC = {
   /*
    * 投屏窗口功能栏（v1.1.22）—— 挂在 scrcpy 那个独立窗口右侧的悬浮条。
    * 位置/置顶/锁尺寸全在 Win32 层（见 services/mirror-win.ts），
-   * 这里只暴露「读状态 / 钉住 / 解除 / 清记录」四个动作。
+   * 这里只暴露「读状态 / 钉住 / 解除 / 清记录 / 飞行模式」几个动作。
    */
   MIRROR_BAR_STATE: 'mirrorBar:state',
   MIRROR_BAR_SET_PIN: 'mirrorBar:setPin',
   MIRROR_BAR_CLEAR_PINS: 'mirrorBar:clearPins',
+  /** 一键开关手机飞行模式（v1.1.28） */
+  MIRROR_BAR_SET_AIRPLANE: 'mirrorBar:setAirplane',
 
   /* 文件 */
   FILE_PUSH: 'file:push',
@@ -2142,6 +2256,43 @@ export const IPC = {
   /** 返回用户可改的那份 Conf 目录绝对路径（设置页「打开配置文件夹」用） */
   CONF_DIR: 'conf:dir',
 
+  /*
+   * 导航增强开关（v1.1.27）：拖拽排序 + 浮动小窗口。
+   *
+   * 它同时有两个开关（设置页 + Conf/features.json），所以不能只走 SETTINGS_SET ——
+   * 需要主进程把两边对齐后再下发一份带「当前生效值 / 重启待生效」的状态。
+   */
+  NAV_ADV_GET: 'nav:advanced',
+  NAV_ADV_SET: 'nav:advancedSet',
+
+  /*
+   * 浮动小窗（v1.1.28）：从小窗升级为**独立系统窗口**。
+   *
+   * 为什么必须换：v1.1.27 的小窗是应用内的 fixed DOM 层，只能浮在主窗口矩形内；
+   * 用户要求「能拖到屏幕任意位置，不局限在软件页内」—— 那已经不是一层 CSS 能做的事，
+   * 只能由主进程建 BrowserWindow（与 mirror-bar / mirror-splash 同一套办法）。
+   *
+   * 窗口的生命周期、位置、置顶全部归主进程管；渲染层的 store 只保存
+   * 「现在有哪些窗开着」，通过 PUSH_MINI_WINS 同步。
+   */
+  MINI_WIN_OPEN: 'miniWin:open',
+  MINI_WIN_CLOSE: 'miniWin:close',
+  MINI_WIN_PIN: 'miniWin:pin',
+  MINI_WIN_LIST: 'miniWin:list',
+  /** 小窗里点「打开完整页面」→ 主窗口导航并聚焦 */
+  MINI_WIN_GO_MAIN: 'miniWin:goMain',
+
+  /*
+   * 跨窗口共享的界面状态（v1.1.28）。
+   *
+   * 主窗口与小窗是两个渲染进程，各自的 zustand store 互不相通 ——
+   * 不同步的话，小窗里选了设备 A，主窗口还停在 B（反之亦然）。
+   * 这里只同步「界面级」的两个值：当前设备、主题。业务状态（投屏 / 弱网 / 连点器）
+   * 本来就在主进程里，两边各自拉取即是同一份真相，不需要走这条通道。
+   */
+  UI_SHARED_GET: 'ui:sharedGet',
+  UI_SHARED_SET: 'ui:sharedSet',
+
   /* 窗口外观（v1.1.3）：标题栏是自绘的，底色要跟着主题色走 */
   WINDOW_SET_TITLEBAR: 'window:setTitlebar',
   /*
@@ -2241,6 +2392,12 @@ export const IPC = {
   PUSH_AI_CRASH_STATUS: 'push:aiCrashStatus',
   /** AI 每执行完一条 adb 指令就推一次（v1.1.15），界面上实时看到它在干什么 */
   PUSH_AI_AGENT_STEP: 'push:aiAgentStep',
+  /** 浮动小窗列表变化（v1.1.28）：开 / 关 / 置顶状态变了，主窗口据此同步入口状态 */
+  PUSH_MINI_WINS: 'push:miniWins',
+  /** 跨窗口界面状态变化（v1.1.28）：当前设备 / 主题 */
+  PUSH_UI_SHARED: 'push:uiShared',
+  /** 让主窗口导航到指定路径（v1.1.28）：小窗里点「打开完整页面」时用 */
+  PUSH_NAV_TO: 'push:navTo',
 } as const;
 
 /**

@@ -9,6 +9,8 @@
  *   ④ 横屏、竖屏**各记一份**；
  *   ⑤ 默认开，设置页能单独关（关掉 = 解除 pin + 清空全部记录）；
  *   ⑥ 功能栏只在**拖动投屏窗口时**或**鼠标靠近**时出现，静置后自己淡出。
+ *   ⑦ 第二个按钮：一键开关手机飞行模式（v1.1.28）—— 点一次开，再点一次关。
+ *      开着时按钮点亮，状态每 6s 从手机读一次（用户也可能在手机上手动改）。
  *
  * 🔴 为什么要单开一个 Electron 窗口：scrcpy 是别的进程的窗口，HTML 画不进去。
  *    功能栏只能是「一个透明无边框小窗，贴在它右边的空白处，跟着它走」。
@@ -52,12 +54,16 @@ import type {
 const BAR_WIDTH_DIP = 56;
 /**
  * 每个功能按钮占的高度（DIP）。
- * 现在只有 pin 一个按钮 = 一条 56×56 的小方块，竖着居中贴在投屏窗口右侧。
- * 以后接别的功能：加一项 `BAR_SLOTS`，窗口高度和竖排布局自动跟上。
+ * 现在两项：pin（下）+ 飞行模式（上），窗口高度和竖排布局自动跟着 BAR_SLOTS 走。
+ * 以后再加别的功能：只改 BAR_SLOTS，窗口高度、CSS 的 gap 都不用动
+ * （`.mbar` 是 flex column + justify-center，多一个按钮就往下排一格）。
  */
 const BAR_SLOT_DIP = 56;
-const BAR_SLOTS = 1;
+const BAR_SLOTS = 2;
 const BAR_HEIGHT_DIP = BAR_SLOT_DIP * BAR_SLOTS;
+
+/** 飞行模式状态的轮询间隔（ms）—— 用户可能在手机上手动改，按钮得跟上 */
+const AIRPLANE_POLL_MS = 6000;
 
 /** 拖动/鼠标靠近之后，功能栏再停留这么久（ms）才淡出 */
 const REVEAL_MS = 1400;
@@ -77,6 +83,11 @@ let orientation: MirrorOrientation | null = null;
 let lastRect: MirrorWinRect | null = null;
 /** 投屏窗口当前是否真的显示着（隐藏期间不要去 pin，见 maybeApplyRecord） */
 let lastVisible = false;
+/** 手机当前飞行模式状态（按钮点亮态；真值以手机读回来的为准） */
+let airplane = false;
+/** 切换飞行模式时禁止并发（连点两下会互相打架） */
+let airplaneBusy = false;
+let airplaneTimer: NodeJS.Timeout | null = null;
 /** 上一次「该露脸」的时刻：拖动窗口、鼠标靠近、点按钮都会刷新它 */
 let revealedAt = 0;
 /** 功能栏当前是不是可见（避免每 tick 都调 setOpacity） */
@@ -126,6 +137,7 @@ export function getMirrorBarState(): MirrorBarState {
     orientation,
     model,
     serial: serial || null,
+    airplane,
   };
 }
 
@@ -525,12 +537,22 @@ export function attachMirrorBar(opts: { pid: number; serial: string }): void {
   lastVisible = false;
   revealedAt = 0;
   revealedOnce = false;
+  airplane = false;
+  airplaneBusy = false;
   restored.clear();
   restoreTries.clear();
 
   startMirrorWin(opts.pid);
   offState = onMirrorWinState(handleState);
   tickTimer = setInterval(tick, TICK_MS);
+
+  /*
+   * 飞行模式状态：先立刻读一次（按钮别一上来就是灭的），之后每 6s 跟一次。
+   * 只在投屏期间轮询 —— 没投屏就没有功能栏，也没有读它的必要。
+   */
+  void refreshAirplane();
+  if (airplaneTimer) clearInterval(airplaneTimer);
+  airplaneTimer = setInterval(() => void refreshAirplane(), AIRPLANE_POLL_MS);
 
   // 机型单独问一次（要按机型分开记，不能按 serial）；失败就退化成 serial
   void (async () => {
@@ -571,6 +593,10 @@ export function detachMirrorBar(savePin = true): void {
     clearInterval(tickTimer);
     tickTimer = null;
   }
+  if (airplaneTimer) {
+    clearInterval(airplaneTimer);
+    airplaneTimer = null;
+  }
   offState?.();
   offState = null;
   stopMirrorWin();
@@ -583,6 +609,8 @@ export function detachMirrorBar(savePin = true): void {
   orientation = null;
   lastRect = null;
   lastVisible = false;
+  airplane = false;
+  airplaneBusy = false;
   restored.clear();
   restoreTries.clear();
   emitChange();
@@ -635,11 +663,152 @@ export function clearMirrorPins(): MirrorBarState {
   return getMirrorBarState();
 }
 
+/* ------------------------------------------------------------------ */
+/* 飞行模式（v1.1.28）                                                 */
+/* ------------------------------------------------------------------ */
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * serial 是不是网络连接（`192.168.1.7:5555` / `adb-xxx._adb-tls-connect._tcp`）。
+ *
+ * 🔴 网络连接的设备**不能**开飞行模式：飞行模式会关掉 Wi-Fi，adb 立刻断，
+ *    投屏跟着黑掉，而且用户再也没法通过这条功能栏点回来（连接都没了）。
+ *    USB 连接不受影响 —— adb 走 USB，跟手机的 radio 状态无关。
+ */
+export function isWirelessSerial(s: string): boolean {
+  const v = (s || '').trim();
+  return v.includes(':') || v.includes('_adb-tls') || v.includes('._tcp');
+}
+
+/**
+ * 读手机当前飞行模式；读不到返回 null（老机型 / 命令被拒），别当成 false。
+ *
+ * 两条查询路：
+ *   ① Android 11+ 的 `cmd connectivity airplane-mode` —— 不带参数即查询，
+ *      输出 `enabled` / `disabled`，问的是 ConnectivityService 的真实状态
+ *      （2026-11-20 在 OPPO CPH2579 / Android 13 上实测可用）；
+ *   ② 回退读 global 设置，4.2 起都有。
+ */
+async function readAirplane(s: string): Promise<boolean | null> {
+  try {
+    const res = await runAdb(['-s', s, 'shell', 'cmd', 'connectivity', 'airplane-mode'], {
+      silent: true,
+      timeout: 6000,
+    });
+    const v = (res?.stdout || '').trim().toLowerCase();
+    if (v === 'enabled') return true;
+    if (v === 'disabled') return false;
+  } catch {
+    /* 老系统没有这个子命令，往下走 */
+  }
+  try {
+    const res = await runAdb(
+      ['-s', s, 'shell', 'settings', 'get', 'global', 'airplane_mode_on'],
+      { silent: true, timeout: 6000 },
+    );
+    const v = (res?.stdout || '').trim();
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {
+    /* 读不到就当未知 */
+  }
+  return null;
+}
+
+/**
+ * 把手机切到目标状态，并**核对**有没有真的切过去。
+ *
+ * ① 先走 Android 11+ 的官方 shell 命令 —— 它直接改 ConnectivityService 的状态，
+ *    顺带把 global 设置同步好，实测 Android 13 上立即可用；
+ * ② 不生效（老系统没这个子命令、或被策略挡了）再回退：
+ *    `settings put global airplane_mode_on` + `am broadcast AIRPLANE_MODE`。
+ *    system_server 的 AirplaneModeObserver 监听那个键，值变了就切 radio；
+ *    4.x~7.x 还得靠广播补刀，state 相同时广播幂等，多发一次没副作用。
+ */
+async function applyAirplane(s: string, on: boolean): Promise<void> {
+  const cmd = await runAdb(
+    ['-s', s, 'shell', 'cmd', 'connectivity', 'airplane-mode', on ? 'enable' : 'disable'],
+    { silent: true, timeout: 8000 },
+  );
+  if (cmd.ok) {
+    // 开/关 radio 要几百毫秒，等它落下来再核对
+    await sleep(600);
+    if ((await readAirplane(s)) === on) return;
+  }
+
+  const put = await runAdb(
+    ['-s', s, 'shell', 'settings', 'put', 'global', 'airplane_mode_on', on ? '1' : '0'],
+    { silent: true, timeout: 8000 },
+  );
+  if (!put.ok) throw new Error((put.stderr || '').trim() || '设备拒绝了飞行模式设置');
+
+  await runAdb(
+    [
+      '-s',
+      s,
+      'shell',
+      'am',
+      'broadcast',
+      '-a',
+      'android.intent.action.AIRPLANE_MODE',
+      '--ez',
+      'state',
+      on ? 'true' : 'false',
+    ],
+    { silent: true, timeout: 8000 },
+  );
+
+  await sleep(700);
+  if ((await readAirplane(s)) !== on) {
+    throw new Error('手机没有接受飞行模式切换（可能被系统策略拦住）');
+  }
+}
+
+/** 从手机读一次状态，跟缓存不一致才推送（轮询用，别每 6s 白推一次） */
+async function refreshAirplane(): Promise<void> {
+  const s = serial;
+  if (!s || airplaneBusy) return;
+  const v = await readAirplane(s);
+  if (v === null) return;
+  // 读的这 100ms 里可能换了设备 / 用户点了按钮 —— 读数作废
+  if (s !== serial || airplaneBusy) return;
+  if (v !== airplane) {
+    airplane = v;
+    emitChange();
+  }
+}
+
+/**
+ * 功能栏上的飞行模式按钮（一键开 / 再点关）。
+ * 切换期间按钮 disabled（渲染层 busy），这里再加一道 airplaneBusy 兜底。
+ */
+export async function setMirrorAirplane(on: boolean): Promise<MirrorBarState> {
+  const s = serial;
+  if (!s) throw new Error('还没有设备在投屏');
+  if (isWirelessSerial(s)) throw new Error('无线连接的设备不能开飞行模式（会直接断开投屏）');
+  if (airplaneBusy) return getMirrorBarState();
+
+  airplaneBusy = true;
+  revealedAt = Date.now();
+  show();
+  try {
+    await applyAirplane(s, !!on);
+    airplane = !!on;
+    log('info', '投屏', `手机飞行模式已${on ? '打开' : '关闭'}`);
+  } finally {
+    airplaneBusy = false;
+  }
+  emitChange();
+  return getMirrorBarState();
+}
+
 /**
  * 设置开关同步（main.ts 的 settingsChangedHook 调）。
  * 关闭 = 立刻解除 pin + 清空全部记录 + 拆掉功能栏。
- */
-export function syncMirrorBarSetting(enabled: boolean): void {
+ */export function syncMirrorBarSetting(enabled: boolean): void {
   if (enabled) return;
   if (agentPid) {
     if (pinned) unpinMirrorWin();

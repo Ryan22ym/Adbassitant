@@ -1,8 +1,15 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useApp } from '@/store/app';
 import { useUiConf } from '@/lib/ui-conf';
-import { featureOnOf, SIDEBAR_LABELS } from '@shared/ui-conf';
+import {
+  applyUserOrder,
+  featureOnOf,
+  SIDEBAR_IDS,
+  SIDEBAR_LABELS,
+} from '@shared/ui-conf';
+import { useMiniWindows } from '@/lib/mini-window';
 import { Badge, Button } from './ui';
 import { Icon } from './icons';
 import brandIcon from '@/assets/app-icon.png';
@@ -75,12 +82,20 @@ export function Sidebar() {
   const brandMark = THEME_BRAND[theme] ?? brandIcon;
 
   /*
-   * 导航项 = 定义表 ∩ Conf。
-   * 顺序取 layout.sidebar.order（主进程已把非法 id 滤掉、缺失项补在后面），
-   * 再用 features.nav 把关掉的入口摘掉。
+   * 导航项 = 定义表 ∩ Conf ∩ features。
+   *
+   * 顺序有**两层**（v1.1.27 起）：
+   *   底稿 = Conf/layout.json 的 sidebar.order（没拖过的项按它排）；
+   *   覆盖 = settings.json 的 navOrder（用户在侧栏里拖出来的结果）。
+   * 只有「导航增强」生效时才吃覆盖值 —— 功能关掉后侧栏立刻回到配置文件顺序，
+   * 但 navOrder 不删，重新打开功能立刻恢复上次拖的形态。
    */
   const conf = useUiConf();
-  const navItems = conf.layout.sidebar.order
+  const navAdvanced = useApp((s) => s.navAdvanced.effective);
+  const settings = useApp((s) => s.settings);
+  const savedOrder = navAdvanced ? settings?.navOrder ?? [] : [];
+  const order = applyUserOrder(conf.layout.sidebar.order, savedOrder, SIDEBAR_IDS);
+  const navItems = order
     .map((id) => ({ id, def: NAV_DEFS[id] }))
     .filter((x): x is { id: string; def: NavDef } => !!x.def)
     .filter((x) => featureOnOf(conf, 'nav', x.id));
@@ -137,49 +152,19 @@ export function Sidebar() {
         </button>
       </div>
 
-      <nav className="sidebar-nav">
-        {navItems.map(({ def: item }) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.exact}
-            /* 收起后文字标签不显示，用原生 tooltip 把功能名补回来 */
-            title={collapsed ? item.label : undefined}
-            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-          >
-            {/*
-              放大版同款图标，只当底图（v1.1.17 明日方舟主题）：
-              同一枚 svg 再渲染一次，CSS 放到 62px、灰化、压到 9% 不透明度，
-              由外层 span 裁掉下半截，露出「上半个放大图标」当每一格的刻印。
-              🔴 不用伪元素是因为图标是 React 节点、伪元素拿不到；
-                 不用 background-image 引 png 是因为要跟着图标集同步改。
-              ⚠️ 除 arknights 外的主题靠 CSS display:none 关掉，DOM 常驻不影响它们。
-            */}
-            <span className="nav-ghost" aria-hidden="true">
-              {item.icon}
-            </span>
-            <span className="nav-icon">{item.icon}</span>
-            <span className="nav-label">{item.label}</span>
-            {item.to === '/' && onlineCount > 0 && (
-              <span className="nav-count">{onlineCount}</span>
-            )}
-            {item.to === '/settings' && updateAvailable && (
-              /* 只说「是版本更新」这一件事：一枚红字 New（收起态塞不下，那行隐藏） */
-              <span className="nav-new" title="有新版本可以更新">
-                New
-              </span>
-            )}
-            {item.to === '/ai' && crashUnread > 0 && (
-              /* 崩溃报告未读：一枚纯红点（收起态由 CSS 挪到图标右上角） */
-              <span
-                className="nav-dot"
-                title={`有 ${crashUnread} 份崩溃分析报告待查看`}
-                data-crash-dot="1"
-              />
-            )}
-          </NavLink>
-        ))}
-      </nav>
+      {/*
+        导航本体交给 NavList：它要管拖拽（v1.1.27）、小窗入口和右键菜单，
+        继续堆在这个组件里会让 Sidebar 变成一个什么都做的巨型函数。
+      */}
+      <NavList
+        items={navItems}
+        allIds={order}
+        collapsed={collapsed}
+        onlineCount={onlineCount}
+        updateAvailable={updateAvailable}
+        crashUnread={crashUnread}
+        enhanced={navAdvanced}
+      />
 
       {/*
         左下角「检测到新版本」小卡片（v1.1.15）。
@@ -198,6 +183,448 @@ export function Sidebar() {
     </aside>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* 导航列表（拖拽排序 / 浮动小窗入口 / 右键菜单，v1.1.27）              */
+/* ------------------------------------------------------------------ */
+
+/** 导航 id → 图标。小窗标题栏等处复用；唯一真相仍是 NAV_DEFS */
+export const NAV_ICONS: Record<string, React.ReactNode> = Object.fromEntries(
+  Object.entries(NAV_DEFS).map(([id, d]) => [id, d.icon]),
+);
+
+interface NavListProps {
+  items: { id: string; def: NavDef }[];
+  /** 完整顺序（含被 features 关掉的项）—— 落库时要保住它们的相对位置 */
+  allIds: string[];
+  collapsed: boolean;
+  onlineCount: number;
+  updateAvailable: boolean;
+  crashUnread: number;
+  enhanced: boolean;
+}
+
+/**
+ * 左侧导航列表。
+ *
+ * 🔴 拖拽用的是**指针事件 + 位移补偿**，不是 HTML5 draggable：
+ *    draggable 的落点反馈由浏览器画（一张半透明快照），既跟不上主题色，
+ *    也没有「邻居让位」的过渡；而且它在 Electron 里会和文件拖放（整窗安装）打架。
+ *
+ * 视觉上的做法（三件事配合才顺）：
+ *   1. 被拖的那格 `translateY(跟随指针)`，关掉 transition —— 必须跟手，不能有延迟；
+ *   2. 其余格子按「让位方向」`translateY(±step)`，**带 0.18s 过渡** —— 让位是动画；
+ *   3. 松手时先换顺序、**同一帧内清掉所有 transform**（.settling 关掉过渡），
+ *      于是「换完的位置」和「拖动中的位置」逐像素重合，看不出跳变。
+ *
+ * 键盘：Alt+↑/↓ 移动当前格 —— 拖拽不能是唯一手段（无障碍要求，也给精确调整留路）。
+ */
+function NavList({
+  items,
+  allIds,
+  collapsed,
+  onlineCount,
+  updateAvailable,
+  crashUnread,
+  enhanced,
+}: NavListProps) {
+  const openMini = useMiniWindows((s) => s.open);
+  /** 已开小窗的页面 id（v1.1.28：给侧栏打标记 + 右键菜单切换文案） */
+  const miniWins = useMiniWindows((s) => s.wins);
+  const closeMini = useMiniWindows((s) => s.close);
+  const listRef = useRef<HTMLElement>(null);
+
+  /**
+   * 拖动中的临时形态（松手即清空，真实顺序落在 settings.navOrder 里）。
+   *
+   * 两个区共用一个状态：
+   *   outside=false → 在功能栏里，按 over 让位排序；
+   *   outside=true  → 指针已越过功能栏右边缘，**不再排序**，改成「松手开小窗」。
+   */
+  const [drag, setDrag] = useState<{
+    id: string;
+    from: number;
+    over: number;
+    dy: number;
+    step: number;
+    outside: boolean;
+    /** 拖影位置（跟随指针），只在 outside 时有意义 */
+    x: number;
+    y: number;
+  } | null>(null);
+  /** 提交顺序的那两帧里关掉过渡，避免「布局已换 + transform 还在动画」的错位 */
+  const [settling, setSettling] = useState(false);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  const dragRef = useRef<{
+    id: string;
+    from: number;
+    over: number;
+    startX: number;
+    startY: number;
+    step: number;
+    centers: number[];
+    top: number;
+    bottom: number;
+    pointerId: number;
+    moved: boolean;
+    /** 功能栏右边缘（视口坐标）：越过它就切到「开小窗」模式 */
+    barRight: number;
+  } | null>(null);
+  /** 拖完那一下会跟一次 click（会触发导航），吃掉它 */
+  const suppressClick = useRef(false);
+
+  /** 落库：先改 store 让界面定格，再异步写盘（失败也不回滚，最多下次启动弹回） */
+  const commit = useCallback(
+    (nextVisible: string[]) => {
+      const st = useApp.getState();
+      const s = st.settings;
+      const hidden = allIds.filter((id) => !nextVisible.includes(id));
+      const next = [...nextVisible, ...hidden];
+      setSettling(true);
+      window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() => setSettling(false)),
+      );
+      if (!s) return;
+      st.setSettings({ ...s, navOrder: next });
+      void window.adbApi.setSettings({ navOrder: next });
+    },
+    [allIds],
+  );
+
+  /** Alt+↑/↓ 把某一格上移/下移一位 */
+  const moveBy = (id: string, delta: number) => {
+    const ids = items.map((x) => x.id);
+    const from = ids.indexOf(id);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    const next = [...ids];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    commit(next);
+  };
+
+  /** 指针是否已经离开左侧功能栏（右侧留 6px 缓冲，贴边时不要在两种模式间跳） */
+  function isOutside(ev: PointerEvent, barRight: number): boolean {
+    return ev.clientX > barRight + 6;
+  }
+
+  function onPointerMove(ev: PointerEvent) {
+    const d = dragRef.current;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    const dx = ev.clientX - d.startX;
+    const dy = ev.clientY - d.startY;
+    if (!d.moved) {
+      // 5px 阈值（两轴取大者）：轻点（导航）和拖动必须分得开，否则点一下就把顺序改了
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 5) return;
+      d.moved = true;
+    }
+
+    /*
+     * 拖出去 = 准备开小窗。
+     * 这一支要**立刻停止排序**（over 归位、dy 归零），否则用户看着一格在列表里
+     * 让位、松手却弹出窗口，两套反馈互相打脸。列表里那一格改成「被拎走」的半透明态。
+     */
+    if (isOutside(ev, d.barRight)) {
+      setDrag({
+        id: d.id,
+        from: d.from,
+        over: d.from,
+        dy: 0,
+        step: d.step,
+        outside: true,
+        x: ev.clientX,
+        y: ev.clientY,
+      });
+      return;
+    }
+
+    // 落点 = 中心离指针最近的那一格
+    let over = d.from;
+    let best = Number.POSITIVE_INFINITY;
+    d.centers.forEach((c, i) => {
+      const dist = Math.abs(c - ev.clientY);
+      if (dist < best) {
+        best = dist;
+        over = i;
+      }
+    });
+    d.over = over;
+    // 拖动位移限制在列表内：拖出侧栏外面时格子不该跟着飞到页面上
+    const base = d.centers[d.from];
+    const clamped = Math.min(Math.max(dy, d.top - base), d.bottom - base);
+    setDrag({
+      id: d.id,
+      from: d.from,
+      over,
+      dy: clamped,
+      step: d.step,
+      outside: false,
+      x: ev.clientX,
+      y: ev.clientY,
+    });
+  }
+
+  function onPointerUp(ev: PointerEvent) {
+    const d = dragRef.current;
+    if (!d) return;
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+    dragRef.current = null;
+
+    if (d.moved && ev.pointerId === d.pointerId) {
+      suppressClick.current = true;
+      window.setTimeout(() => {
+        suppressClick.current = false;
+      }, 0);
+
+      /*
+       * 拖到功能栏外面松手 = 把这个页面开成浮动小窗，落在**松手的位置**。
+       * 顺序一点不改 —— 这是与「在栏内拖动 = 排序」唯一的分界。
+       */
+      if (isOutside(ev, d.barRight)) {
+        openMini(d.id);
+        setDrag(null);
+        return;
+      }
+
+      if (d.over !== d.from) {
+        const ids = items.map((x) => x.id);
+        const next = [...ids];
+        const [moved] = next.splice(d.from, 1);
+        next.splice(d.over, 0, moved);
+        setDrag(null);
+        commit(next);
+        return;
+      }
+    }
+    setDrag(null);
+  }
+
+  const onPointerDown = (e: React.PointerEvent, id: string, index: number) => {
+    if (!enhanced || e.button !== 0) return;
+    // 小窗按钮自己处理点击
+    if ((e.target as HTMLElement).closest('[data-mini-open]')) return;
+    const root = listRef.current;
+    if (!root) return;
+    const slots = Array.from(root.querySelectorAll<HTMLElement>('[data-nav-item]'));
+    if (slots.length < 2) return;
+    const rects = slots.map((n) => n.getBoundingClientRect());
+    const centers = rects.map((r) => r.top + r.height / 2);
+    /*
+     * 功能栏右边缘：判「拖出去」就看它。
+     * 用 .sidebar 而不是 .sidebar-nav —— 后者被滚动容器裁过，右边还差一截内边距，
+     * 拿它做边界会让「刚出列表但还在栏里」被误判成拖出去。
+     */
+    const bar = root.closest('.sidebar') as HTMLElement | null;
+    const barRight = (bar ?? root).getBoundingClientRect().right;
+    dragRef.current = {
+      id,
+      from: index,
+      over: index,
+      startX: e.clientX,
+      startY: e.clientY,
+      step: rects.length > 1 ? rects[1].top - rects[0].top : rects[0].height + 2,
+      centers,
+      top: rects[0].top,
+      bottom: rects[rects.length - 1].bottom,
+      pointerId: e.pointerId,
+      moved: false,
+      barRight,
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+  };
+
+  /* 右键菜单：点空白处 / Esc 关掉 */
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
+
+  /* 功能被关掉（重启后）时清掉残留的拖动/菜单形态 */
+  useEffect(() => {
+    if (!enhanced) {
+      setDrag(null);
+      setMenu(null);
+    }
+  }, [enhanced]);
+
+  return (
+    <>
+      <nav
+        ref={listRef}
+        className={`sidebar-nav${drag ? ' is-dragging' : ''}${settling ? ' settling' : ''}`}
+        data-nav-enhanced={enhanced ? '1' : '0'}
+      >
+        {items.map(({ id, def: item }, i) => {
+          const dragged = drag?.id === id;
+          /** 已经被拖到功能栏外面：列表里这一格留在原地淡下去，跟着指针走的是 .nav-tear 拖影 */
+          const tearing = dragged && !!drag?.outside;
+          let shift = 0;
+          if (drag && !dragged && !drag.outside) {
+            if (drag.from < drag.over && i > drag.from && i <= drag.over) shift = -drag.step;
+            else if (drag.from > drag.over && i >= drag.over && i < drag.from) shift = drag.step;
+          }
+          return (
+            <div
+              key={id}
+              className={`nav-slot${dragged ? ' dragging' : ''}${tearing ? ' tearing' : ''}${
+                shift ? ' shifting' : ''
+              }`}
+              data-nav-item={id}
+              style={
+                tearing
+                  ? undefined
+                  : dragged
+                    ? { transform: `translateY(${drag!.dy}px)` }
+                    : shift
+                      ? { transform: `translateY(${shift}px)` }
+                      : undefined
+              }
+              onPointerDown={enhanced ? (e) => onPointerDown(e, id, i) : undefined}
+              onClickCapture={(e) => {
+                if (suppressClick.current) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }
+              }}
+              onContextMenu={
+                enhanced
+                  ? (e) => {
+                      e.preventDefault();
+                      setMenu({ id, x: e.clientX, y: e.clientY });
+                    }
+                  : undefined
+              }
+            >
+              <NavLink
+                to={item.to}
+                end={item.exact}
+                /* 收起后文字标签不显示，用原生 tooltip 把功能名补回来 */
+                title={collapsed ? item.label : undefined}
+                className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                draggable={false}
+                onKeyDown={
+                  enhanced
+                    ? (e) => {
+                        if (!e.altKey) return;
+                        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+                        e.preventDefault();
+                        moveBy(id, e.key === 'ArrowUp' ? -1 : 1);
+                      }
+                    : undefined
+                }
+              >
+                {/*
+                  放大版同款图标，只当底图（v1.1.17 明日方舟主题）：
+                  同一枚 svg 再渲染一次，CSS 放到 62px、灰化、压到 9% 不透明度，
+                  由外层 span 裁掉下半截，露出「上半个放大图标」当每一格的刻印。
+                  🔴 不用伪元素是因为图标是 React 节点、伪元素拿不到；
+                     不用 background-image 引 png 是因为要跟着图标集同步改。
+                  ⚠️ 除 arknights 外的主题靠 CSS display:none 关掉，DOM 常驻不影响它们。
+                */}
+                <span className="nav-ghost" aria-hidden="true">
+                  {item.icon}
+                </span>
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+                {item.to === '/' && onlineCount > 0 && (
+                  <span className="nav-count">{onlineCount}</span>
+                )}
+                {item.to === '/settings' && updateAvailable && (
+                  /* 只说「是版本更新」这一件事：一枚红字 New（收起态塞不下，那行隐藏） */
+                  <span className="nav-new" title="有新版本可以更新">
+                    New
+                  </span>
+                )}
+                {item.to === '/ai' && crashUnread > 0 && (
+                  /* 崩溃报告未读：一枚纯红点（收起态由 CSS 挪到图标右上角） */
+                  <span
+                    className="nav-dot"
+                    title={`有 ${crashUnread} 份崩溃分析报告待查看`}
+                    data-crash-dot="1"
+                  />
+                )}
+                {/*
+                  已在浮动小窗中打开（v1.1.28）。
+                  🔴 必须有这个标记：小窗是独立窗口，用户把它拖到副屏或别的窗口后面之后，
+                     侧栏是**唯一**能确认「它还开着」的地方，也是右键关掉它的入口。
+                */}
+                {miniWins.some((w) => w.id === id) && (
+                  <span className="nav-mini-flag" title="已在浮动小窗中打开" data-mini-flag={id} />
+                )}
+              </NavLink>
+
+            </div>
+          );
+        })}
+      </nav>
+
+      {menu && (
+        <div
+          className="nav-menu"
+          style={{ left: menu.x, top: menu.y }}
+          data-nav-menu={menu.id}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="nav-menu-item"
+            data-mini-menu-open={menu.id}
+            onClick={() => {
+              if (miniWins.some((w) => w.id === menu.id)) closeMini(menu.id);
+              else openMini(menu.id);
+              setMenu(null);
+            }}
+          >
+            {Icon.popOut}
+            <span>
+              {miniWins.some((w) => w.id === menu.id) ? '关闭浮动小窗' : '在浮动小窗中打开'}
+            </span>
+          </button>
+          <div className="nav-menu-hint">
+            拖到功能栏外面松手可以开成小窗；在栏内拖动则是调整顺序（Alt+↑/↓ 也行）
+          </div>
+        </div>
+      )}
+
+      {/*
+        拖出去的「拖影」。
+        🔴 必须 portal 到 body：它要跟着指针跑到内容区，而 .sidebar-nav 是
+           overflow:auto 的滚动容器，画在里面会被裁成一条。
+        它同时是唯一的「松手会发生什么」提示 —— 拖影出现 = 松手就开小窗。
+      */}
+      {drag?.outside &&
+        createPortal(
+          <div
+            className="nav-tear"
+            style={{ left: drag.x, top: drag.y }}
+            data-nav-tear={drag.id}
+            aria-hidden="true"
+          >
+            <span className="nav-tear-icon">{NAV_DEFS[drag.id]?.icon}</span>
+            <span className="nav-tear-label">{NAV_DEFS[drag.id]?.label}</span>
+            <span className="nav-tear-hint">松手开小窗</span>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+
 
 /* ------------------------------------------------------------------ */
 /* 左下角更新提示卡片                                                  */

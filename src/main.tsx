@@ -4,6 +4,7 @@ import { HashRouter } from 'react-router-dom';
 import App from './App';
 import MirrorBar from './components/MirrorBar';
 import MirrorSplash from './components/MirrorSplash';
+import MiniWinApp from './components/mini/MiniWinApp';
 import './styles/global.css';
 import './pages/pages.css';
 /*
@@ -40,18 +41,22 @@ import './styles/mirror-splash.css';
 document.documentElement.setAttribute('data-theme', 'light');
 
 /*
- * 同一个 bundle 承载三个窗口（v1.1.22 / v1.1.23）：
+ * 同一个 bundle 承载四个窗口（v1.1.22 / v1.1.23 / v1.1.28）：
  *   · 默认 → 主界面（HashRouter 里的 App）
  *   · `#/mirror-bar` → 投屏窗口右侧那条悬浮功能栏
- *     （窗口由 electron/services/mirror-bar.ts 建，透明、无边框、不抢焦点）
  *   · `#/mirror-splash` → 等首帧期间的「正在投屏」提示牌
- *     （electron/services/mirror-splash.ts，同样透明、不抢焦点）
- * 后两个都不能套主界面的外壳，所以这里在路由之外直接分流。
+ *   · `#/mini/<id>` → 页面浮动小窗（v1.1.28 起是独立系统窗口，
+ *     由 electron/services/mini-win.ts 建，可以拖到主窗口外面）
+ * 后三个都不能套主界面的外壳，所以这里在路由之外直接分流。
  */
 const isMirrorBar = window.location.hash.startsWith('#/mirror-bar');
 const isMirrorSplash = window.location.hash.startsWith('#/mirror-splash');
+/** 小窗：`#/mini/<页面 id>` */
+const miniMatch = window.location.hash.match(/^#\/mini\/([A-Za-z0-9_-]+)/);
+const miniId = miniMatch ? miniMatch[1] : '';
 if (isMirrorBar) document.documentElement.setAttribute('data-win', 'mirror-bar');
 if (isMirrorSplash) document.documentElement.setAttribute('data-win', 'mirror-splash');
+if (miniId) document.documentElement.setAttribute('data-win', 'mini-win');
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -59,6 +64,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <MirrorBar />
     ) : isMirrorSplash ? (
       <MirrorSplash />
+    ) : miniId ? (
+      /* 包 HashRouter 是为了 MiniViews 里的 useNavigate 不抛错（小窗内实际走 IPC 导航） */
+      <HashRouter>
+        <MiniWinApp id={miniId} />
+      </HashRouter>
     ) : (
       <HashRouter>
         <App />

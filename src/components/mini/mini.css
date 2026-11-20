@@ -1,0 +1,628 @@
+/* ==================================================================
+   浮动小窗（v1.1.27）
+   ==================================================================
+   全部走主题变量（--bg-surface / --border / --text-* / --accent），
+   五个主题 + 浅深两套自动适配，这里不写任何具体色值。
+
+   🔴 尺寸纪律：小窗是「顺手的仪表盘」，不是第二份完整界面 ——
+      默认 400×480，内容以「一两行状态 + 一两个按钮」为单位，
+      任何一块都不该长到需要横向滚动。
+   ================================================================== */
+
+.mini-window {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  min-width: 300px;
+  min-height: 220px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: mini-in 0.14s ease-out;
+}
+
+/* 钉住 = 换一根主色描边，一眼能看出「这扇窗不会自己关」 */
+.mini-window.is-pinned {
+  border-color: var(--accent-border);
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.14), 0 0 0 1px var(--accent-soft);
+}
+
+.mini-window.is-dragging {
+  /* 拖动/缩放时不要有过渡，否则会「追着手指跑」 */
+  transition: none;
+  animation: none;
+  cursor: grabbing;
+}
+
+@keyframes mini-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-window {
+    animation: none;
+  }
+}
+
+/* ---------------- 标题栏 ---------------- */
+
+.mini-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  flex: none;
+  padding: 0 6px 0 10px;
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.mini-head-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+
+.mini-head-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.mini-head-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-head .spacer {
+  flex: 1;
+}
+
+.mini-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.mini-head-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.mini-head-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mini-head-btn.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.mini-head-btn.close:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* ---------------- 内容区 ---------------- */
+
+.mini-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow: auto;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.mv-block {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  gap: 2px;
+}
+
+.mv-block-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.mv-block-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+  text-transform: none;
+}
+
+.mv-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mv-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  padding: 2px 0;
+}
+
+.mv-label {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.mv-value {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mv-value.mv-dim {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.mv-value.mv-ok {
+  color: var(--success);
+}
+
+.mv-value.mv-warn {
+  color: var(--warn);
+}
+
+.mv-dim {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.mv-hint {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+
+/* ---------------- 按钮 ---------------- */
+
+.mv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  /*
+   * 不要 margin-top:auto（把按钮压到窗口最底下）：
+   * 内容少的小窗（工具箱、AI）中间会空出一大块白，看着像没渲染完。
+   * 日志 / 终端那两种视图自己有 flex:1 的滚动区，按钮天然就在底部。
+   */
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.mv-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+
+.mv-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.mv-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mv-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-inverse);
+}
+
+.mv-btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.mv-btn-danger {
+  color: var(--danger);
+  border-color: var(--danger-soft);
+  background: var(--danger-soft);
+}
+
+.mv-btn-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.mv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.mv-inline {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* ---------------- 设备 ---------------- */
+
+.mv-dev {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface-2);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+
+.mv-dev:hover {
+  border-color: var(--border-strong);
+}
+
+.mv-dev.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.mv-dev-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mv-dev-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* ---------------- 列表 ---------------- */
+
+.mv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mv-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+
+.mv-list-item:hover {
+  background: var(--bg-hover);
+}
+
+.mv-list-item.unread {
+  background: var(--accent-soft);
+}
+
+.mv-list-name {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mv-list-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------- 日志 / 终端 ---------------- */
+
+.mv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.mv-toolbar .spacer {
+  flex: 1;
+}
+
+.mv-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  flex: none;
+}
+
+.mv-dot.on {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+
+.mv-log {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mv-log-line.lv-e,
+.mv-log-line.lv-f {
+  color: #f87171;
+}
+
+.mv-log-line.lv-w {
+  color: #fbbf24;
+}
+
+.mv-log-line.lv-i {
+  color: #9ec5fe;
+}
+
+.mv-log-line.lv-d {
+  color: #9aa5b1;
+}
+
+/*
+ * 弱网快速调参（v1.1.28）。
+ * 2×2 网格：小窗最窄 320px，一行两项刚好，不需要横向滚动。
+ */
+.mv-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mv-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.mv-field > span {
+  flex: none;
+  width: 24px;
+}
+
+.mv-field input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.mv-field input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
+.mv-field em {
+  flex: none;
+  width: 40px;
+  font-style: normal;
+  color: var(--text-dim);
+}
+
+.mv-cmd-input {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.mv-cmd-input input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  font-family: 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  font-size: 11.5px;
+}
+
+.mv-cmd-input input:focus {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
+.mv-cmd-out {
+  flex: 1;
+  min-height: 90px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  font-size: 11px;
+}
+
+.mv-cmd-item + .mv-cmd-item {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+
+.mv-cmd-code {
+  color: #7f8899;
+  font-size: 10.5px;
+}
+
+.mv-cmd-item pre {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---------------- 杂项 ---------------- */
+
+.mv-progress {
+  height: 4px;
+  margin-top: 6px;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.mv-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.mv-badge {
+  padding: 0 6px;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+.mv-badge.on {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* ---------------- 缩放手柄 ---------------- */
+
+.mini-resize {
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+}
+
+.mini-resize-n,
+.mini-resize-s {
+  left: 10px;
+  right: 10px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.mini-resize-n {
+  top: -3px;
+}
+.mini-resize-s {
+  bottom: -3px;
+}
+
+.mini-resize-e,
+.mini-resize-w {
+  top: 10px;
+  bottom: 10px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.mini-resize-e {
+  right: -3px;
+}
+.mini-resize-w {
+  left: -3px;
+}
+
+.mini-resize-ne,
+.mini-resize-nw,
+.mini-resize-se,
+.mini-resize-sw {
+  width: 12px;
+  height: 12px;
+}
+.mini-resize-ne {
+  top: -4px;
+  right: -4px;
+  cursor: nesw-resize;
+}
+.mini-resize-nw {
+  top: -4px;
+  left: -4px;
+  cursor: nwse-resize;
+}
+.mini-resize-se {
+  bottom: -4px;
+  right: -4px;
+  cursor: nwse-resize;
+}
+.mini-resize-sw {
+  bottom: -4px;
+  left: -4px;
+  cursor: nesw-resize;
+}

@@ -29,9 +29,18 @@
   width: 100%;
   height: 100%;
   display: flex;
+  /*
+   * 竖排（v1.1.28 起有两个按钮）。gap 12 与窗口高度对得上：
+   *   2 × 44（按钮）+ 12（gap）+ 12（上下 padding）= 112 = BAR_HEIGHT_DIP。
+   * 加按钮时只改主进程的 BAR_SLOTS，这里不用动。
+   */
+  flex-direction: column;
+  gap: 12px;
   align-items: center;
   justify-content: center;
   padding: 6px;
+  /* 投屏窗口特别矮时（高度被压到 44）宁可能裁掉，也不要溢出到窗口外 */
+  overflow: hidden;
   /* 整条只有按钮区域接收鼠标；其余透明处由主进程的 ignoreMouseEvents 管 */
   -webkit-app-region: no-drag;
 }
@@ -75,15 +84,29 @@
   cursor: default;
 }
 
-/* 已钉住：整颗按钮点亮成蓝色，图标填实并转 45° */
-.mbar[data-pinned='1'] .mbar-btn {
+/*
+ * 已钉住：pin 那颗点亮成蓝色，图标填实并转 45°。
+ * 🔴 必须带上 [data-mbar-pin]，否则 pin 一亮把飞行模式按钮也一起点亮（v1.1.28 加按钮时改的）。
+ */
+.mbar[data-pinned='1'] .mbar-btn[data-mbar-pin='1'] {
   background: rgba(58, 118, 240, 0.94);
   border-color: rgba(150, 190, 255, 0.55);
   color: #fff;
 }
 
-.mbar[data-pinned='1'] .mbar-btn:hover:not(:disabled) {
+.mbar[data-pinned='1'] .mbar-btn[data-mbar-pin='1']:hover:not(:disabled) {
   background: rgba(74, 132, 250, 0.98);
+}
+
+/* 飞行模式开着：琥珀色点亮（跟 pin 的蓝分开，一眼能认出哪个是哪个） */
+.mbar-btn[data-mbar-plane='1'] {
+  background: rgba(212, 138, 26, 0.95);
+  border-color: rgba(255, 214, 150, 0.6);
+  color: #fff;
+}
+
+.mbar-btn[data-mbar-plane='1']:hover:not(:disabled) {
+  background: rgba(230, 152, 32, 1);
 }
 
 .mbar-icon {
